@@ -6,7 +6,6 @@ import (
 	"encoding/hex"
 	"fmt"
 	"log/slog"
-	"math"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -17,8 +16,32 @@ import (
 	"github.com/meshcore-go/meshcore-go/node"
 )
 
+// publishJob is queued from the RX/heartbeat goroutines and consumed by the
+// per-broker worker. Keeping the publish call off the hot path prevents a
+// stalled broker from back-pressuring the modem dispatch goroutine.
+type publishJob struct {
+	topic   string
+	payload []byte
+	qos     byte
+	retain  bool
+}
+
+const (
+	// publishQueueDepth is the per-broker job buffer. Sized to absorb a
+	// short network hiccup without touching the modem RX goroutine.
+	publishQueueDepth = 256
+
+	// publishWaitTimeout bounds how long the worker waits for paho's
+	// publish token. A misbehaving broker will not freeze the worker.
+	publishWaitTimeout = 5 * time.Second
+
+	// connectWaitTimeout bounds the initial connect handshake.
+	connectWaitTimeout = 10 * time.Second
+)
+
 type brokerClient struct {
 	cfg      BrokerConfig
+	clientMu sync.RWMutex
 	client   mqtt.Client
 	pubKeyHx string
 	iata     string
@@ -26,6 +49,23 @@ type brokerClient struct {
 
 	disallowed map[byte]bool
 	dedup      *meshcore.DedupCache // nil when dedup disabled for this broker
+
+	publishCh  chan publishJob
+	workerDone chan struct{}
+	dropped    atomic.Uint64
+}
+
+func (b *brokerClient) currentClient() mqtt.Client {
+	b.clientMu.RLock()
+	c := b.client
+	b.clientMu.RUnlock()
+	return c
+}
+
+func (b *brokerClient) swapClient(c mqtt.Client) {
+	b.clientMu.Lock()
+	b.client = c
+	b.clientMu.Unlock()
 }
 
 func (b *brokerClient) packetTopic() string {
@@ -61,12 +101,7 @@ type MqttObserver struct {
 	cancel context.CancelFunc
 }
 
-func NewMqttObserver(cfg MqttConfig, mux *node.RadioMux, id meshcore.LocalIdentity, stats StatsProvider, recvErrors *atomic.Uint64) (*MqttObserver, error) {
-	name := "mqtt-observer"
-	if cfg.Name != nil && *cfg.Name != "" {
-		name = *cfg.Name
-	}
-
+func NewMqttObserver(cfg MqttConfig, name string, mux *node.RadioMux, id meshcore.LocalIdentity, stats StatsProvider, recvErrors *atomic.Uint64) (*MqttObserver, error) {
 	pkHex := publicKeyHex(id)
 	radio := mux.NewRadio()
 
@@ -119,10 +154,14 @@ func (o *MqttObserver) Start(ctx context.Context) error {
 			iata:       iata,
 			prefix:     prefix,
 			disallowed: disallowed,
+			publishCh:  make(chan publishJob, publishQueueDepth),
+			workerDone: make(chan struct{}),
 		}
 		if bcfg.Dedup {
 			bc.dedup = &meshcore.DedupCache{}
 		}
+
+		go o.publishWorker(bc)
 
 		o.publishStatus(ctx, bc, "online")
 		o.brokers = append(o.brokers, bc)
@@ -134,9 +173,6 @@ func (o *MqttObserver) Start(ctx context.Context) error {
 
 	go o.heartbeatLoop(ctx)
 	go o.tokenRefreshLoop(ctx)
-	if o.cfg.Advert != nil && o.cfg.Advert.Enabled {
-		go o.advertLoop(ctx)
-	}
 
 	return nil
 }
@@ -153,12 +189,54 @@ func (o *MqttObserver) Stop() {
 
 	for _, bc := range o.brokers {
 		o.publishStatus(ctx, bc, "offline")
-		bc.client.Disconnect(500)
+		close(bc.publishCh)
+		select {
+		case <-bc.workerDone:
+		case <-time.After(publishWaitTimeout):
+			o.log.Warn("publish worker did not exit cleanly", "broker", bc.cfg.Name)
+		}
+		bc.currentClient().Disconnect(500)
 	}
 	o.brokers = nil
 }
 
-func (o *MqttObserver) onData(data []byte, snr int8, rssi int8) {
+// publishWorker drains a broker's publish channel serially. token.Wait() is
+// bounded so a stalled broker never blocks indefinitely; the worker just
+// drops the job, logs once, and moves on.
+func (o *MqttObserver) publishWorker(bc *brokerClient) {
+	defer close(bc.workerDone)
+	for job := range bc.publishCh {
+		client := bc.currentClient()
+		if client == nil {
+			continue
+		}
+		token := client.Publish(job.topic, job.qos, job.retain, job.payload)
+		if !token.WaitTimeout(publishWaitTimeout) {
+			o.log.Warn("publish timed out", "broker", bc.cfg.Name, "topic", job.topic)
+			continue
+		}
+		if err := token.Error(); err != nil {
+			o.log.Error("publish error", "broker", bc.cfg.Name, "error", err)
+		}
+	}
+}
+
+// enqueuePublish hands a job to the broker's worker without blocking. If the
+// queue is full (broker is stalled), the job is dropped and counted. Called
+// from the modem RX goroutine, so this MUST never block.
+func (o *MqttObserver) enqueuePublish(bc *brokerClient, job publishJob) {
+	select {
+	case bc.publishCh <- job:
+	default:
+		dropped := bc.dropped.Add(1)
+		if dropped == 1 || dropped%100 == 0 {
+			o.log.Warn("publish queue full, dropping",
+				"broker", bc.cfg.Name, "topic", job.topic, "dropped", dropped)
+		}
+	}
+}
+
+func (o *MqttObserver) onData(data []byte, snr float32, rssi int8, hasSignalInfo bool) {
 	o.log.Log(context.Background(), LevelTrace, "raw radio data",
 		"len", len(data), "hex", strings.ToUpper(hex.EncodeToString(data)),
 		"snr", snr, "rssi", rssi)
@@ -170,6 +248,7 @@ func (o *MqttObserver) onData(data []byte, snr int8, rssi int8) {
 	}
 	pkt.SNR = snr
 	pkt.RSSI = rssi
+	pkt.HasSignalInfo = hasSignalInfo
 
 	o.packetsReceived.Add(1)
 	if pkt.IsRouteDirect() {
@@ -209,88 +288,13 @@ func (o *MqttObserver) publishPacket(pkt *meshcore.Packet, rawBytes []byte, dire
 		}
 		o.log.Log(context.Background(), LevelTrace, "publishing packet",
 			"broker", bc.cfg.Name, "topic", bc.packetTopic(), "direction", direction)
-		token := bc.client.Publish(bc.packetTopic(), 0, false, payload)
-		token.Wait()
-		if err := token.Error(); err != nil {
-			o.log.Error("publish error", "broker", bc.cfg.Name, "error", err)
-		}
+		o.enqueuePublish(bc, publishJob{
+			topic:   bc.packetTopic(),
+			payload: payload,
+			qos:     0,
+			retain:  false,
+		})
 	}
-}
-
-func (o *MqttObserver) advertLoop(ctx context.Context) {
-	// Send initial advert
-	err := o.advert()
-	if err != nil {
-		o.log.Error("initial advert error", "error", err)
-	}
-
-	advertInterval := o.cfg.Advert.Interval
-	if advertInterval == nil || *advertInterval < 1 {
-		oneDay := 86400
-		advertInterval = &oneDay
-	}
-
-	// Get tick
-	interval := time.Duration(*advertInterval) * time.Second
-	ticker := time.NewTicker(interval)
-	defer ticker.Stop()
-
-	// Start loop
-	for {
-		select {
-		case <-ctx.Done():
-			return
-		case <-ticker.C:
-			err := o.advert()
-			if err != nil {
-				o.log.Error("advert error", "error", err)
-			}
-		}
-	}
-}
-
-func (o *MqttObserver) advert() error {
-	appData := meshcore.AdvertAppData{
-		Type: "CHAT",
-		Name: *o.cfg.Name,
-		Lat:  0,
-		Lon:  0,
-	}
-
-	if o.cfg.Advert.hasLatLon() {
-		appData.Lat = int32(math.Round(*o.cfg.Advert.Lat * 1_000_000.0))
-		appData.Lon = int32(math.Round(*o.cfg.Advert.Lon * 1_000_000.0))
-	}
-
-	rawAppData, err := appData.ToBytes()
-	if err != nil {
-		return err
-	}
-
-	advert := meshcore.Advert{
-		PublicKey:  o.id.Identity,
-		Timestamp:  uint32(time.Now().Unix()),
-		RawAppData: rawAppData,
-	}
-	advert.Sign(o.id.PrivateKey())
-
-	payload, err := advert.ToBytes()
-	if err != nil {
-		return err
-	}
-
-	pkt := meshcore.Packet{
-		Header:     meshcore.MakeHeader(meshcore.RouteTypeFlood, meshcore.PayloadTypeAdvert, 0),
-		PathLength: meshcore.PathHashSize - 1,
-		Payload:    payload,
-	}
-
-	data, err := pkt.ToBytes()
-	if err != nil {
-		return err
-	}
-
-	return o.radio.SendData(data)
 }
 
 func (o *MqttObserver) heartbeatLoop(ctx context.Context) {
@@ -325,14 +329,14 @@ func (o *MqttObserver) tokenRefreshLoop(ctx context.Context) {
 					continue
 				}
 				o.log.Debug("refreshing token", "broker", bc.cfg.Name)
-				bc.client.Disconnect(250)
+				bc.currentClient().Disconnect(250)
 
 				newClient, err := o.connectBroker(bc.cfg, bc.iata)
 				if err != nil {
 					o.log.Error("token refresh reconnect failed", "broker", bc.cfg.Name, "error", err)
 					continue
 				}
-				bc.client = newClient
+				bc.swapClient(newClient)
 				o.publishStatus(ctx, bc, "online")
 				o.log.Info("token refreshed", "broker", bc.cfg.Name)
 			}
@@ -365,8 +369,12 @@ func (o *MqttObserver) publishStatus(ctx context.Context, bc *brokerClient, stat
 	o.log.Log(ctx, LevelTrace, "publishing status",
 		"broker", bc.cfg.Name, "topic", bc.statusTopic(),
 		"json", string(payload))
-	token := bc.client.Publish(bc.statusTopic(), 1, bc.cfg.RetainStatus, payload)
-	token.Wait()
+	o.enqueuePublish(bc, publishJob{
+		topic:   bc.statusTopic(),
+		payload: payload,
+		qos:     1,
+		retain:  bc.cfg.RetainStatus,
+	})
 }
 
 func (o *MqttObserver) connectBroker(bcfg BrokerConfig, iata string) (mqtt.Client, error) {
@@ -433,7 +441,10 @@ func (o *MqttObserver) connectBroker(bcfg BrokerConfig, iata string) (mqtt.Clien
 
 	client := mqtt.NewClient(opts)
 	token := client.Connect()
-	token.Wait()
+	if !token.WaitTimeout(connectWaitTimeout) {
+		client.Disconnect(0)
+		return nil, fmt.Errorf("connecting to %s: timeout after %s", brokerURL, connectWaitTimeout)
+	}
 	if err := token.Error(); err != nil {
 		return nil, fmt.Errorf("connecting to %s: %w", brokerURL, err)
 	}

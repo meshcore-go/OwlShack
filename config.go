@@ -67,35 +67,6 @@ func (cl *ChannelList) UnmarshalYAML(value *yaml.Node) error {
 	return nil
 }
 
-type TriggerConfig struct {
-	Type     string `json:"type" yaml:"type" toml:"type"` // group, private, dm, cron, cap, etc
-	Template string `json:"template" yaml:"template" toml:"template"`
-
-	// Message Overflow behaviour
-	CharLimitBehaviour *string `json:"charLimitBehaviour" yaml:"charLimitBehaviour" toml:"charLimitBehaviour"` // e.g. truncate or split
-
-	// Messages/DMs
-	Match    *[]string    `json:"match" yaml:"match" toml:"match"`          // Patterns to match against (supports wildcards/regex)
-	Channels *ChannelList `json:"channels" yaml:"channels" toml:"channels"` // Channels to listen on (strings or {name, privateKey} objects)
-	Contacts *[]string    `json:"contacts" yaml:"contacts" toml:"contact"`  // What Contacts to listen in for DMs
-
-	// Retry Settings
-	RetryTimeout *int64 `json:"retryTimeout" yaml:"retryTimeout" toml:"retryTimeout"` // Stored as seconds
-	MaxRetries   *int   `json:"maxRetries" yaml:"maxRetries" toml:"maxRetries"`
-
-	// Path Hash Size: 1-4 = fixed size, 0 = mirror incoming packet's hash size, nil = default (1)
-	PathHashSize *uint8 `json:"pathHashSize,omitempty" yaml:"pathHashSize,omitempty" toml:"pathHashSize,omitempty"`
-
-	// Cron Trigger
-	Schedule string `json:"schedule,omitempty" yaml:"schedule,omitempty" toml:"schedule,omitempty"`
-}
-
-type BotConfig struct {
-	Name *string `json:"name" yaml:"name" toml:"name"` // Name of the Node - Used in Channel Messages
-
-	Triggers []TriggerConfig `json:"triggers" yaml:"triggers" toml:"trigger"`
-}
-
 type Config struct {
 	// Logging
 	LogLevel *string `json:"logLevel" yaml:"logLevel" toml:"logLevel"`
@@ -112,11 +83,11 @@ type Config struct {
 	CR   *uint8   `json:"cr" yaml:"cr" toml:"cr"`       // e.g. 8
 	TX   *uint8   `json:"tx" yaml:"tx" toml:"tx"`       // TX Power e.g. 22
 
-	// Bots
-	Bots []BotConfig `json:"bots" yaml:"bots" toml:"bot"`
+	// Web UI
+	ListenAddr *string `json:"listenAddr" yaml:"listenAddr" toml:"listenAddr"`
 
-	// MQTT Observers/Publishers
-	Observers []MqttConfig `json:"observers" yaml:"observers" toml:"observer"`
+	// Companions
+	Companions []CompanionConfig `json:"companions" yaml:"companions" toml:"companion"`
 }
 
 func DefaultConfig() Config {
