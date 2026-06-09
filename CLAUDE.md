@@ -5,8 +5,8 @@ Canonical context for working on this codebase. Read this in full before making 
 External references that are **not** duplicated here:
 - [README.md](./README.md) — public-facing project intro.
 - [MESHCORE_APP_FEATURES.md](./MESHCORE_APP_FEATURES.md) — feature reference for the upstream MeshCore Flutter app, used as a parity yardstick.
-- [`api/server.go`](./api/server.go) `s.routes()` — canonical list of REST/WS endpoints; the table below summarises but the source is authoritative.
-- [`store/store.go`](./store/store.go) — schema migrations.
+- [`internal/api/server.go`](./internal/api/server.go) `s.routes()` — canonical list of REST/WS endpoints; the table below summarises but the source is authoritative.
+- [`internal/store/store.go`](./internal/store/store.go) — schema migrations.
 - `~/Data/wesley/MeshCore/src/helpers/CommonCLI.cpp` — firmware CLI handler. The autocomplete catalogue inside [`web/frontend/src/pages/RepeaterDetailPage.tsx`](./web/frontend/src/pages/RepeaterDetailPage.tsx) (`CLI_TOPLEVEL_COMMANDS`, `CLI_CONFIG_KEYS`) mirrors it; regenerate from there if upstream adds commands.
 - `~/.claude/projects/-home-dylan-Data-wesley-meshcore-bot/memory/project_dev_workflow.md` — the build/restart cycle reminder.
 
@@ -59,6 +59,9 @@ screen -dmS meshcore bash -c './meshcore-bot -vvv 2>&1 | tee /tmp/meshcore-bot2.
 
 # Logs
 tail -f /tmp/meshcore-bot2.log
+
+# Inspect the DB read-only while the bot holds it open (verify migrations, SNR, etc.)
+python3 -c "import sqlite3; c=sqlite3.connect('file:meshcore.db?mode=ro', uri=True); print(c.execute('PRAGMA user_version').fetchone())"
 ```
 
 `npm run build` is `tsc -b && vite build`. Type errors fail the build. Bundle is currently ~770 kB minified — Vite emits a >500 kB warning we don't currently action.
@@ -77,25 +80,51 @@ All SQLite writes MUST go through `store.WriteAsync(fn)` (RX/hot path; never blo
 
 ## Repo layout
 
-### Go (root)
+The code models two **independent** axes of the MeshCore world:
+
+- **`internal/node/<type>`** — node personalities the bot *runs / emulates* on the mesh (owns an
+  identity, lifecycle, packet handlers; one per `[[companion]]`-style config block). Today: `companion`.
+  Future: `repeater`, `sensor`, `roomserver`.
+- **`internal/client/<type>`** — protocol *clients* that drive *remote* nodes (request → parse).
+  Today: `repeater` (admin: login/CLI/status/path/neighbours/telemetry/ACL). Future: `sensor`
+  (telemetry), `roomserver` (join/post), `companion`.
+
+A running node uses clients to talk to others: `node/companion → client/repeater`, never the reverse.
+Shared node plumbing (identity/radio/dispatch/advert) can factor into an `internal/node` engine when a
+second role lands — not created yet to avoid empty abstractions.
+
+The dependency arrow points inward:
+`main → internal/app → {node/companion, client/repeater, modem, echo, mqtt, trigger, config} → {api, store}`.
+**`api` never imports the domain** — the seam is the `api.Backend` interface (see below).
+
+### Go
 
 ```
-main.go                    entrypoint, MeshCore wiring, packet broadcast
-config.go                  TOML config loader
-config_bot.go              bot-specific config (triggers, etc)
-config_mqtt.go             MQTT observer config
-config_companion.go        companion config
-companion.go               companion runtime: channels, DMs, message broadcasting
-repeater.go                RepeaterManager: login, status, CLI, path, neighbours
-echo_tracker.go            tracks tx echoes / repeats; emits repeatCount WS updates
-mqtt.go / mqtt_*.go        MQTT bridge + format helpers
-trigger.go / trigger_*.go  bot trigger system
-api/                       HTTP+WS server (mux, routes, websocket hub)
-store/                     SQLite persistence (peers, contacts, channels, messages,
+main.go                    thin entrypoint (~50 ln): flags, logging.Configure, app.Run
+internal/
+  app/                     supervisor loop (SIGHUP reload, reconnect+backoff), node
+                           lifecycle, peer hydration, packet logger, and the api.Backend impl
+  config/                  Config types + load/marshal/validate/defaults (multi-format)
+  logging/                 LevelTrace const + Configure(verbosity, level) slog setup
+  buildinfo/               Version var (set via -ldflags at release)
+  node/                    node personalities we RUN
+    companion/             companion runtime: channels, DMs, triggers, templater, identity
+  client/                  clients for remote nodes we TALK TO
+    repeater/              repeater.Client: login, status, CLI, path, neighbours, telemetry, ACL
+  echo/                    echo.Tracker: tx echoes/repeats; emits repeatCount WS updates
+  modem/                   modem.Setup/State/MuxOptions + KISS/companion stats providers
+  mqtt/                    MQTT observer + packet/status formatting + JWT auth
+  trigger/                 Trigger interface, ChannelTrigger, CronTrigger, Templater
+  api/                     HTTP+WS server (mux, routes, websocket hub); Backend seam
+  store/                   SQLite persistence (peers, contacts, channels, messages,
                            packets, conversations, echoes, blocked senders)
-web/embed.go               go:embed of web/frontend/dist
+web/embed.go               go:embed of web/frontend/dist  (stays at root — go:embed can't reach ..)
 web/frontend/              React SPA
 ```
+
+> Two big single-type files remain (`internal/client/repeater/client.go`, `internal/node/companion/companion.go`).
+> They're cohesive; splitting their parsers/handlers into sibling files within the same package is
+> a safe future cleanup (no import changes).
 
 ### Go architecture highlights
 
@@ -103,21 +132,20 @@ web/frontend/              React SPA
 - `discovered_peers` (SQLite) — every peer ever seen, shared across companions.
 - `companion_contacts` (SQLite) — per-companion contact list with metadata (`isRepeater`, `repeaterPassword`, …).
 
-**Database migrations** (in `store/store.go`):
-- V1: core tables (`discovered_peers`, `companion_contacts`, `packets`, `messages`, `conversation_reads`, `message_echoes`, `blocked_senders`).
-- V2: add `path_hashes` / `path_hash_size` / `hops` columns to `messages`.
-- V3: add `metadata TEXT` to `companion_contacts`.
+**Database migrations** (in `internal/store/store.go`): squashed to a single `migrateV1` baseline (`user_version=1`) that creates all tables. Add changes as `migrateV2`+ appended to the `migrations` slice — never edit `migrateV1`. `snr` columns are `REAL` (real dB); `rssi` is `INTEGER` (dBm).
 
-**Repeater management.**
-- `RepeaterManager` ([`repeater.go`](./repeater.go)) handles login, status request, CLI, path ops, neighbours, sessions.
+**Repeater management (client — we drive remote repeaters; this is NOT repeater emulation).**
+- `repeater.Client` ([`internal/client/repeater/client.go`](./internal/client/repeater/client.go)) handles login, status request, CLI, path ops, neighbours, sessions. Owned by a running node and exposed via `Companion.Repeaters()`.
 - Login uses `ANON_REQ` (0x07) via flood → `PATH` response (0x08) or direct `RESPONSE` (0x01).
 - Status / CLI use the **ephemeral shared secret** from the login session (NOT the node identity).
 - CLI flags byte = `TXT_TYPE_CLI_DATA << 2` (= 4).
 - Sessions live in memory — lost on server restart; re-login required.
 - PATH packet: destination = recipient's ephemeral hash, source = sender's hash.
 
-**API layer** ([`api/`](./api/)).
-- `server.go` — SPA handler, route registration, `RepeaterLookup` type (currently a 9-return-value function — flagged tech debt; could be refactored to a struct).
+**API ↔ domain seam — `api.Backend`.** The `api` package must never import the domain (would create an import cycle: domain already imports `api` for `*api.Hub`). So `api.Server` holds a single `api.Backend` interface ([`internal/api/backend.go`](./internal/api/backend.go)) behind one `sync.RWMutex`, swapped atomically via `SetBackend` on startup / reload / reconnect. `internal/app` implements it ([`internal/app/backend.go`](./internal/app/backend.go)) over the live `[]*companion.Companion`. Route handlers reach it through thin accessors on `Server` (`CompanionLookup()`, `ChannelMutator()`, `ConfigPersist()`, `repeaterOps()`, …) that return bound backend methods, or nil when no backend is wired yet (handlers already guard with 503/404). **Do not** reintroduce per-feature `Set*`/mutex pairs — add a method to `Backend` instead.
+
+**API layer** ([`internal/api/`](./internal/api/)).
+- `server.go` — SPA handler, route registration, the `Backend` accessors.
 - `repeater.go` — 8 repeater endpoints (login, status, cli, session GET/DELETE, path GET/DELETE/PUT).
 
 ### Frontend (`web/frontend/src/`)
@@ -136,6 +164,8 @@ components/
   PeerAvatar.tsx   hashed-color square avatar w/ first-letter or emoji
   SignalStrength.tsx          also exports snrTextClass / snrFill
   StatusIndicator.tsx         ConnectionPill, PeerTypePill, PEER_TYPE_HEX
+  AddContactDialog.tsx        reusable manual-only add-contact modal (Type/Name/Pubkey), prefillable
+  PeerDetailSheet.tsx         peer detail slide-over + share menu (copy key/link, QR via `qrcode`, share-in-message)
   ui/                         shadcn primitives — alert, avatar, badge, button, card,
                               dialog, dropdown-menu, input, label, popover, progress,
                               scroll-area, select, separator, sheet, sidebar, skeleton,
@@ -161,7 +191,10 @@ pages/
   PacketsPage.tsx          live stream grouped by packetHash, resizable detail Sheet
   TracesPage.tsx           companion + path-hash-size pickers, repeater list, vertical timeline
   CompanionsPage.tsx
-  CompanionDetailPage.tsx  threads list + chat panel + path/echoes modals (largest page)
+  CompanionDetailPage.tsx  threads list + chat panel + path/echoes modals (largest page).
+                           `MessageText` linkifies shared-contact embeds `<pubkey:type:name>`
+                           (type 1=CHAT/2=REPEATER/3=ROOM/4=SENSOR), `lat,lon` coords (→ map menu),
+                           http(s) URLs (→ click-confirm). `?compose=` prefills the composer.
   ContactsPage.tsx
   ChannelsPage.tsx
   RepeatersListPage.tsx    per-companion repeater roster
@@ -171,7 +204,7 @@ pages/
 
 ---
 
-## REST endpoints (summary — see `api/server.go` for the canonical list)
+## REST endpoints (summary — see `internal/api/server.go` for the canonical list)
 
 ```
 GET  /api/peers
@@ -217,7 +250,7 @@ GET|DELETE|PUT /api/companions/{name}/repeaters/{pubkey}/path
 WS   /api/ws
 ```
 
-`?afterId=` was added in the recent UI rewrite. `store/message.go` exports `ListAfter(companionID, channel, afterID, limit)` and `routes_messages.go` honours `?afterId=` to return messages with `id > afterID` ordered ASC. The frontend uses this for delta backfill on cache re-open and on WS reconnect.
+`?afterId=` was added in the recent UI rewrite. `internal/store/message.go` exports `ListAfter(companionID, channel, afterID, limit)` and `routes_messages.go` honours `?afterId=` to return messages with `id > afterID` ordered ASC. The frontend uses this for delta backfill on cache re-open and on WS reconnect.
 
 ---
 
@@ -225,10 +258,12 @@ WS   /api/ws
 
 Topics emitted from the Go side:
 
-- `peers` — `{ pubkey, name, type, lat, lon, lastSeen, snr, rssi }`
+- `peers` — `{ pubkey, name, type, lat, lon, lastSeen, lastAdvertTs, snr, rssi, outPath, outPathHashSize }`. `outPath` is the advert path; hops = `len(outPath bytes)/outPathHashSize` (empty ⇒ direct/0 hops).
 - `packets` — `{ id?, receivedAt, direction, raw, payloadType, route, pathHashSize, hops, packetHash, summary, snr, rssi }`
 - `messages` — **flat** payload `{ companion, channel, sender, text, direction, timestamp, id, snr?, rssi?, hops?, pathHashSize?, repeatCount? }`. There is **no `message` wrapper.** A previous bug had the React handler reading `payload.message` and silently dropping every WS message — re-introducing that wrapper would re-create the bug. The action variant `{ action: "repeatCount", companion, channel, id, repeatCount }` updates a tx echo count.
 - `traces` — `{ companion, tag, hops, path, hopSNRs, snr }`
+
+> **SNR vs RSSI.** SNR is **real dB** end-to-end (`snr REAL` / `*float64` / JSON number, rounded to 1 dp in UI). The wire/firmware value is quarter-dB (×4); meshcore-go converts it at ingest. RSSI is raw `int8` dBm. `<SignalStrength>` thresholds are real dB. Trace per-hop SNRs come from raw `pkt.Path` bytes (still ×4 — decoded `/4` in the bot); `meshcore.PathSNRdB(b)` helps.
 
 ---
 
@@ -452,6 +487,7 @@ Messages have a `status` column: `NULL` (rx/legacy), `"sending"`, `"delivered"`,
 - Don't change the `loggedIn` derivation in `RepeaterDetailPage.tsx` without coordinated firmware/API changes.
 - Don't blanket-fix the `tracking-[0.1em]` → `tracking-widest` style hints; existing files use bracket notation throughout for consistency.
 - Don't auto-refresh on tab switch — that spams the mesh radio. Use the fetch-once pattern.
+- Add-contact modal (`AddContactDialog`) is manual-only (Type/Name/Pubkey) — add a *discovered* peer to contacts from the Peers screen (`PeerDetailSheet`), not via a peer-picker in the modal.
 
 ---
 
@@ -488,9 +524,10 @@ Messages have a `status` column: `NULL` (rx/legacy), `"sending"`, `"delivered"`,
 - Status / Neighbors auto-fetch is **once per page mount**. After a long absence the user must hit Refresh.
 - Repeater login state is in-memory on the Go side — restart drops sessions.
 - The Position map picker is the only Leaflet usage in Settings; if you add more, factor out the shared `tileUrlForTheme` + observer logic from `RepeaterDetailPage.tsx`.
-- The `main.go` wiring for `SetRepeaterLookup` uses a 9-return-value function — could be refactored to a struct.
+- No automated Go tests yet — the package boundaries now make the domain unit-testable (e.g. `internal/config` validation/round-trip, `internal/repeater` parsers); the compiler + manual testing on Owly 2 are the only safety net today.
 - No automated tests for the frontend; Playwright is ad-hoc against the running binary.
 - Login timeout is identical for "wrong password" vs "unreachable" — would be nice to differentiate.
+- **MQTT packet SNR format**: [`internal/mqtt/format.go`](./internal/mqtt/format.go) — `pkt.SNR` (real-dB float32) was formatted with `%d`, emitting literal `%!d(float32=…)` to the feed and failing `go vet`/CI. Now `%.2f` (a sane default that unbreaks CI); **confirm the exact representation the LetsMesh/CoreScope schema expects** (integer? quarter-dB?) and adjust if needed.
 
 ---
 

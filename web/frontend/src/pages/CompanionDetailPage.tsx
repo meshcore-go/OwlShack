@@ -25,7 +25,6 @@ import {
   ExternalLink,
   Hash,
   Loader2,
-  MapPin,
   MessageSquare,
   MoreVertical,
   Radar,
@@ -76,6 +75,11 @@ import {
   PopoverTrigger,
 } from "@/components/ui/popover";
 import { ChatHeaderMenu } from "@/components/ChatHeaderMenu";
+import { CoordLink } from "@/components/CoordLink";
+import { ComposerAttachMenu } from "@/components/ComposerAttachMenu";
+import { EmojiButton, EmojiMartPanel, EmojiPicker } from "@/components/EmojiPicker";
+import { useEmojiAutocomplete } from "@/hooks/useEmojiAutocomplete";
+import { useIsMobile } from "@/hooks/use-mobile";
 import {
   AddContactDialog,
   type ContactPrefill,
@@ -230,6 +234,9 @@ export function CompanionDetailPage() {
   const [modalPath, setModalPath] = useState<PathInfo | null>(null);
   const [modalEchoes, setModalEchoes] = useState<EchoEntry[] | null>(null);
   const [ownPubkey, setOwnPubkey] = useState<string | null>(null);
+  const [ownPos, setOwnPos] = useState<{ lat: number; lon: number } | null>(null);
+  const isMobile = useIsMobile();
+  const [emojiOpen, setEmojiOpen] = useState(false);
   const [addContactOpen, setAddContactOpen] = useState(false);
   const [addContactPrefill, setAddContactPrefill] =
     useState<ContactPrefill | null>(null);
@@ -280,11 +287,18 @@ export function CompanionDetailPage() {
     let cancelled = false;
     fetch("/api/companions")
       .then((r) => (r.ok ? r.json() : []))
-      .then((list: { name: string; pubkey?: string }[]) => {
-        if (cancelled) return;
-        const me = (list || []).find((c) => c.name === decodedName);
-        setOwnPubkey(me?.pubkey ?? null);
-      })
+      .then(
+        (list: { name: string; pubkey?: string; lat?: number; lon?: number }[]) => {
+          if (cancelled) return;
+          const me = (list || []).find((c) => c.name === decodedName);
+          setOwnPubkey(me?.pubkey ?? null);
+          setOwnPos(
+            me && me.lat != null && me.lon != null
+              ? { lat: me.lat, lon: me.lon }
+              : null,
+          );
+        },
+      )
       .catch(() => {});
     return () => {
       cancelled = true;
@@ -615,15 +629,21 @@ export function CompanionDetailPage() {
     setSearchParams(params);
   }, [searchParams, setSearchParams]);
 
+  const emojiAC = useEmojiAutocomplete({
+    textareaRef: composerRef,
+    setText: setComposer,
+  });
+
   const onComposerKey = useCallback(
     (e: KeyboardEvent<HTMLTextAreaElement>) => {
+      if (emojiAC.handleKeyDown(e)) return;
       if (e.key === "Enter" && !e.shiftKey) {
         e.preventDefault();
         send();
       }
     },
     // eslint-disable-next-line react-hooks/exhaustive-deps
-    [composer, sending, activeConversation, charLimit],
+    [composer, sending, activeConversation, charLimit, emojiAC.handleKeyDown],
   );
 
   const send = useCallback(async () => {
@@ -648,12 +668,31 @@ export function CompanionDetailPage() {
       );
       if (!r.ok) throw new Error("send");
       setComposer("");
+      setEmojiOpen(false);
     } catch {
       toast.error("Send failed");
     } finally {
       setSending(false);
     }
   }, [activeConversation, composer, sending, charLimit, decodedName]);
+
+  // focus=false keeps the caret without summoning the mobile keyboard (used by
+  // the mobile emoji panel, which would otherwise be covered by the keyboard).
+  const insertAtCursor = useCallback((text: string, focus = true) => {
+    const el = composerRef.current;
+    if (!el) {
+      setComposer((c) => c + text);
+      return;
+    }
+    const start = el.selectionStart ?? el.value.length;
+    const end = el.selectionEnd ?? el.value.length;
+    setComposer(el.value.slice(0, start) + text + el.value.slice(end));
+    requestAnimationFrame(() => {
+      if (focus) el.focus();
+      const pos = start + text.length;
+      el.setSelectionRange(pos, pos);
+    });
+  }, []);
 
   const onMessageContext = useCallback(
     (e: React.MouseEvent, m: Message) => {
@@ -1044,16 +1083,38 @@ export function CompanionDetailPage() {
                 <div ref={messagesEndRef} />
               </div>
 
-              <div className="border-t border-border bg-card">
+              <div className="relative border-t border-border bg-card">
+                {emojiAC.dropdown}
                 <div className="px-3 py-2 flex items-end gap-2">
+                  <ComposerAttachMenu
+                    companion={decodedName}
+                    ownPubkey={ownPubkey}
+                    ownName={decodedName}
+                    ownLat={ownPos?.lat}
+                    ownLon={ownPos?.lon}
+                    onInsert={insertAtCursor}
+                  />
+                  {isMobile ? (
+                    <EmojiButton
+                      active={emojiOpen}
+                      onClick={() => setEmojiOpen((o) => !o)}
+                    />
+                  ) : (
+                    <EmojiPicker onSelect={insertAtCursor} />
+                  )}
                   <Textarea
                     ref={composerRef}
                     rows={1}
                     value={composer}
-                    onChange={(e: ChangeEvent<HTMLTextAreaElement>) =>
-                      setComposer(e.target.value)
-                    }
+                    onChange={(e: ChangeEvent<HTMLTextAreaElement>) => {
+                      setComposer(e.target.value);
+                      emojiAC.handleChange(
+                        e.target.value,
+                        e.target.selectionStart ?? e.target.value.length,
+                      );
+                    }}
                     onKeyDown={onComposerKey}
+                    onBlur={() => emojiAC.close()}
                     placeholder="transmit…"
                     className="resize-none rounded-none border-border font-mono text-sm min-h-[2.25rem] max-h-[100px] bg-background"
                     style={{ height: "auto" }}
@@ -1087,6 +1148,14 @@ export function CompanionDetailPage() {
                     {composerLen}/{charLimit}
                   </span>
                 </div>
+                {isMobile && emojiOpen && (
+                  <div className="border-t border-border">
+                    <EmojiMartPanel
+                      fullWidth
+                      onSelect={(e) => insertAtCursor(e, false)}
+                    />
+                  </div>
+                )}
               </div>
             </>
           ) : (
@@ -1701,63 +1770,6 @@ function ContactCard({
         </button>
       )}
     </div>
-  );
-}
-
-// A lat,lon coordinate rendered as a link that opens a menu of map targets.
-function CoordLink({
-  lat,
-  lon,
-  raw,
-}: {
-  lat: number;
-  lon: number;
-  raw: string;
-}) {
-  const navigate = useNavigate();
-  return (
-    <DropdownMenu>
-      <DropdownMenuTrigger asChild>
-        <button
-          type="button"
-          onClick={(e) => e.stopPropagation()}
-          className="font-medium text-info underline decoration-dotted underline-offset-2 hover:text-info/80"
-        >
-          {raw}
-        </button>
-      </DropdownMenuTrigger>
-      <DropdownMenuContent
-        align="start"
-        onClick={(e) => e.stopPropagation()}
-        className="rounded-none font-mono text-xs"
-      >
-        <DropdownMenuItem onClick={() => navigate(`/map?lat=${lat}&lon=${lon}`)}>
-          <MapPin className="size-3.5" /> Open in MeshCore Map
-        </DropdownMenuItem>
-        <DropdownMenuItem
-          onClick={() =>
-            window.open(
-              `https://www.google.com/maps/search/?api=1&query=${lat},${lon}`,
-              "_blank",
-              "noopener,noreferrer",
-            )
-          }
-        >
-          <ExternalLink className="size-3.5" /> Open in Google Maps
-        </DropdownMenuItem>
-        <DropdownMenuItem
-          onClick={() =>
-            window.open(
-              `https://maps.apple.com/?ll=${lat},${lon}&q=${lat},${lon}`,
-              "_blank",
-              "noopener,noreferrer",
-            )
-          }
-        >
-          <ExternalLink className="size-3.5" /> Open in Apple Maps
-        </DropdownMenuItem>
-      </DropdownMenuContent>
-    </DropdownMenu>
   );
 }
 

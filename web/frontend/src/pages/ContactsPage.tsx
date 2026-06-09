@@ -174,6 +174,7 @@ export function ContactsPage() {
               {contactsSorted.map((c) => (
                 <ContactRow
                   key={c.peerPubkey}
+                  companion={companion}
                   contact={c}
                   confirming={confirmRemove === c.peerPubkey}
                   onAskRemove={() => setConfirmRemove(c.peerPubkey)}
@@ -198,12 +199,14 @@ export function ContactsPage() {
 }
 
 function ContactRow({
+  companion,
   contact,
   confirming,
   onAskRemove,
   onCancel,
   onConfirm,
 }: {
+  companion: string;
   contact: Contact;
   confirming: boolean;
   onAskRemove: () => void;
@@ -211,27 +214,36 @@ function ContactRow({
   onConfirm: () => void;
 }) {
   const displayName = contact.name || "unknown peer";
+  // Repeaters have their own admin page; everything else opens contact detail.
+  const detailTo =
+    contact.type?.toUpperCase() === "REPEATER"
+      ? `/companions/${encodeURIComponent(companion)}/repeaters/${contact.peerPubkey}`
+      : `/companions/${encodeURIComponent(companion)}/contacts/${contact.peerPubkey}`;
   return (
     <div className="flex items-center gap-3 px-4 py-3 hover:bg-muted/40 transition-colors">
-      <PeerAvatar name={displayName} size="md" />
+      <Link to={detailTo} className="flex items-center gap-3 min-w-0 flex-1">
+        <PeerAvatar name={displayName} size="md" />
 
-      <div className="min-w-0 flex-1 space-y-1">
-        <div className="flex items-center gap-2">
-          <span className="text-sm font-medium truncate">
-            {contact.name || (
-              <span className="text-muted-foreground italic">unknown</span>
-            )}
-          </span>
-          {contact.type && <PeerTypePill type={contact.type} />}
+        <div className="min-w-0 flex-1 space-y-1">
+          <div className="flex items-center gap-2">
+            <span className="text-sm font-medium truncate">
+              {contact.name || (
+                <span className="text-muted-foreground italic">unknown</span>
+              )}
+            </span>
+            {contact.type && <PeerTypePill type={contact.type} />}
+          </div>
+          <div className="flex items-center gap-3 text-mono-xs text-muted-foreground">
+            <code className="font-mono text-xs text-muted-foreground">
+              {truncateMid(contact.peerPubkey, 8, 6)}
+            </code>
+            <span className="text-muted-foreground/50">·</span>
+            <span className="tabular-nums">
+              added {timeAgo(contact.addedAt)}
+            </span>
+          </div>
         </div>
-        <div className="flex items-center gap-3 text-mono-xs text-muted-foreground">
-          <code className="font-mono text-xs text-muted-foreground">
-            {truncateMid(contact.peerPubkey, 8, 6)}
-          </code>
-          <span className="text-muted-foreground/50">·</span>
-          <span className="tabular-nums">added {timeAgo(contact.addedAt)}</span>
-        </div>
-      </div>
+      </Link>
 
       <div className="shrink-0">
         {confirming ? (

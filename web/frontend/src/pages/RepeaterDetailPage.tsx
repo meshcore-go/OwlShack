@@ -45,6 +45,7 @@ import { toast } from "sonner";
 import { PageHeader } from "@/components/PageHeader";
 import { PeerAvatar } from "@/components/PeerAvatar";
 import { SignalStrength } from "@/components/SignalStrength";
+import { TelemetryPanel } from "@/components/TelemetryPanel";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
@@ -662,7 +663,7 @@ export function RepeaterDetailPage() {
             className="mt-0 data-[state=inactive]:hidden"
             forceMount
           >
-            <TelemetryTab apiBase={apiBase} active={tab === "telemetry"} />
+            <TelemetryPanel apiBase={apiBase} autoFetch={tab === "telemetry"} />
           </TabsContent>
           {isAdmin && (
             <TabsContent
@@ -1130,6 +1131,8 @@ const CLI_CONFIG_KEYS: { key: string; hint?: string }[] = [
   // routing
   { key: "repeat", hint: "packet forwarding (on/off)" },
   { key: "flood.max", hint: "max flood transmissions (0-64)" },
+  { key: "flood.max.unscoped", hint: "max hops for un-scoped floods (0-64)" },
+  { key: "flood.max.advert", hint: "max hops for advert floods (0-64)" },
   { key: "path.hash.mode", hint: "path hash size: 0=1B, 1=2B, 3=4B" },
   { key: "loop.detect", hint: "off / minimal / moderate / strict" },
   { key: "rxdelay", hint: "RX delay base, dB (0-20)" },
@@ -1797,148 +1800,6 @@ function OwnerRow({
   );
 }
 
-interface TelemetryReading {
-  channel: number;
-  type: number;
-  name: string;
-  unit?: string;
-  value: unknown;
-}
-
-interface TelemetryData {
-  readings: TelemetryReading[];
-  raw: string;
-}
-
-function TelemetryTab({
-  apiBase,
-  active,
-}: {
-  apiBase: string;
-  active: boolean;
-}) {
-  const [data, setData] = useState<TelemetryData | null>(null);
-  const [loading, setLoading] = useState(false);
-  const [err, setErr] = useState<string | null>(null);
-  const fetchedRef = useRef(false);
-
-  const refresh = useCallback(async () => {
-    setLoading(true);
-    setErr(null);
-    try {
-      const r = await fetch(`${apiBase}/telemetry`);
-      if (!r.ok) {
-        const txt = await r.text();
-        throw new Error(txt || `HTTP ${r.status}`);
-      }
-      const body: TelemetryData = await r.json();
-      setData(body);
-      fetchedRef.current = true;
-    } catch (e) {
-      setErr(e instanceof Error ? e.message : "Failed");
-    } finally {
-      setLoading(false);
-    }
-  }, [apiBase]);
-
-  useEffect(() => {
-    if (active && !fetchedRef.current) {
-      refresh();
-    }
-  }, [active, refresh]);
-
-  return (
-    <div className="space-y-4">
-      <div className="flex items-center justify-between">
-        <span className="label-overline">telemetry · cayenne lpp</span>
-        <Button
-          variant="outline"
-          size="sm"
-          onClick={refresh}
-          disabled={loading}
-          className="rounded-none font-mono text-[10px] uppercase tracking-[0.12em]"
-        >
-          <RefreshCw className={cn("size-3", loading && "animate-spin")} />
-          {data ? "refresh" : "request"}
-        </Button>
-      </div>
-      {err && (
-        <Alert variant="destructive">
-          <AlertTitle className="font-mono uppercase tracking-[0.1em]">
-            Error
-          </AlertTitle>
-          <AlertDescription>{err}</AlertDescription>
-        </Alert>
-      )}
-      {!data && loading && (
-        <div className="grid grid-cols-2 md:grid-cols-3 lg:grid-cols-4 gap-px bg-border border border-border">
-          {[...Array(4)].map((_, i) => (
-            <div key={i} className="bg-card p-4 space-y-2">
-              <Skeleton className="h-3 w-20" />
-              <Skeleton className="h-6 w-16" />
-            </div>
-          ))}
-        </div>
-      )}
-      {data && data.readings.length === 0 && !loading && (
-        <div className="panel py-10 text-center font-mono text-xs uppercase tracking-[0.12em] text-muted-foreground/60">
-          no telemetry returned
-        </div>
-      )}
-      {data && data.readings.length > 0 && (
-        <div className="grid grid-cols-2 md:grid-cols-3 lg:grid-cols-4 gap-px bg-border border border-border">
-          {data.readings.map((reading, idx) => (
-            <TelemetryTile key={`${reading.channel}-${reading.type}-${idx}`} reading={reading} />
-          ))}
-        </div>
-      )}
-    </div>
-  );
-}
-
-function TelemetryTile({ reading }: { reading: TelemetryReading }) {
-  const { name, unit, channel, value } = reading;
-  let display: string;
-  if (typeof value === "number") {
-    const abs = Math.abs(value);
-    const decimals = abs >= 100 ? 0 : abs >= 10 ? 1 : 2;
-    display = value.toFixed(decimals);
-  } else if (value && typeof value === "object") {
-    const obj = value as Record<string, unknown>;
-    if ("latitude" in obj && "longitude" in obj) {
-      display = `${(obj.latitude as number).toFixed(4)},${(obj.longitude as number).toFixed(4)}`;
-    } else if ("x" in obj && "y" in obj && "z" in obj) {
-      display = `${(obj.x as number).toFixed(2)},${(obj.y as number).toFixed(2)},${(obj.z as number).toFixed(2)}`;
-    } else if ("r" in obj && "g" in obj && "b" in obj) {
-      display = `${obj.r},${obj.g},${obj.b}`;
-    } else {
-      display = JSON.stringify(value);
-    }
-  } else {
-    display = String(value);
-  }
-
-  return (
-    <div className="bg-card relative px-4 py-3 flex flex-col gap-1.5">
-      <div className="flex items-center justify-between gap-2">
-        <span className="label-overline truncate">{name}</span>
-        <span className="font-mono text-[9px] uppercase tracking-[0.12em] text-muted-foreground/60">
-          ch{channel}
-        </span>
-      </div>
-      <div className="flex items-baseline gap-1">
-        <span className="font-mono text-lg font-semibold tabular-nums leading-none break-all">
-          {display}
-        </span>
-        {unit && (
-          <span className="font-mono text-[10px] uppercase tracking-[0.12em] text-muted-foreground">
-            {unit}
-          </span>
-        )}
-      </div>
-    </div>
-  );
-}
 
 interface AccessEntry {
   pubkeyPrefix: string;
@@ -2927,6 +2788,8 @@ function NetworkSection({
     pathHashMode: "",
     loopDetect: "",
     floodMax: "",
+    floodMaxUnscoped: "",
+    floodMaxAdvert: "",
   });
   const [busy, setBusy] = useState<SectionBusy>(null);
 
@@ -2937,7 +2800,20 @@ function NetworkSection({
       const pathHashMode = stripPromptPrefix(await sendCli("get path.hash.mode"));
       const loopDetect = stripPromptPrefix(await sendCli("get loop.detect"));
       const floodMax = stripPromptPrefix(await sendCli("get flood.max"));
-      setVals({ repeat, pathHashMode, loopDetect, floodMax });
+      const floodMaxUnscoped = stripPromptPrefix(
+        await sendCli("get flood.max.unscoped"),
+      );
+      const floodMaxAdvert = stripPromptPrefix(
+        await sendCli("get flood.max.advert"),
+      );
+      setVals({
+        repeat,
+        pathHashMode,
+        loopDetect,
+        floodMax,
+        floodMaxUnscoped,
+        floodMaxAdvert,
+      });
     } catch (e) {
       toast.error(e instanceof Error ? e.message : "Load failed");
     } finally {
@@ -2953,6 +2829,10 @@ function NetworkSection({
         await sendCli(`set path.hash.mode ${vals.pathHashMode}`);
       if (vals.loopDetect) await sendCli(`set loop.detect ${vals.loopDetect}`);
       if (vals.floodMax) await sendCli(`set flood.max ${vals.floodMax}`);
+      if (vals.floodMaxUnscoped)
+        await sendCli(`set flood.max.unscoped ${vals.floodMaxUnscoped}`);
+      if (vals.floodMaxAdvert)
+        await sendCli(`set flood.max.advert ${vals.floodMaxAdvert}`);
       toast.success("Network saved");
     } catch (e) {
       toast.error(e instanceof Error ? e.message : "Save failed");
@@ -3003,6 +2883,16 @@ function NetworkSection({
             label="Flood max"
             value={vals.floodMax}
             onChange={(v) => setVals((p) => ({ ...p, floodMax: v }))}
+          />
+          <Field
+            label="Flood max unscoped"
+            value={vals.floodMaxUnscoped}
+            onChange={(v) => setVals((p) => ({ ...p, floodMaxUnscoped: v }))}
+          />
+          <Field
+            label="Flood max advert"
+            value={vals.floodMaxAdvert}
+            onChange={(v) => setVals((p) => ({ ...p, floodMaxAdvert: v }))}
           />
         </div>
         <SectionFooter busy={busy} onLoad={load} onSave={save} />

@@ -22,6 +22,11 @@ const CompanionDetailPage = lazy(() =>
 const ContactsPage = lazy(() =>
   import("@/pages/ContactsPage").then((m) => ({ default: m.ContactsPage })),
 );
+const ContactDetailPage = lazy(() =>
+  import("@/pages/ContactDetailPage").then((m) => ({
+    default: m.ContactDetailPage,
+  })),
+);
 const ChannelsPage = lazy(() =>
   import("@/pages/ChannelsPage").then((m) => ({ default: m.ChannelsPage })),
 );
@@ -60,6 +65,10 @@ export function App() {
           <Route
             path="/companions/:name/contacts"
             element={<ContactsPage />}
+          />
+          <Route
+            path="/companions/:name/contacts/:pubkey"
+            element={<ContactDetailPage />}
           />
           <Route
             path="/companions/:name/channels"

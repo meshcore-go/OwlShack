@@ -1,9 +1,11 @@
 import { useCallback, useEffect, useRef, useState } from "react";
+import { useNavigate } from "react-router-dom";
 import {
   Ban,
   Check,
   ClipboardCopy,
   Globe,
+  Info,
   MoreVertical,
   Pencil,
   QrCode,
@@ -67,6 +69,7 @@ export function ChatHeaderMenu({
   onMessagesCleared,
 }: ChatHeaderMenuProps) {
   const [dialog, setDialog] = useState<DialogKind>(null);
+  const navigate = useNavigate();
 
   const isPublicChannel =
     conversation.type === "channel" &&
@@ -144,6 +147,19 @@ export function ChatHeaderMenu({
 
           {isContact && (
             <>
+              {conversation.pubkey && (
+                <DropdownMenuItem
+                  onClick={() =>
+                    navigate(
+                      `/companions/${encodeURIComponent(companion)}/contacts/${conversation.pubkey}`,
+                    )
+                  }
+                  className="font-mono text-xs uppercase tracking-[0.08em] rounded-none"
+                >
+                  <Info className="size-3.5" />
+                  Details
+                </DropdownMenuItem>
+              )}
               <DropdownMenuItem
                 onClick={() => setDialog("path")}
                 className="font-mono text-xs uppercase tracking-[0.08em] rounded-none"
