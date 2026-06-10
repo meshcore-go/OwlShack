@@ -1,10 +1,11 @@
 import { useCallback, useEffect, useMemo, useState } from "react";
 import { CircleDashed, RefreshCw, Search, Users } from "lucide-react";
 import { useWebSocket } from "@/hooks/useWebSocket";
+import { useApiList } from "@/hooks/useApiList";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Skeleton } from "@/components/ui/skeleton";
-import { Alert, AlertDescription, AlertTitle } from "@/components/ui/alert";
+import { LoadErrorAlert } from "@/components/LoadErrorAlert";
 import {
   Table,
   TableBody,
@@ -59,6 +60,8 @@ function HopsBadge({ peer }: { peer: Peer }) {
 const TYPE_FILTERS = ["ALL", "CHAT", "REPEATER", "ROOM", "SENSOR", "NONE"] as const;
 type TypeFilter = (typeof TYPE_FILTERS)[number];
 
+const NO_PEERS: Peer[] = [];
+
 function isPeer(value: unknown): value is Peer {
   if (!value || typeof value !== "object") return false;
   const v = value as Record<string, unknown>;
@@ -66,44 +69,36 @@ function isPeer(value: unknown): value is Peer {
 }
 
 export function PeersPage() {
-  const [peers, setPeers] = useState<Peer[]>([]);
+  const {
+    items,
+    setItems: setPeers,
+    loading,
+    error,
+    reload,
+  } = useApiList<Peer>("/api/peers", "Failed to load peers");
+  const peers = items ?? NO_PEERS;
   const [companions, setCompanions] = useState<CompanionRef[]>([]);
-  const [loading, setLoading] = useState(true);
-  const [error, setError] = useState<string | null>(null);
   const [search, setSearch] = useState("");
   const [typeFilter, setTypeFilter] = useState<TypeFilter>("ALL");
   const [selectedKey, setSelectedKey] = useState<string | null>(null);
 
-  const handleMessage = useCallback((topic: string, data: unknown) => {
-    if (topic !== "peers") return;
-    if (!isPeer(data)) return;
-    setPeers((prev) => {
-      const idx = prev.findIndex((p) => p.pubkey === data.pubkey);
-      if (idx === -1) return [data, ...prev];
-      const next = prev.slice();
-      next[idx] = { ...next[idx], ...data };
-      return next;
-    });
-  }, []);
+  const handleMessage = useCallback(
+    (topic: string, data: unknown) => {
+      if (topic !== "peers") return;
+      if (!isPeer(data)) return;
+      setPeers((prev) => {
+        const arr = prev ?? [];
+        const idx = arr.findIndex((p) => p.pubkey === data.pubkey);
+        if (idx === -1) return [data, ...arr];
+        const next = arr.slice();
+        next[idx] = { ...next[idx], ...data };
+        return next;
+      });
+    },
+    [setPeers],
+  );
 
   const { connected } = useWebSocket(["peers"], handleMessage);
-
-  const load = useCallback(() => {
-    setLoading(true);
-    setError(null);
-    fetch("/api/peers")
-      .then((r) => {
-        if (!r.ok) throw new Error("peers");
-        return r.json();
-      })
-      .then((data: Peer[]) => setPeers(data || []))
-      .catch(() => setError("Failed to load peers"))
-      .finally(() => setLoading(false));
-  }, []);
-
-  useEffect(() => {
-    load();
-  }, [load]);
 
   useEffect(() => {
     fetch("/api/companions")
@@ -159,7 +154,7 @@ export function PeersPage() {
             <Button
               variant="ghost"
               size="sm"
-              onClick={load}
+              onClick={reload}
               className="h-7 gap-1.5 px-2 font-mono text-[10px] uppercase tracking-[0.12em] text-muted-foreground hover:text-primary"
             >
               <RefreshCw className={cn("size-3", loading && "animate-spin")} />
@@ -170,24 +165,7 @@ export function PeersPage() {
         }
       />
 
-      {error && (
-        <Alert variant="destructive">
-          <AlertTitle className="font-mono uppercase tracking-[0.1em]">
-            Error
-          </AlertTitle>
-          <AlertDescription>
-            {error}
-            <Button
-              variant="ghost"
-              size="sm"
-              onClick={load}
-              className="ml-2 h-7 text-xs uppercase tracking-[0.1em]"
-            >
-              retry
-            </Button>
-          </AlertDescription>
-        </Alert>
-      )}
+      {error && <LoadErrorAlert message={error} onRetry={reload} />}
 
       <section className="panel">
         <div className="flex flex-col gap-3 px-4 py-3 border-b border-border sm:flex-row sm:items-center sm:justify-between">

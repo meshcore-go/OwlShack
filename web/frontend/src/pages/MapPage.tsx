@@ -3,10 +3,12 @@ import { useSearchParams } from "react-router-dom";
 import L from "leaflet";
 import { MapPin, RefreshCw } from "lucide-react";
 import { useWebSocket } from "@/hooks/useWebSocket";
+import { useApiList } from "@/hooks/useApiList";
 import { Button } from "@/components/ui/button";
-import { Alert, AlertDescription, AlertTitle } from "@/components/ui/alert";
+import { LoadErrorAlert } from "@/components/LoadErrorAlert";
 import { PageHeader } from "@/components/PageHeader";
 import { ConnectionPill, PEER_TYPE_HEX } from "@/components/StatusIndicator";
+import { themeTileLayer, useThemeTiles } from "@/lib/leaflet";
 import { timeAgo } from "@/lib/format";
 import { cn } from "@/lib/utils";
 
@@ -23,21 +25,10 @@ interface Peer {
 
 const TYPE_FILTERS = ["CHAT", "REPEATER", "ROOM", "SENSOR", "NONE"] as const;
 
-const DARK_TILES =
-  "https://{s}.basemaps.cartocdn.com/dark_all/{z}/{x}/{y}{r}.png";
-const LIGHT_TILES =
-  "https://{s}.basemaps.cartocdn.com/light_all/{z}/{x}/{y}{r}.png";
-const TILE_ATTRIBUTION =
-  '&copy; <a href="https://www.openstreetmap.org/copyright">OSM</a> &copy; <a href="https://carto.com/attributions">CARTO</a>';
-
 function isPeer(value: unknown): value is Peer {
   if (!value || typeof value !== "object") return false;
   const v = value as Record<string, unknown>;
   return typeof v.pubkey === "string" && typeof v.name === "string";
-}
-
-function isDarkMode() {
-  return document.documentElement.classList.contains("dark");
 }
 
 function escapeHtml(s: string): string {
@@ -85,12 +76,25 @@ function focusIcon(): L.DivIcon {
   });
 }
 
+// One DivIcon per peer type, built once — the markers-sync effect runs on every
+// WS peer update, so per-marker icon construction there is wasted work.
+const PEER_ICONS: Record<string, L.DivIcon> = Object.fromEntries(
+  Object.entries(PEER_TYPE_HEX).map(([type, color]) => [type, dotIcon(color)]),
+);
+const FOCUS_ICON = focusIcon();
+
+const NO_PEERS: Peer[] = [];
+
 export function MapPage() {
-  const [peers, setPeers] = useState<Peer[]>([]);
-  const [loading, setLoading] = useState(true);
-  const [error, setError] = useState<string | null>(null);
+  const {
+    items,
+    setItems: setPeers,
+    loading,
+    error,
+    reload,
+  } = useApiList<Peer>("/api/peers", "Failed to load peers");
+  const peers = items ?? NO_PEERS;
   const [hidden, setHidden] = useState<Set<string>>(new Set());
-  const [dark, setDark] = useState<boolean>(() => isDarkMode());
 
   const [searchParams] = useSearchParams();
   const focus = useMemo(() => {
@@ -108,36 +112,23 @@ export function MapPage() {
   const focusMarkerRef = useRef<L.Marker | null>(null);
   const fittedRef = useRef(false);
 
-  const handleMessage = useCallback((topic: string, data: unknown) => {
-    if (topic !== "peers") return;
-    if (!isPeer(data)) return;
-    setPeers((prev) => {
-      const idx = prev.findIndex((p) => p.pubkey === data.pubkey);
-      if (idx === -1) return [data, ...prev];
-      const next = prev.slice();
-      next[idx] = { ...next[idx], ...data };
-      return next;
-    });
-  }, []);
+  const handleMessage = useCallback(
+    (topic: string, data: unknown) => {
+      if (topic !== "peers") return;
+      if (!isPeer(data)) return;
+      setPeers((prev) => {
+        const arr = prev ?? [];
+        const idx = arr.findIndex((p) => p.pubkey === data.pubkey);
+        if (idx === -1) return [data, ...arr];
+        const next = arr.slice();
+        next[idx] = { ...next[idx], ...data };
+        return next;
+      });
+    },
+    [setPeers],
+  );
 
   const { connected } = useWebSocket(["peers"], handleMessage);
-
-  const load = useCallback(() => {
-    setLoading(true);
-    setError(null);
-    fetch("/api/peers")
-      .then((r) => {
-        if (!r.ok) throw new Error("peers");
-        return r.json();
-      })
-      .then((data: Peer[]) => setPeers(data || []))
-      .catch(() => setError("Failed to load peers"))
-      .finally(() => setLoading(false));
-  }, []);
-
-  useEffect(() => {
-    load();
-  }, [load]);
 
   // Initialize map once
   useEffect(() => {
@@ -149,13 +140,8 @@ export function MapPage() {
       zoomControl: true,
       attributionControl: true,
     });
-    const layer = L.tileLayer(isDarkMode() ? DARK_TILES : LIGHT_TILES, {
-      attribution: TILE_ATTRIBUTION,
-      subdomains: "abcd",
-      maxZoom: 19,
-    }).addTo(map);
+    tileLayerRef.current = themeTileLayer().addTo(map);
     mapRef.current = map;
-    tileLayerRef.current = layer;
 
     return () => {
       map.remove();
@@ -166,6 +152,8 @@ export function MapPage() {
       fittedRef.current = false;
     };
   }, []);
+
+  useThemeTiles(mapRef, tileLayerRef);
 
   // Center + drop a highlight pin when a coordinate is deep-linked via
   // ?lat=&lon= (e.g. "Open in MeshCore Map" from a chat coordinate). Marks the
@@ -186,7 +174,7 @@ export function MapPage() {
       focusMarkerRef.current.setLatLng([focus.lat, focus.lon]);
     } else {
       focusMarkerRef.current = L.marker([focus.lat, focus.lon], {
-        icon: focusIcon(),
+        icon: FOCUS_ICON,
         zIndexOffset: 1000,
       })
         .addTo(map)
@@ -196,33 +184,6 @@ export function MapPage() {
     }
     focusMarkerRef.current.openPopup();
   }, [focus]);
-
-  // Watch for theme changes
-  useEffect(() => {
-    const observer = new MutationObserver(() => {
-      const next = isDarkMode();
-      setDark((prev) => (prev === next ? prev : next));
-    });
-    observer.observe(document.documentElement, {
-      attributes: true,
-      attributeFilter: ["class"],
-    });
-    return () => observer.disconnect();
-  }, []);
-
-  // Swap tile layer when theme changes
-  useEffect(() => {
-    const map = mapRef.current;
-    if (!map) return;
-    if (tileLayerRef.current) {
-      map.removeLayer(tileLayerRef.current);
-    }
-    tileLayerRef.current = L.tileLayer(dark ? DARK_TILES : LIGHT_TILES, {
-      attribution: TILE_ATTRIBUTION,
-      subdomains: "abcd",
-      maxZoom: 19,
-    }).addTo(map);
-  }, [dark]);
 
   const located = useMemo(
     () => peers.filter((p) => p.lat !== 0 || p.lon !== 0),
@@ -254,14 +215,15 @@ export function MapPage() {
     for (const p of visible) {
       const lat = p.lat / 1e6;
       const lon = p.lon / 1e6;
-      const color = PEER_TYPE_HEX[p.type] || PEER_TYPE_HEX.NONE;
+      const icon = PEER_ICONS[p.type] || PEER_ICONS.NONE;
       const existing = markers.get(p.pubkey);
       if (existing) {
         existing.setLatLng([lat, lon]);
-        existing.setIcon(dotIcon(color));
+        // setIcon rebuilds the marker's DOM element — skip when unchanged.
+        if (existing.getIcon() !== icon) existing.setIcon(icon);
         existing.setPopupContent(buildPopupHtml(p));
       } else {
-        const marker = L.marker([lat, lon], { icon: dotIcon(color) })
+        const marker = L.marker([lat, lon], { icon })
           .addTo(map)
           .bindPopup(buildPopupHtml(p));
         markers.set(p.pubkey, marker);
@@ -309,7 +271,7 @@ export function MapPage() {
             <Button
               variant="ghost"
               size="sm"
-              onClick={load}
+              onClick={reload}
               className="h-7 gap-1.5 px-2 font-mono text-[10px] uppercase tracking-[0.12em] text-muted-foreground hover:text-primary"
             >
               <RefreshCw className={cn("size-3", loading && "animate-spin")} />
@@ -320,24 +282,7 @@ export function MapPage() {
         }
       />
 
-      {error && (
-        <Alert variant="destructive">
-          <AlertTitle className="font-mono uppercase tracking-[0.1em]">
-            Error
-          </AlertTitle>
-          <AlertDescription>
-            {error}
-            <Button
-              variant="ghost"
-              size="sm"
-              onClick={load}
-              className="ml-2 h-7 text-xs uppercase tracking-[0.1em]"
-            >
-              retry
-            </Button>
-          </AlertDescription>
-        </Alert>
-      )}
+      {error && <LoadErrorAlert message={error} onRetry={reload} />}
 
       <section className="panel overflow-hidden">
         <div className="flex flex-wrap items-center gap-2 px-4 py-3 border-b border-border">

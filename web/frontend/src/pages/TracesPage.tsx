@@ -13,7 +13,8 @@ import {
 import { toast } from "sonner";
 import { useWebSocket } from "@/hooks/useWebSocket";
 import { Button } from "@/components/ui/button";
-import { Alert, AlertDescription, AlertTitle } from "@/components/ui/alert";
+import { LoadErrorAlert } from "@/components/LoadErrorAlert";
+import { SectionTitle } from "@/components/SectionTitle";
 import { Skeleton } from "@/components/ui/skeleton";
 import { Textarea } from "@/components/ui/textarea";
 import {
@@ -73,6 +74,8 @@ type PeerSort = "name" | "recent" | "signal";
 // further progress we declare a timeout.
 const TRACE_TIMEOUT_MS = 5000;
 
+const HEX_RE = /^[0-9a-f]+$/i;
+
 export function TracesPage() {
   const [companions, setCompanions] = useState<Companion[]>([]);
   const [peers, setPeers] = useState<Peer[]>([]);
@@ -99,6 +102,13 @@ export function TracesPage() {
   // handler can tell a partial echo from the final packet without re-creating
   // the callback whenever the path changes.
   const plannedHopCountRef = useRef(0);
+  // Same render-mirror trick for the trace-in-flight state: the WS callback
+  // reads these so it stays referentially stable during an active trace
+  // instead of resubscribing on every tag/timer change.
+  const activeTagRef = useRef<number | null>(null);
+  activeTagRef.current = activeTag;
+  const waitStartedAtRef = useRef<number | null>(null);
+  waitStartedAtRef.current = waitStartedAt;
 
   // (Re)arm the silence timer. Called on send and on every partial echo.
   const armTimeout = useCallback(() => {
@@ -130,6 +140,8 @@ export function TracesPage() {
       }
       if (topic !== "traces" || !data) return;
       const msg = data as TraceWsMessage;
+      const activeTag = activeTagRef.current;
+      const waitStartedAt = waitStartedAtRef.current;
       if (activeTag == null || msg.tag !== activeTag || waitStartedAt == null) {
         return;
       }
@@ -168,7 +180,7 @@ export function TracesPage() {
         armTimeout();
       }
     },
-    [activeTag, waitStartedAt, armTimeout],
+    [armTimeout],
   );
 
   const { connected } = useWebSocket(["traces", "peers"], onWsMessage);
@@ -261,7 +273,7 @@ export function TracesPage() {
 
   const pathHexValid = useMemo(() => {
     if (!computedPathHex) return mode === "select";
-    if (!/^[0-9a-f]+$/i.test(computedPathHex)) return false;
+    if (!HEX_RE.test(computedPathHex)) return false;
     if (computedPathHex.length % (hashSize * 2) !== 0) return false;
     return true;
   }, [computedPathHex, hashSize, mode]);
@@ -377,24 +389,7 @@ export function TracesPage() {
       />
 
       {loading && <TracesSkeleton />}
-      {error && (
-        <Alert variant="destructive">
-          <AlertTitle className="font-mono uppercase tracking-[0.1em]">
-            Error
-          </AlertTitle>
-          <AlertDescription>
-            {error}
-            <Button
-              variant="ghost"
-              size="sm"
-              onClick={load}
-              className="ml-2 h-7 text-xs uppercase tracking-[0.1em]"
-            >
-              retry
-            </Button>
-          </AlertDescription>
-        </Alert>
-      )}
+      {error && <LoadErrorAlert message={error} onRetry={load} />}
 
       {!loading && !error && (
         <section className="grid grid-cols-1 lg:grid-cols-5 gap-6">
@@ -755,28 +750,6 @@ function ModeToggle({
     >
       {children}
     </button>
-  );
-}
-
-function SectionTitle({
-  eyebrow,
-  title,
-  trailing,
-}: {
-  eyebrow?: string;
-  title: string;
-  trailing?: React.ReactNode;
-}) {
-  return (
-    <div className="flex items-center justify-between px-4 py-3 border-b border-border">
-      <div className="space-y-0.5">
-        {eyebrow && <span className="label-overline block">{eyebrow}</span>}
-        <h2 className="font-mono text-sm uppercase tracking-[0.1em]">
-          {title}
-        </h2>
-      </div>
-      {trailing}
-    </div>
   );
 }
 

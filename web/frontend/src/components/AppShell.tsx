@@ -1,6 +1,8 @@
+import { useEffect, useState } from "react";
 import {
   Activity,
   AudioLines,
+  Gauge,
   LayoutDashboard,
   MapPinned,
   MessagesSquare,
@@ -66,6 +68,12 @@ const TELEMETRY: NavItem[] = [
     label: "Trace",
     icon: Radar,
     match: (p) => p === "/traces",
+  },
+  {
+    to: "/monitoring",
+    label: "Monitoring",
+    icon: Gauge,
+    match: (p) => p.startsWith("/monitoring"),
   },
 ];
 
@@ -215,11 +223,11 @@ export function AppShell({ children }: { children: React.ReactNode }) {
         <header className="shrink-0 z-30 h-14 flex items-center gap-3 border-b border-border bg-background/80 backdrop-blur supports-[backdrop-filter]:bg-background/60 px-4">
           <SidebarTrigger className="size-8" />
           <Separator orientation="vertical" className="h-5" />
-          <div className="flex items-center gap-2 font-mono text-[11px] uppercase tracking-[0.14em] text-muted-foreground">
-            <Waves className="size-3.5 text-primary" />
-            <span>meshnet</span>
-            <span className="text-muted-foreground/40">/</span>
-            <span className="text-foreground">{routeLabel(pathname)}</span>
+          <div className="flex items-center gap-2 font-mono text-[11px] uppercase tracking-[0.14em] text-muted-foreground min-w-0 overflow-hidden">
+            <Waves className="size-3.5 text-primary shrink-0" />
+            <span className="hidden sm:inline">meshnet</span>
+            <span className="hidden sm:inline text-muted-foreground/40">/</span>
+            <span className="text-foreground truncate">{routeLabel(pathname)}</span>
           </div>
           <div className="ml-auto flex items-center gap-3 font-mono text-[10px] uppercase tracking-[0.12em] text-muted-foreground/70">
             <ClockBadge />
@@ -246,7 +254,6 @@ function routeLabel(pathname: string): string {
   return seg.join(" / ");
 }
 
-import { useEffect, useState } from "react";
 function ClockBadge() {
   const [now, setNow] = useState(() => new Date());
   useEffect(() => {

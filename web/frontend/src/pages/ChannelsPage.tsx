@@ -2,17 +2,13 @@ import { useCallback, useEffect, useState } from "react";
 import { Link, useParams } from "react-router-dom";
 import {
   ArrowLeft,
-  Check,
   CircleDashed,
   Hash,
   Lock,
   Plus,
   Radio,
-  Trash2,
-  X,
 } from "lucide-react";
 import { toast } from "sonner";
-import { Alert, AlertDescription, AlertTitle } from "@/components/ui/alert";
 import { Button } from "@/components/ui/button";
 import {
   Dialog,
@@ -26,6 +22,9 @@ import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Skeleton } from "@/components/ui/skeleton";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
+import { useApiList } from "@/hooks/useApiList";
+import { InlineConfirm } from "@/components/InlineConfirm";
+import { LoadErrorAlert } from "@/components/LoadErrorAlert";
 import { PageHeader } from "@/components/PageHeader";
 
 interface Channel {
@@ -38,29 +37,19 @@ export function ChannelsPage() {
   const { name } = useParams();
   const companion = decodeURIComponent(name ?? "");
 
-  const [channels, setChannels] = useState<Channel[] | null>(null);
-  const [loading, setLoading] = useState(true);
-  const [error, setError] = useState<string | null>(null);
+  const {
+    items: channels,
+    loading,
+    error,
+    reload: load,
+  } = useApiList<Channel>(
+    companion
+      ? `/api/companions/${encodeURIComponent(companion)}/channels`
+      : null,
+    "Failed to load channels",
+  );
   const [confirmRemove, setConfirmRemove] = useState<string | null>(null);
   const [dialogOpen, setDialogOpen] = useState(false);
-
-  const load = useCallback(() => {
-    if (!companion) return;
-    setLoading(true);
-    setError(null);
-    fetch(`/api/companions/${encodeURIComponent(companion)}/channels`)
-      .then((r) => {
-        if (!r.ok) throw new Error("channels");
-        return r.json();
-      })
-      .then((data: Channel[]) => setChannels(data || []))
-      .catch(() => setError("Failed to load channels"))
-      .finally(() => setLoading(false));
-  }, [companion]);
-
-  useEffect(() => {
-    load();
-  }, [load]);
 
   const addChannel = useCallback(
     async (channelName: string, privateKey?: string) => {
@@ -153,24 +142,7 @@ export function ChannelsPage() {
 
       {loading && <ChannelsSkeleton />}
 
-      {error && (
-        <Alert variant="destructive">
-          <AlertTitle className="font-mono uppercase tracking-[0.1em]">
-            Error
-          </AlertTitle>
-          <AlertDescription>
-            {error}
-            <Button
-              variant="ghost"
-              size="sm"
-              onClick={load}
-              className="ml-2 h-7 text-xs uppercase tracking-[0.1em]"
-            >
-              retry
-            </Button>
-          </AlertDescription>
-        </Alert>
-      )}
+      {error && <LoadErrorAlert message={error} onRetry={load} />}
 
       {!loading && !error && channels && (
         <section className="panel overflow-hidden">
@@ -259,39 +231,12 @@ function ChannelRow({
       </div>
 
       <div className="shrink-0">
-        {confirming ? (
-          <div className="inline-flex items-center gap-1">
-            <span className="font-mono text-[10px] uppercase tracking-[0.12em] text-muted-foreground mr-1">
-              Remove?
-            </span>
-            <Button
-              variant="destructive"
-              size="xs"
-              onClick={onConfirm}
-              className="font-mono uppercase tracking-[0.1em]"
-            >
-              <Check className="size-3" /> yes
-            </Button>
-            <Button
-              variant="ghost"
-              size="xs"
-              onClick={onCancel}
-              className="font-mono uppercase tracking-[0.1em]"
-            >
-              <X className="size-3" /> no
-            </Button>
-          </div>
-        ) : (
-          <Button
-            variant="ghost"
-            size="sm"
-            onClick={onAskRemove}
-            className="text-muted-foreground hover:text-destructive font-mono text-[10px] uppercase tracking-[0.12em]"
-          >
-            <Trash2 className="size-3" />
-            remove
-          </Button>
-        )}
+        <InlineConfirm
+          confirming={confirming}
+          onAskRemove={onAskRemove}
+          onCancel={onCancel}
+          onConfirm={onConfirm}
+        />
       </div>
     </div>
   );

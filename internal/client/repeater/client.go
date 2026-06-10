@@ -10,7 +10,6 @@ import (
 	"encoding/hex"
 	"fmt"
 	"log/slog"
-	"sort"
 	"strings"
 	"sync"
 	"time"
@@ -19,6 +18,7 @@ import (
 	"github.com/meshcore-go/meshcore-go/node"
 
 	"github.com/meshcore-go/meshcore-bot/internal/store"
+	"github.com/meshcore-go/meshcore-bot/internal/telemetry"
 )
 
 const (
@@ -29,10 +29,6 @@ const (
 	reqTypeGetOwnerInfo     = 0x07
 	txtTypeCliData          = 1
 	cliPrefixLen            = 3
-
-	// LPP channel for the node's own readings (battery, MCU temp, GPS);
-	// environment sensors land on channels >= 2. TELEM_CHANNEL_SELF in firmware.
-	telemChannelSelf = 1
 )
 
 type Neighbor struct {
@@ -51,19 +47,6 @@ type OwnerInfo struct {
 	FirmwareVersion string `json:"firmwareVersion"`
 	NodeName        string `json:"nodeName"`
 	OwnerInfo       string `json:"ownerInfo"`
-}
-
-type TelemetryReading struct {
-	Channel int    `json:"channel"`
-	Type    int    `json:"type"`
-	Name    string `json:"name"`
-	Unit    string `json:"unit,omitempty"`
-	Value   any    `json:"value"`
-}
-
-type Telemetry struct {
-	Readings []TelemetryReading `json:"readings"`
-	Raw      string             `json:"raw"`
 }
 
 type AccessListEntry struct {
@@ -571,7 +554,7 @@ func telemetryReqBody() ([]byte, error) {
 	return body, nil
 }
 
-func (rm *Client) SendTelemetryReq(pubkeyHex string, timeout time.Duration) (*Telemetry, error) {
+func (rm *Client) SendTelemetryReq(pubkeyHex string, timeout time.Duration) (*telemetry.Telemetry, error) {
 	body, err := telemetryReqBody()
 	if err != nil {
 		return nil, err
@@ -580,12 +563,12 @@ func (rm *Client) SendTelemetryReq(pubkeyHex string, timeout time.Duration) (*Te
 	if err != nil {
 		return nil, err
 	}
-	return parseRepeaterTelemetry(data)
+	return telemetry.Parse(data)
 }
 
 // SendContactTelemetryReq requests telemetry from any contact without a login,
 // encrypting with the ECDH secret between this companion and the contact.
-func (rm *Client) SendContactTelemetryReq(pubkeyHex string, timeout time.Duration) (*Telemetry, error) {
+func (rm *Client) SendContactTelemetryReq(pubkeyHex string, timeout time.Duration) (*telemetry.Telemetry, error) {
 	pubkeyBytes, err := hex.DecodeString(pubkeyHex)
 	if err != nil {
 		return nil, fmt.Errorf("invalid pubkey hex: %w", err)
@@ -614,7 +597,7 @@ func (rm *Client) SendContactTelemetryReq(pubkeyHex string, timeout time.Duratio
 	if err != nil {
 		return nil, err
 	}
-	return parseRepeaterTelemetry(data)
+	return telemetry.Parse(data)
 }
 
 func (rm *Client) SendCLI(pubkeyHex, command string, timeout time.Duration) (string, error) {
@@ -1105,105 +1088,6 @@ func parseRepeaterOwnerInfo(data []byte) *OwnerInfo {
 		info.OwnerInfo = parts[2]
 	}
 	return info
-}
-
-func parseRepeaterTelemetry(data []byte) (*Telemetry, error) {
-	out := &Telemetry{
-		Raw:      hex.EncodeToString(data),
-		Readings: []TelemetryReading{},
-	}
-	if len(data) == 0 {
-		return out, nil
-	}
-	readings, err := meshcore.LPPDecode(data)
-	if err != nil {
-		return out, fmt.Errorf("decoding telemetry: %w", err)
-	}
-	for _, r := range readings {
-		name, unit := lppTypeMeta(r.Channel, r.Type)
-		out.Readings = append(out.Readings, TelemetryReading{
-			Channel: int(r.Channel),
-			Type:    int(r.Type),
-			Name:    name,
-			Unit:    unit,
-			Value:   r.Value,
-		})
-	}
-	// Group by channel; stable to keep firmware emit order within a channel.
-	sort.SliceStable(out.Readings, func(i, j int) bool {
-		return out.Readings[i].Channel < out.Readings[j].Channel
-	})
-	return out, nil
-}
-
-func lppTypeMeta(channel, typ byte) (name, unit string) {
-	// Label self-channel readings by source so the MCU's own temp/voltage are
-	// distinct from external sensors (which land on channels >= 2).
-	if channel == telemChannelSelf {
-		switch typ {
-		case meshcore.LPPTemperature:
-			return "MCU temperature", "°C"
-		case meshcore.LPPVoltage:
-			return "Battery", "V"
-		case meshcore.LPPGPS:
-			return "Location", ""
-		}
-	}
-	switch typ {
-	case meshcore.LPPDigitalInput:
-		return "Digital input", ""
-	case meshcore.LPPDigitalOutput:
-		return "Digital output", ""
-	case meshcore.LPPAnalogInput:
-		return "Analog input", "V"
-	case meshcore.LPPAnalogOutput:
-		return "Analog output", "V"
-	case meshcore.LPPGenericSensor:
-		return "Generic sensor", ""
-	case meshcore.LPPLuminosity:
-		return "Luminosity", "lux"
-	case meshcore.LPPPresence:
-		return "Presence", ""
-	case meshcore.LPPTemperature:
-		return "Temperature", "°C"
-	case meshcore.LPPRelativeHumidity:
-		return "Humidity", "%RH"
-	case meshcore.LPPAccelerometer:
-		return "Accelerometer", "G"
-	case meshcore.LPPBarometricPressure:
-		return "Pressure", "hPa"
-	case meshcore.LPPVoltage:
-		return "Voltage", "V"
-	case meshcore.LPPCurrent:
-		return "Current", "A"
-	case meshcore.LPPFrequency:
-		return "Frequency", "Hz"
-	case meshcore.LPPPercentage:
-		return "Percentage", "%"
-	case meshcore.LPPAltitude:
-		return "Altitude", "m"
-	case meshcore.LPPConcentration:
-		return "Concentration", "ppm"
-	case meshcore.LPPPower:
-		return "Power", "W"
-	case meshcore.LPPDistance:
-		return "Distance", "m"
-	case meshcore.LPPEnergy:
-		return "Energy", "kWh"
-	case meshcore.LPPDirection:
-		return "Direction", "°"
-	case meshcore.LPPUnixTime:
-		return "Unix time", ""
-	case meshcore.LPPGyrometer:
-		return "Gyrometer", "°/s"
-	case meshcore.LPPColour:
-		return "Colour", "RGB"
-	case meshcore.LPPGPS:
-		return "GPS", ""
-	case meshcore.LPPSwitch:
-		return "Switch", ""
-	}
-	return fmt.Sprintf("Type %d", typ), ""
 }
 
 func parseRepeaterStatus(data []byte) (*Status, error) {

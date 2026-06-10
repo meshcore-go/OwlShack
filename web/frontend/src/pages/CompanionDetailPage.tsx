@@ -179,10 +179,12 @@ const CONTACT_TYPE_BY_INT: Record<string, ContactType> = {
   "4": "SENSOR",
 };
 
+const COORD_RE = /^(-?\d{1,3}\.\d+)\s*,\s*(-?\d{1,3}\.\d+)$/;
+
 // Parse + range-validate a "lat,lon" token. Returns null if out of range so
 // the caller leaves it as plain text rather than a bogus map link.
 function parseCoord(s: string): { lat: number; lon: number } | null {
-  const m = /^(-?\d{1,3}\.\d+)\s*,\s*(-?\d{1,3}\.\d+)$/.exec(s.trim());
+  const m = COORD_RE.exec(s.trim());
   if (!m) return null;
   const lat = parseFloat(m[1]);
   const lon = parseFloat(m[2]);
@@ -249,6 +251,16 @@ export function CompanionDetailPage() {
   const activeConversation = useMemo(
     () => conversations.find((c) => c.channel === activeChannel) ?? null,
     [conversations, activeChannel],
+  );
+
+  // Channels that already have a conversation row. The WS handler reads this
+  // to decide between an in-place row update and a full roster reload — the
+  // decision must stay outside the setConversations updater (updaters must be
+  // pure; StrictMode invokes them twice).
+  const knownChannelsRef = useRef<Set<string>>(new Set());
+  knownChannelsRef.current = useMemo(
+    () => new Set(conversations.map((c) => c.channel)),
+    [conversations],
   );
 
   const isContact = activeConversation?.type === "contact";
@@ -480,12 +492,14 @@ export function CompanionDetailPage() {
         setMessages((prev) => mergeMessages(prev, [incoming]));
       }
 
+      if (!knownChannelsRef.current.has(incoming.channel)) {
+        loadConversations();
+        return;
+      }
+
       setConversations((prev) => {
         const idx = prev.findIndex((c) => c.channel === incoming.channel);
-        if (idx === -1) {
-          loadConversations();
-          return prev;
-        }
+        if (idx === -1) return prev;
         const updated = [...prev];
         const target = { ...updated[idx] };
         target.lastMessage = {
@@ -634,18 +648,6 @@ export function CompanionDetailPage() {
     setText: setComposer,
   });
 
-  const onComposerKey = useCallback(
-    (e: KeyboardEvent<HTMLTextAreaElement>) => {
-      if (emojiAC.handleKeyDown(e)) return;
-      if (e.key === "Enter" && !e.shiftKey) {
-        e.preventDefault();
-        send();
-      }
-    },
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-    [composer, sending, activeConversation, charLimit, emojiAC.handleKeyDown],
-  );
-
   const send = useCallback(async () => {
     if (!activeConversation || !composer.trim() || sending) return;
     const text = composer.trim();
@@ -675,6 +677,17 @@ export function CompanionDetailPage() {
       setSending(false);
     }
   }, [activeConversation, composer, sending, charLimit, decodedName]);
+
+  const onComposerKey = useCallback(
+    (e: KeyboardEvent<HTMLTextAreaElement>) => {
+      if (emojiAC.handleKeyDown(e)) return;
+      if (e.key === "Enter" && !e.shiftKey) {
+        e.preventDefault();
+        send();
+      }
+    },
+    [emojiAC.handleKeyDown, send],
+  );
 
   // focus=false keeps the caret without summoning the mobile keyboard (used by
   // the mobile emoji panel, which would otherwise be covered by the keyboard).
@@ -740,6 +753,13 @@ export function CompanionDetailPage() {
         const r = await fetch(`/api/messages/${m.id}`, { method: "DELETE" });
         if (!r.ok) throw new Error("delete");
         setMessages((prev) => prev.filter((x) => x.id !== m.id));
+        const cached = messageCacheRef.current.get(m.channel);
+        if (cached) {
+          messageCacheRef.current.set(
+            m.channel,
+            cached.filter((x) => x.id !== m.id),
+          );
+        }
         toast.success("Deleted");
       } catch {
         toast.error("Delete failed");
@@ -858,19 +878,19 @@ export function CompanionDetailPage() {
             <>
               <Link
                 to={`/companions/${encodeURIComponent(decodedName)}/contacts`}
-                className="hidden sm:inline-flex font-mono text-[10px] uppercase tracking-[0.12em] text-muted-foreground hover:text-primary px-2 py-0.5 border border-border"
+                className="inline-flex items-center font-mono text-[10px] uppercase tracking-[0.12em] text-muted-foreground hover:text-primary px-2.5 py-1.5 sm:py-0.5 border border-border"
               >
                 <Users className="size-3 mr-1.5" /> contacts
               </Link>
               <Link
                 to={`/companions/${encodeURIComponent(decodedName)}/channels`}
-                className="hidden sm:inline-flex font-mono text-[10px] uppercase tracking-[0.12em] text-muted-foreground hover:text-primary px-2 py-0.5 border border-border"
+                className="inline-flex items-center font-mono text-[10px] uppercase tracking-[0.12em] text-muted-foreground hover:text-primary px-2.5 py-1.5 sm:py-0.5 border border-border"
               >
                 <Hash className="size-3 mr-1.5" /> channels
               </Link>
               <Link
                 to={`/companions/${encodeURIComponent(decodedName)}/repeaters`}
-                className="hidden sm:inline-flex font-mono text-[10px] uppercase tracking-[0.12em] text-muted-foreground hover:text-primary px-2 py-0.5 border border-border"
+                className="inline-flex items-center font-mono text-[10px] uppercase tracking-[0.12em] text-muted-foreground hover:text-primary px-2.5 py-1.5 sm:py-0.5 border border-border"
               >
                 <Radio className="size-3 mr-1.5" /> repeaters
               </Link>

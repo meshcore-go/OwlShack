@@ -40,6 +40,16 @@ const RepeatersListPage = lazy(() =>
     default: m.RepeatersListPage,
   })),
 );
+const MonitoringPage = lazy(() =>
+  import("@/pages/MonitoringPage").then((m) => ({
+    default: m.MonitoringPage,
+  })),
+);
+const MonitoringDetailPage = lazy(() =>
+  import("@/pages/MonitoringDetailPage").then((m) => ({
+    default: m.MonitoringDetailPage,
+  })),
+);
 
 function PageFallback() {
   return (
@@ -60,6 +70,8 @@ export function App() {
           <Route path="/map" element={<MapPage />} />
           <Route path="/packets" element={<PacketsPage />} />
           <Route path="/traces" element={<TracesPage />} />
+          <Route path="/monitoring" element={<MonitoringPage />} />
+          <Route path="/monitoring/:pubkey" element={<MonitoringDetailPage />} />
           <Route path="/companions" element={<CompanionsPage />} />
           <Route path="/companions/:name" element={<CompanionDetailPage />} />
           <Route

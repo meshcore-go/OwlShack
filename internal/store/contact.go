@@ -9,6 +9,21 @@ import (
 type ContactMetadata struct {
 	IsRepeater       bool   `json:"isRepeater,omitempty"`
 	RepeaterPassword string `json:"repeaterPassword,omitempty"`
+
+	// Monitor enables background analytics/history polling for this node. Set
+	// via the UI alongside the repeater password — runtime per-node state, same
+	// pattern as RepeaterPassword (not file config).
+	Monitor bool `json:"monitor,omitempty"`
+	// MonitorIntervalSecs overrides the default poll cadence for this node.
+	// 0 = use the poller's built-in default.
+	MonitorIntervalSecs int64 `json:"monitorIntervalSecs,omitempty"`
+	// MonitorProbes selects which request bundles the poller runs for this node
+	// ("status", "telemetry", "neighbors"). Empty/nil = all (the default). The
+	// firmware returns each bundle whole, so this is the real RF-airtime lever.
+	MonitorProbes []string `json:"monitorProbes,omitempty"`
+	// MonitorRetrySecs overrides how soon to re-attempt after a failed poll.
+	// 0 = use the poller's built-in default.
+	MonitorRetrySecs int64 `json:"monitorRetrySecs,omitempty"`
 }
 
 type Contact struct {

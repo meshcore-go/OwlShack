@@ -5,6 +5,7 @@ import (
 	"log/slog"
 	"net/http"
 	"sync"
+	"time"
 
 	"github.com/gorilla/websocket"
 )
@@ -12,6 +13,17 @@ import (
 var upgrader = websocket.Upgrader{
 	CheckOrigin: func(r *http.Request) bool { return true },
 }
+
+// Keepalive tuning. The server pings every wsPingPeriod; browsers answer with
+// a protocol pong automatically, which extends the read deadline. A client
+// that stops answering (mobile tab suspended, network switched) is reaped
+// after wsPongWait instead of lingering as a zombie that broadcasts silently
+// drop into.
+const (
+	wsWriteWait  = 10 * time.Second
+	wsPongWait   = 75 * time.Second
+	wsPingPeriod = 50 * time.Second // must be < wsPongWait
+)
 
 type wsMessage struct {
 	Action string          `json:"action,omitempty"`
@@ -102,11 +114,18 @@ func (s *Server) wsReadPump(c *client) {
 		c.conn.Close()
 	}()
 
+	c.conn.SetReadDeadline(time.Now().Add(wsPongWait))
+	c.conn.SetPongHandler(func(string) error {
+		c.conn.SetReadDeadline(time.Now().Add(wsPongWait))
+		return nil
+	})
+
 	for {
 		_, raw, err := c.conn.ReadMessage()
 		if err != nil {
 			return
 		}
+		c.conn.SetReadDeadline(time.Now().Add(wsPongWait))
 
 		var msg wsMessage
 		if json.Unmarshal(raw, &msg) != nil {
@@ -122,15 +141,40 @@ func (s *Server) wsReadPump(c *client) {
 			c.mu.Lock()
 			delete(c.topics, msg.Topic)
 			c.mu.Unlock()
+		case "ping":
+			// App-level liveness probe: the SPA sends this on tab resume to
+			// detect a half-open socket (protocol pongs aren't visible to JS).
+			pong, _ := json.Marshal(wsMessage{Topic: "pong"})
+			select {
+			case c.send <- pong:
+			default:
+			}
 		}
 	}
 }
 
 func (s *Server) wsWritePump(c *client) {
-	defer c.conn.Close()
-	for msg := range c.send {
-		if err := c.conn.WriteMessage(websocket.TextMessage, msg); err != nil {
-			return
+	ticker := time.NewTicker(wsPingPeriod)
+	defer func() {
+		ticker.Stop()
+		c.conn.Close()
+	}()
+	for {
+		select {
+		case msg, ok := <-c.send:
+			c.conn.SetWriteDeadline(time.Now().Add(wsWriteWait))
+			if !ok {
+				c.conn.WriteMessage(websocket.CloseMessage, nil)
+				return
+			}
+			if err := c.conn.WriteMessage(websocket.TextMessage, msg); err != nil {
+				return
+			}
+		case <-ticker.C:
+			c.conn.SetWriteDeadline(time.Now().Add(wsWriteWait))
+			if err := c.conn.WriteMessage(websocket.PingMessage, nil); err != nil {
+				return
+			}
 		}
 	}
 }

@@ -22,8 +22,14 @@ function readSystem(): "dark" | "light" {
 
 export function ThemeProvider({ children }: { children: React.ReactNode }) {
   const [theme, setThemeState] = useState<Theme>(() => {
-    const stored = localStorage.getItem(STORAGE_KEY) as Theme | null;
-    return stored ?? "dark";
+    // localStorage can throw when storage is disabled (strict privacy modes);
+    // never let that take down the whole tree at mount.
+    try {
+      const stored = localStorage.getItem(STORAGE_KEY) as Theme | null;
+      return stored ?? "dark";
+    } catch {
+      return "dark";
+    }
   });
   const [resolved, setResolved] = useState<"dark" | "light">(() =>
     theme === "system" ? readSystem() : (theme as "dark" | "light"),
@@ -47,7 +53,11 @@ export function ThemeProvider({ children }: { children: React.ReactNode }) {
   }, [theme]);
 
   const setTheme = (t: Theme) => {
-    localStorage.setItem(STORAGE_KEY, t);
+    try {
+      localStorage.setItem(STORAGE_KEY, t);
+    } catch {
+      // Persistence is best-effort; the in-memory theme still applies.
+    }
     setThemeState(t);
   };
 

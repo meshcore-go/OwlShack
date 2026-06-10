@@ -1,15 +1,8 @@
-import { useCallback, useEffect, useState } from "react";
 import { Link } from "react-router-dom";
-import {
-  CircleDashed,
-  Crosshair,
-  Hash,
-  MessagesSquare,
-  Users,
-} from "lucide-react";
-import { Alert, AlertDescription, AlertTitle } from "@/components/ui/alert";
-import { Button } from "@/components/ui/button";
+import { Crosshair, Hash, MessagesSquare, Users } from "lucide-react";
 import { Skeleton } from "@/components/ui/skeleton";
+import { useApiList } from "@/hooks/useApiList";
+import { LoadErrorAlert } from "@/components/LoadErrorAlert";
 import { PageHeader } from "@/components/PageHeader";
 import { truncateMid } from "@/lib/format";
 
@@ -21,26 +14,12 @@ interface Companion {
 }
 
 export function CompanionsPage() {
-  const [companions, setCompanions] = useState<Companion[] | null>(null);
-  const [loading, setLoading] = useState(true);
-  const [error, setError] = useState<string | null>(null);
-
-  const load = useCallback(() => {
-    setLoading(true);
-    setError(null);
-    fetch("/api/companions")
-      .then((r) => {
-        if (!r.ok) throw new Error("companions");
-        return r.json();
-      })
-      .then((data: Companion[]) => setCompanions(data || []))
-      .catch(() => setError("Failed to load companions"))
-      .finally(() => setLoading(false));
-  }, []);
-
-  useEffect(() => {
-    load();
-  }, [load]);
+  const {
+    items: companions,
+    loading,
+    error,
+    reload,
+  } = useApiList<Companion>("/api/companions", "Failed to load companions");
 
   const total = companions?.length ?? 0;
   const totalChannels =
@@ -63,24 +42,7 @@ export function CompanionsPage() {
 
       {loading && <CompanionsSkeleton />}
 
-      {error && (
-        <Alert variant="destructive">
-          <AlertTitle className="font-mono uppercase tracking-[0.1em]">
-            Error
-          </AlertTitle>
-          <AlertDescription>
-            {error}
-            <Button
-              variant="ghost"
-              size="sm"
-              onClick={load}
-              className="ml-2 h-7 text-xs uppercase tracking-[0.1em]"
-            >
-              retry
-            </Button>
-          </AlertDescription>
-        </Alert>
-      )}
+      {error && <LoadErrorAlert message={error} onRetry={reload} />}
 
       {!loading && !error && companions && (
         <section className="panel overflow-hidden">
@@ -148,13 +110,6 @@ export function CompanionsPage() {
             </div>
           )}
         </section>
-      )}
-
-      {!loading && !error && companions && companions.length === 0 && (
-        <p className="text-center font-mono text-[10px] uppercase tracking-[0.14em] text-muted-foreground/50">
-          <CircleDashed className="size-3 inline-block mr-1" />
-          Awaiting configuration
-        </p>
       )}
     </div>
   );

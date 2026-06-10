@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useState, type ReactNode } from "react";
+import { useCallback, useEffect, useState, type ReactNode } from "react";
 import { Link, useParams } from "react-router-dom";
 import { ArrowLeft, Check, Copy, MessageSquare } from "lucide-react";
 import { toast } from "sonner";
@@ -8,6 +8,10 @@ import { Skeleton } from "@/components/ui/skeleton";
 import { PeerAvatar } from "@/components/PeerAvatar";
 import { PeerTypePill } from "@/components/StatusIndicator";
 import { TelemetryPanel } from "@/components/TelemetryPanel";
+import {
+  MonitoringSettings,
+  type MonitorMetadata,
+} from "@/components/MonitoringSettings";
 import { timeAgo, truncateMid } from "@/lib/format";
 
 interface Contact {
@@ -15,6 +19,7 @@ interface Contact {
   name: string;
   type?: string;
   addedAt: string;
+  metadata?: MonitorMetadata;
 }
 
 interface PathInfo {
@@ -30,11 +35,7 @@ export function ContactDetailPage() {
   const companion = decodeURIComponent(name ?? "");
   const contactPubkey = decodeURIComponent(pubkey ?? "");
 
-  const apiBase = useMemo(
-    () =>
-      `/api/companions/${encodeURIComponent(companion)}/contacts/${encodeURIComponent(contactPubkey)}`,
-    [companion, contactPubkey],
-  );
+  const apiBase = `/api/companions/${encodeURIComponent(companion)}/contacts/${encodeURIComponent(contactPubkey)}`;
 
   const [contact, setContact] = useState<Contact | null>(null);
   const [path, setPath] = useState<PathInfo | null>(null);
@@ -47,16 +48,14 @@ export function ContactDetailPage() {
     let cancelled = false;
     setLoading(true);
     setError(null);
-    fetch(`/api/companions/${encodeURIComponent(companion)}/contacts`)
+    fetch(apiBase)
       .then((r) => {
-        if (!r.ok) throw new Error("contacts");
+        if (r.status === 404) throw new Error("Contact not found");
+        if (!r.ok) throw new Error("contact");
         return r.json();
       })
-      .then((cs: Contact[]) => {
-        if (cancelled) return;
-        const found = (cs || []).find((c) => c.peerPubkey === contactPubkey);
-        if (!found) throw new Error("Contact not found");
-        setContact(found);
+      .then((c: Contact) => {
+        if (!cancelled) setContact(c);
       })
       .catch((e) => {
         if (!cancelled)
@@ -68,7 +67,7 @@ export function ContactDetailPage() {
     return () => {
       cancelled = true;
     };
-  }, [companion, contactPubkey]);
+  }, [companion, contactPubkey, apiBase]);
 
   // Path is best-effort context; its absence is not a page error.
   useEffect(() => {
@@ -214,6 +213,17 @@ export function ContactDetailPage() {
           <section className="panel p-4">
             <TelemetryPanel apiBase={apiBase} />
           </section>
+
+          {/* Only chat nodes have a monitoring collector (sessionless telemetry);
+              rooms/sensors aren't pollable yet, so no panel for them. */}
+          {contact.type?.toUpperCase() === "CHAT" && (
+            <MonitoringSettings
+              companionName={companion}
+              pubkey={contactPubkey}
+              kind="companion"
+              metadata={contact.metadata}
+            />
+          )}
         </>
       )}
     </div>

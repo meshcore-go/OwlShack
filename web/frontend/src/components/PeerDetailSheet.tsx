@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import { useNavigate } from "react-router-dom";
 import QRCode from "qrcode";
 import {
@@ -438,11 +438,15 @@ function AddPeerContactDialog({
   const [companion, setCompanion] = useState("");
   const [submitting, setSubmitting] = useState(false);
 
+  // Reset only on the closed→open transition: `companions` is live WS data and
+  // must not wipe the user's selection while the dialog is open.
+  const prevOpenRef = useRef(false);
   useEffect(() => {
-    if (open) {
+    if (open && !prevOpenRef.current) {
       setCompanion(companions[0]?.name ?? "");
       setSubmitting(false);
     }
+    prevOpenRef.current = open;
   }, [open, companions]);
 
   const submit = async () => {

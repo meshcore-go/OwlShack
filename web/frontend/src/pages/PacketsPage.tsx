@@ -1,14 +1,10 @@
-import { useCallback, useEffect, useMemo, useRef, useState } from "react";
-import {
-  ArrowDown,
-  ArrowUp,
-  CircleDashed,
-  RefreshCw,
-} from "lucide-react";
+import { useCallback, useMemo, useRef, useState } from "react";
+import { CircleDashed, RefreshCw } from "lucide-react";
 import { useWebSocket } from "@/hooks/useWebSocket";
+import { useApiList } from "@/hooks/useApiList";
 import { Button } from "@/components/ui/button";
 import { Skeleton } from "@/components/ui/skeleton";
-import { Alert, AlertDescription, AlertTitle } from "@/components/ui/alert";
+import { LoadErrorAlert } from "@/components/LoadErrorAlert";
 import {
   Table,
   TableBody,
@@ -48,6 +44,9 @@ interface Packet {
 interface PacketGroup {
   key: string;
   latest: Packet;
+  // Parsed once during grouping so the sort comparator doesn't re-allocate
+  // Date objects for strings already seen.
+  latestTs: number;
   observations: Packet[];
 }
 
@@ -86,63 +85,53 @@ function dirGlyph(direction: string): string {
 const MIN_SIDEBAR_WIDTH = 300;
 const DEFAULT_SIDEBAR_WIDTH = 480;
 
+const NO_PACKETS: Packet[] = [];
+
 export function PacketsPage() {
-  const [packets, setPackets] = useState<Packet[]>([]);
-  const [loading, setLoading] = useState(true);
-  const [error, setError] = useState<string | null>(null);
+  const {
+    items,
+    setItems: setPackets,
+    loading,
+    error,
+    reload,
+  } = useApiList<Packet>("/api/packets?limit=100", "Failed to load packets");
+  const packets = items ?? NO_PACKETS;
   const [selectedKey, setSelectedKey] = useState<string | null>(null);
   const [sidebarWidth, setSidebarWidth] = useState(DEFAULT_SIDEBAR_WIDTH);
   const draggingRef = useRef(false);
+  // Read by onResizeStart so the drag handler stays referentially stable —
+  // listing sidebarWidth as a dep would rebuild it on every drag pixel.
+  const sidebarWidthRef = useRef(DEFAULT_SIDEBAR_WIDTH);
+  sidebarWidthRef.current = sidebarWidth;
 
-  const onWsMessage = useCallback((topic: string, data: unknown) => {
-    if (topic !== "packets" || !data) return;
-    const pkt = data as Packet;
-    setPackets((prev) => [pkt, ...prev].slice(0, 200));
-  }, []);
+  const onWsMessage = useCallback(
+    (topic: string, data: unknown) => {
+      if (topic !== "packets" || !data) return;
+      const pkt = data as Packet;
+      setPackets((prev) => [pkt, ...(prev ?? [])].slice(0, 200));
+    },
+    [setPackets],
+  );
 
   const { connected } = useWebSocket(["packets"], onWsMessage);
-
-  const load = useCallback(() => {
-    setLoading(true);
-    setError(null);
-    fetch("/api/packets?limit=100")
-      .then((r) => {
-        if (!r.ok) throw new Error("packets");
-        return r.json();
-      })
-      .then((rows: Packet[] | null) => {
-        setPackets(rows || []);
-      })
-      .catch(() => setError("Failed to load packets"))
-      .finally(() => setLoading(false));
-  }, []);
-
-  useEffect(() => {
-    load();
-  }, [load]);
 
   const groups = useMemo<PacketGroup[]>(() => {
     const map = new Map<string, PacketGroup>();
     for (const p of packets) {
       const k = packetKey(p);
+      const ts = new Date(p.receivedAt).getTime();
       const existing = map.get(k);
       if (!existing) {
-        map.set(k, { key: k, latest: p, observations: [p] });
+        map.set(k, { key: k, latest: p, latestTs: ts, observations: [p] });
       } else {
         existing.observations.push(p);
-        if (
-          new Date(p.receivedAt).getTime() >
-          new Date(existing.latest.receivedAt).getTime()
-        ) {
+        if (ts > existing.latestTs) {
           existing.latest = p;
+          existing.latestTs = ts;
         }
       }
     }
-    return Array.from(map.values()).sort(
-      (a, b) =>
-        new Date(b.latest.receivedAt).getTime() -
-        new Date(a.latest.receivedAt).getTime(),
-    );
+    return Array.from(map.values()).sort((a, b) => b.latestTs - a.latestTs);
   }, [packets]);
 
   const selected = useMemo(() => {
@@ -154,7 +143,7 @@ export function PacketsPage() {
     e.preventDefault();
     draggingRef.current = true;
     const startX = e.clientX;
-    const startW = sidebarWidth;
+    const startW = sidebarWidthRef.current;
     const maxW = Math.floor(window.innerWidth * 0.6);
 
     const onMove = (ev: MouseEvent) => {
@@ -170,7 +159,7 @@ export function PacketsPage() {
     };
     window.addEventListener("mousemove", onMove);
     window.addEventListener("mouseup", onUp);
-  }, [sidebarWidth]);
+  }, []);
 
   const totalPackets = packets.length;
   const groupCount = groups.length;
@@ -189,7 +178,7 @@ export function PacketsPage() {
             <Button
               variant="ghost"
               size="sm"
-              onClick={load}
+              onClick={reload}
               className="h-7 gap-1.5 text-xs uppercase tracking-[0.1em] font-mono"
             >
               <RefreshCw className="size-3" /> reload
@@ -200,24 +189,7 @@ export function PacketsPage() {
       />
 
       {loading && <PacketsSkeleton />}
-      {error && (
-        <Alert variant="destructive">
-          <AlertTitle className="font-mono uppercase tracking-[0.1em]">
-            Error
-          </AlertTitle>
-          <AlertDescription>
-            {error}
-            <Button
-              variant="ghost"
-              size="sm"
-              onClick={load}
-              className="ml-2 h-7 text-xs uppercase tracking-[0.1em]"
-            >
-              retry
-            </Button>
-          </AlertDescription>
-        </Alert>
-      )}
+      {error && <LoadErrorAlert message={error} onRetry={reload} />}
 
       {!loading && !error && (
         <section className="panel overflow-hidden">
@@ -249,7 +221,9 @@ export function PacketsPage() {
                     key={g.key}
                     onClick={() => setSelectedKey(g.key)}
                     className={cn(
-                      "px-4 py-2.5 cursor-pointer",
+                      // content-visibility lets the browser skip layout/paint
+                      // for offscreen rows of this live stream.
+                      "px-4 py-2.5 cursor-pointer [content-visibility:auto] [contain-intrinsic-size:auto_58px]",
                       isSelected && "bg-primary/5",
                     )}
                   >
@@ -688,7 +662,3 @@ function PacketsSkeleton() {
     </div>
   );
 }
-
-// Suppress unused warning where applicable
-void ArrowDown;
-void ArrowUp;

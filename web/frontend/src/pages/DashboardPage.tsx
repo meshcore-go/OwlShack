@@ -10,9 +10,9 @@ import {
   Users,
 } from "lucide-react";
 import { useWebSocket } from "@/hooks/useWebSocket";
-import { Button } from "@/components/ui/button";
 import { Skeleton } from "@/components/ui/skeleton";
-import { Alert, AlertDescription, AlertTitle } from "@/components/ui/alert";
+import { LoadErrorAlert } from "@/components/LoadErrorAlert";
+import { SectionTitle } from "@/components/SectionTitle";
 import {
   Table,
   TableBody,
@@ -146,24 +146,7 @@ export function DashboardPage() {
       />
 
       {loading && <DashboardSkeleton />}
-      {error && (
-        <Alert variant="destructive">
-          <AlertTitle className="font-mono uppercase tracking-[0.1em]">
-            Error
-          </AlertTitle>
-          <AlertDescription>
-            {error}
-            <Button
-              variant="ghost"
-              size="sm"
-              onClick={load}
-              className="ml-2 h-7 text-xs uppercase tracking-[0.1em]"
-            >
-              retry
-            </Button>
-          </AlertDescription>
-        </Alert>
-      )}
+      {error && <LoadErrorAlert message={error} onRetry={load} />}
 
       {!loading && !error && data && stats && (
         <>
@@ -343,28 +326,6 @@ export function DashboardPage() {
           </section>
         </>
       )}
-    </div>
-  );
-}
-
-function SectionTitle({
-  eyebrow,
-  title,
-  trailing,
-}: {
-  eyebrow?: string;
-  title: string;
-  trailing?: React.ReactNode;
-}) {
-  return (
-    <div className="flex items-center justify-between px-4 py-3 border-b border-border">
-      <div className="space-y-0.5">
-        {eyebrow && <span className="label-overline block">{eyebrow}</span>}
-        <h2 className="font-mono text-sm uppercase tracking-[0.1em]">
-          {title}
-        </h2>
-      </div>
-      {trailing}
     </div>
   );
 }

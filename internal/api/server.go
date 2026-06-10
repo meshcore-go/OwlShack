@@ -56,6 +56,7 @@ type Server struct {
 	mux    *http.ServeMux
 	log    *slog.Logger
 	assets fs.FS
+	poller NodePoller
 
 	mu      sync.RWMutex
 	backend Backend
@@ -79,6 +80,7 @@ func (s *Server) routes() {
 	s.mux.HandleFunc("GET /api/packets", s.handleListPackets)
 	s.mux.HandleFunc("GET /api/companions", s.handleListCompanions)
 	s.mux.HandleFunc("GET /api/companions/{name}/contacts", s.handleListContacts)
+	s.mux.HandleFunc("GET /api/companions/{name}/contacts/{pubkey}", s.handleGetContact)
 	s.mux.HandleFunc("POST /api/companions/{name}/contacts", s.handleAddContact)
 	s.mux.HandleFunc("DELETE /api/companions/{name}/contacts/{pubkey}", s.handleDeleteContact)
 	s.mux.HandleFunc("PATCH /api/companions/{name}/contacts/{pubkey}", s.handleUpdateContactMetadata)
@@ -120,6 +122,10 @@ func (s *Server) routes() {
 	s.mux.HandleFunc("GET /api/companions/{name}/repeaters/{pubkey}/access", s.handleRepeaterAccessList)
 	s.mux.HandleFunc("PUT /api/companions/{name}/repeaters/{pubkey}/access/{target}", s.handleRepeaterAccessSet)
 	s.mux.HandleFunc("DELETE /api/companions/{name}/repeaters/{pubkey}/access/{target}", s.handleRepeaterAccessRemove)
+	s.mux.HandleFunc("GET /api/nodes/monitored", s.handleListMonitoredNodes)
+	s.mux.HandleFunc("GET /api/nodes/{pubkey}/metrics", s.handleListNodeMetricNames)
+	s.mux.HandleFunc("GET /api/nodes/{pubkey}/history", s.handleNodeHistory)
+	s.mux.HandleFunc("POST /api/nodes/{pubkey}/poll", s.handlePollNode)
 	s.mux.HandleFunc("GET /api/ws", s.handleWebSocket)
 
 	s.mux.Handle("/", s.spaHandler())
@@ -145,6 +151,21 @@ func (s *Server) backendRef() Backend {
 	s.mu.RLock()
 	defer s.mu.RUnlock()
 	return s.backend
+}
+
+// SetPoller installs the node poller (the monitor service). Unlike the backend
+// it isn't swapped on reload — the service is long-lived — but it's set after
+// the HTTP server starts, so access is guarded all the same.
+func (s *Server) SetPoller(p NodePoller) {
+	s.mu.Lock()
+	s.poller = p
+	s.mu.Unlock()
+}
+
+func (s *Server) pollerRef() NodePoller {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	return s.poller
 }
 
 // The accessors below adapt the backend into the small func types the handlers

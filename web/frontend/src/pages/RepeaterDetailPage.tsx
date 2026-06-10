@@ -20,6 +20,7 @@ import {
   CircleDashed,
   Clock,
   Copy,
+  Gauge,
   Inbox,
   Info,
   KeyRound,
@@ -54,6 +55,7 @@ import L from "leaflet";
 import markerIcon from "leaflet/dist/images/marker-icon.png";
 import markerIcon2x from "leaflet/dist/images/marker-icon-2x.png";
 import markerShadow from "leaflet/dist/images/marker-shadow.png";
+import { themeTileLayer, useThemeTiles } from "@/lib/leaflet";
 
 // Leaflet's default marker icon URLs are broken under bundlers; rebind them
 // to the imported asset URLs once at module load.
@@ -103,16 +105,17 @@ import {
   truncateMid,
 } from "@/lib/format";
 import { cn } from "@/lib/utils";
+import {
+  MonitoringSettings,
+  type MonitorMetadata,
+} from "@/components/MonitoringSettings";
 
 interface Contact {
   peerPubkey: string;
   name: string;
   type: string;
   addedAt: string;
-  metadata?: {
-    isRepeater?: boolean;
-    repeaterPassword?: string;
-  };
+  metadata?: MonitorMetadata;
 }
 
 interface Peer {
@@ -165,6 +168,7 @@ interface Status {
 
 type TabKey =
   | "status"
+  | "monitoring"
   | "terminal"
   | "neighbors"
   | "owner"
@@ -188,21 +192,11 @@ interface NeighborEntry {
 
 export function RepeaterDetailPage() {
   const { name, pubkey } = useParams<{ name: string; pubkey: string }>();
-  const decodedName = useMemo(
-    () => (name ? decodeURIComponent(name) : ""),
-    [name],
-  );
-  const decodedPubkey = useMemo(
-    () => (pubkey ? decodeURIComponent(pubkey) : ""),
-    [pubkey],
-  );
+  const decodedName = name ? decodeURIComponent(name) : "";
+  const decodedPubkey = pubkey ? decodeURIComponent(pubkey) : "";
   const navigate = useNavigate();
 
-  const apiBase = useMemo(
-    () =>
-      `/api/companions/${encodeURIComponent(decodedName)}/repeaters/${encodeURIComponent(decodedPubkey)}`,
-    [decodedName, decodedPubkey],
-  );
+  const apiBase = `/api/companions/${encodeURIComponent(decodedName)}/repeaters/${encodeURIComponent(decodedPubkey)}`;
 
   const [contact, setContact] = useState<Contact | null>(null);
   const [peers, setPeers] = useState<Peer[]>([]);
@@ -319,6 +313,8 @@ export function RepeaterDetailPage() {
             body: JSON.stringify({
               isRepeater: true,
               repeaterPassword: password,
+              monitor: contact?.metadata?.monitor ?? false,
+              monitorIntervalSecs: contact?.metadata?.monitorIntervalSecs ?? 0,
             }),
           },
         ).catch(() => {});
@@ -344,6 +340,8 @@ export function RepeaterDetailPage() {
             body: JSON.stringify({
               isRepeater: true,
               repeaterPassword: "",
+              monitor: contact?.metadata?.monitor ?? false,
+              monitorIntervalSecs: contact?.metadata?.monitorIntervalSecs ?? 0,
             }),
           },
         ).catch(() => {});
@@ -385,6 +383,10 @@ export function RepeaterDetailPage() {
       toast.error("Logout failed");
     }
   }, [apiBase]);
+
+  const handleMonitorSaved = useCallback((meta: MonitorMetadata) => {
+    setContact((c) => (c ? { ...c, metadata: { ...(c.metadata || {}), ...meta } } : c));
+  }, []);
 
   const handleResetPath = useCallback(async () => {
     try {
@@ -592,6 +594,9 @@ export function RepeaterDetailPage() {
             <RepeaterTab value="status" icon={<Signal className="size-3" />}>
               Status
             </RepeaterTab>
+            <RepeaterTab value="monitoring" icon={<Gauge className="size-3" />}>
+              Monitoring
+            </RepeaterTab>
             {isAdmin && (
               <RepeaterTab value="terminal" icon={<Terminal className="size-3" />}>
                 Terminal
@@ -629,6 +634,15 @@ export function RepeaterDetailPage() {
             forceMount
           >
             <StatusTab apiBase={apiBase} active={tab === "status"} onPathMayChange={refreshPath} />
+          </TabsContent>
+          <TabsContent value="monitoring" className="mt-0">
+            <MonitoringSettings
+              companionName={decodedName}
+              pubkey={decodedPubkey}
+              kind="repeater"
+              metadata={contact?.metadata}
+              onSaved={handleMonitorSaved}
+            />
           </TabsContent>
           {isAdmin && (
             <TabsContent value="terminal" className="mt-0">
@@ -2349,7 +2363,10 @@ function SettingsTab({
 }) {
   return (
     <div className="space-y-3">
+      {/* key remounts the section when the advertised name changes, resetting
+          the input without a state-sync effect that could clobber an edit. */}
       <IdentitySection
+        key={peerName}
         peerName={peerName}
         pubkey={pubkey}
         sendCli={sendCli}
@@ -2386,10 +2403,6 @@ function IdentitySection({
   const [name, setName] = useState(peerName);
   const [busy, setBusy] = useState(false);
   const dirty = name.trim() !== peerName.trim() && name.trim().length > 0;
-
-  useEffect(() => {
-    setName(peerName);
-  }, [peerName]);
 
   const save = useCallback(async () => {
     const next = name.trim();
@@ -2471,6 +2484,9 @@ function RadioSection({ sendCli }: { sendCli: (cmd: string) => Promise<string> }
   const [vals, setVals] = useState({ freq: "", bw: "", sf: "", cr: "", tx: "" });
   const [busy, setBusy] = useState<SectionBusy>(null);
 
+  // CLI gets are awaited one at a time on purpose: the radio is half-duplex,
+  // so concurrent mesh requests compete for airtime (correlation itself would
+  // be safe — the Go client matches responses by a random command prefix).
   const load = useCallback(async () => {
     setBusy("load");
     try {
@@ -2611,13 +2627,6 @@ function PositionSection({
   );
 }
 
-function tileUrlForTheme(): string {
-  const isDark = document.documentElement.classList.contains("dark");
-  return isDark
-    ? "https://{s}.basemaps.cartocdn.com/dark_all/{z}/{x}/{y}{r}.png"
-    : "https://{s}.basemaps.cartocdn.com/light_all/{z}/{x}/{y}{r}.png";
-}
-
 function PositionMap({
   lat,
   lon,
@@ -2645,10 +2654,7 @@ function PositionMap({
       zoomControl: true,
       attributionControl: true,
     }).setView([initialLat, initialLon], validLat && validLon ? 13 : 2);
-    tileRef.current = L.tileLayer(tileUrlForTheme(), {
-      attribution: "&copy; OSM &copy; CARTO",
-      maxZoom: 19,
-    }).addTo(map);
+    tileRef.current = themeTileLayer().addTo(map);
 
     map.on("click", (e) => {
       onPickRef.current(e.latlng.lat, e.latlng.lng);
@@ -2665,22 +2671,7 @@ function PositionMap({
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
-  useEffect(() => {
-    const map = mapRef.current;
-    if (!map) return;
-    const observer = new MutationObserver(() => {
-      tileRef.current?.remove();
-      tileRef.current = L.tileLayer(tileUrlForTheme(), {
-        attribution: "&copy; OSM &copy; CARTO",
-        maxZoom: 19,
-      }).addTo(map);
-    });
-    observer.observe(document.documentElement, {
-      attributes: true,
-      attributeFilter: ["class"],
-    });
-    return () => observer.disconnect();
-  }, []);
+  useThemeTiles(mapRef, tileRef);
 
   useEffect(() => {
     const map = mapRef.current;
@@ -3220,17 +3211,20 @@ function ActionsSection({
   const [busy, setBusy] = useState<string | null>(null);
   const [confirmReboot, setConfirmReboot] = useState(false);
 
-  const run = async (label: string, cmd: string) => {
-    setBusy(label);
-    try {
-      const out = await sendCli(cmd);
-      toast.success(out || `${label} sent`);
-    } catch (e) {
-      toast.error(e instanceof Error ? e.message : "Failed");
-    } finally {
-      setBusy(null);
-    }
-  };
+  const run = useCallback(
+    async (label: string, cmd: string) => {
+      setBusy(label);
+      try {
+        const out = await sendCli(cmd);
+        toast.success(out || `${label} sent`);
+      } catch (e) {
+        toast.error(e instanceof Error ? e.message : "Failed");
+      } finally {
+        setBusy(null);
+      }
+    },
+    [sendCli],
+  );
 
   return (
     <SettingsSection

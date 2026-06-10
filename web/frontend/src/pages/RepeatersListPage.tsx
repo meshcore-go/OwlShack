@@ -8,10 +8,8 @@ import {
   Plus,
   Radio,
   Search,
-  Trash2,
 } from "lucide-react";
 import { toast } from "sonner";
-import { Alert, AlertDescription, AlertTitle } from "@/components/ui/alert";
 import { Button } from "@/components/ui/button";
 import {
   Dialog,
@@ -23,6 +21,8 @@ import {
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Skeleton } from "@/components/ui/skeleton";
+import { InlineConfirm } from "@/components/InlineConfirm";
+import { LoadErrorAlert } from "@/components/LoadErrorAlert";
 import { PageHeader } from "@/components/PageHeader";
 import { PeerAvatar } from "@/components/PeerAvatar";
 import { PeerTypePill } from "@/components/StatusIndicator";
@@ -222,24 +222,7 @@ export function RepeatersListPage() {
 
       {loading && <RepeatersSkeleton />}
 
-      {error && (
-        <Alert variant="destructive">
-          <AlertTitle className="font-mono uppercase tracking-[0.1em]">
-            Error
-          </AlertTitle>
-          <AlertDescription>
-            {error}
-            <Button
-              variant="ghost"
-              size="sm"
-              onClick={load}
-              className="ml-2 h-7 text-xs uppercase tracking-[0.1em]"
-            >
-              retry
-            </Button>
-          </AlertDescription>
-        </Alert>
-      )}
+      {error && <LoadErrorAlert message={error} onRetry={load} />}
 
       {!loading && !error && contacts && (
         <section className="panel overflow-hidden">
@@ -321,23 +304,22 @@ function RepeaterRow({
 }) {
   const hasPassword = !!contact.metadata?.repeaterPassword;
   return (
-    <div className="group flex items-center gap-4 px-4 py-3 hover:bg-muted/40 transition-colors">
+    <div className="group flex items-center gap-2 sm:gap-4 px-3 sm:px-4 py-3 hover:bg-muted/40 transition-colors">
       <Link
         to={`/companions/${encodeURIComponent(companion)}/repeaters/${contact.peerPubkey}`}
         className="flex items-center gap-3 flex-1 min-w-0"
       >
         <PeerAvatar name={contact.name || contact.peerPubkey} size="md" />
         <div className="min-w-0 flex-1">
-          <div className="flex items-center gap-2">
+          <div className="flex items-center gap-2 min-w-0">
             <h3 className="font-mono text-sm font-semibold truncate">
               {contact.name || (
                 <span className="text-muted-foreground italic">unknown</span>
               )}
             </h3>
-            <PeerTypePill type={contact.type || "REPEATER"} />
             {hasPassword && (
               <span
-                className="inline-flex items-center gap-1 font-mono text-[9px] uppercase tracking-[0.12em] text-primary border border-primary/30 px-1.5 py-0.5"
+                className="shrink-0 inline-flex items-center gap-1 font-mono text-[9px] uppercase tracking-[0.12em] text-primary border border-primary/30 px-1.5 py-0.5"
                 title="Saved password"
               >
                 <KeyRound className="size-2.5" /> creds
@@ -349,40 +331,17 @@ function RepeaterRow({
             {timeAgo(contact.addedAt)}
           </code>
         </div>
-        <Crosshair className="size-3.5 text-muted-foreground/40 group-hover:text-primary transition-colors shrink-0" />
+        <Crosshair className="hidden sm:block size-3.5 text-muted-foreground/40 group-hover:text-primary transition-colors shrink-0" />
       </Link>
       <div className="flex items-center shrink-0">
-        {confirming ? (
-          <div className="flex items-center gap-1 font-mono text-[10px] uppercase tracking-[0.12em]">
-            <span className="text-muted-foreground">remove?</span>
-            <Button
-              variant="destructive"
-              size="xs"
-              onClick={onConfirm}
-              className="font-mono text-[10px] uppercase tracking-[0.12em]"
-            >
-              yes
-            </Button>
-            <Button
-              variant="ghost"
-              size="xs"
-              onClick={onCancel}
-              className="font-mono text-[10px] uppercase tracking-[0.12em]"
-            >
-              no
-            </Button>
-          </div>
-        ) : (
-          <Button
-            variant="ghost"
-            size="icon-xs"
-            onClick={onAskRemove}
-            className="text-muted-foreground/60 hover:text-destructive"
-            aria-label="Remove repeater"
-          >
-            <Trash2 className="size-3.5" />
-          </Button>
-        )}
+        <InlineConfirm
+          confirming={confirming}
+          onAskRemove={onAskRemove}
+          onCancel={onCancel}
+          onConfirm={onConfirm}
+          iconOnly
+          ariaLabel="Remove repeater"
+        />
       </div>
     </div>
   );

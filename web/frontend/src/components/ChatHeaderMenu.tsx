@@ -1,10 +1,9 @@
-import { useCallback, useEffect, useRef, useState } from "react";
+import { useCallback, useEffect, useState } from "react";
 import { useNavigate } from "react-router-dom";
 import {
   Ban,
   Check,
   ClipboardCopy,
-  Globe,
   Info,
   MoreVertical,
   Pencil,
@@ -57,7 +56,6 @@ type DialogKind =
   | "rename"
   | "participants"
   | "blocked"
-  | "regions"
   | "deleteHistory"
   | "path"
   | null;
@@ -134,14 +132,6 @@ export function ChatHeaderMenu({
                 <Ban className="size-3.5" />
                 Blocked Senders
               </DropdownMenuItem>
-
-              <DropdownMenuItem
-                onClick={() => setDialog("regions")}
-                className="font-mono text-xs uppercase tracking-[0.08em] rounded-none"
-              >
-                <Globe className="size-3.5" />
-                Set Region Scope
-              </DropdownMenuItem>
             </>
           )}
 
@@ -206,10 +196,6 @@ export function ChatHeaderMenu({
         companion={companion}
         conversation={conversation}
       />
-      <RegionScopeDialog
-        open={dialog === "regions"}
-        onClose={() => setDialog(null)}
-      />
       <DeleteHistoryDialog
         open={dialog === "deleteHistory"}
         onClose={() => setDialog(null)}
@@ -240,7 +226,6 @@ function ShareDialog({
 }) {
   const [channelKey, setChannelKey] = useState<string | null>(null);
   const [qrDataUrl, setQrDataUrl] = useState<string | null>(null);
-  const canvasRef = useRef<HTMLCanvasElement>(null);
 
   const isChannel = conversation.type === "channel";
   const isContact = conversation.type === "contact";
@@ -321,7 +306,6 @@ function ShareDialog({
               />
             </div>
           )}
-          <canvas ref={canvasRef} className="hidden" />
 
           <div className="text-center space-y-1">
             <p className="font-mono text-sm font-semibold">
@@ -671,84 +655,6 @@ function BlockedSendersDialog({
               </div>
             ))
           )}
-        </div>
-      </DialogContent>
-    </Dialog>
-  );
-}
-
-function RegionScopeDialog({
-  open,
-  onClose,
-}: {
-  open: boolean;
-  onClose: () => void;
-}) {
-  const [regions, setRegions] = useState<string[]>([]);
-  const [input, setInput] = useState("");
-
-  const addRegion = useCallback(() => {
-    const val = input.trim();
-    if (!val || regions.includes(val)) return;
-    setRegions((prev) => [...prev, val]);
-    setInput("");
-  }, [input, regions]);
-
-  const removeRegion = useCallback((region: string) => {
-    setRegions((prev) => prev.filter((r) => r !== region));
-  }, []);
-
-  return (
-    <Dialog open={open} onOpenChange={(o) => !o && onClose()}>
-      <DialogContent className="rounded-none border-border bg-card max-w-sm">
-        <DialogHeader>
-          <DialogTitle className="font-mono text-sm uppercase tracking-[0.12em]">
-            Set Region Scope
-          </DialogTitle>
-          <DialogDescription className="font-mono text-xs text-muted-foreground">
-            Filter messages by region (coming soon)
-          </DialogDescription>
-        </DialogHeader>
-        <div className="space-y-3">
-          <div className="flex items-center gap-2">
-            <Input
-              value={input}
-              onChange={(e) => setInput(e.target.value)}
-              placeholder="Add region..."
-              className="rounded-none border-border font-mono text-xs"
-              onKeyDown={(e) => e.key === "Enter" && addRegion()}
-            />
-            <Button
-              size="sm"
-              onClick={addRegion}
-              disabled={!input.trim()}
-              className="rounded-none font-mono text-[11px] uppercase tracking-[0.1em]"
-            >
-              Add
-            </Button>
-          </div>
-          {regions.length > 0 && (
-            <div className="flex flex-wrap gap-1.5">
-              {regions.map((r) => (
-                <span
-                  key={r}
-                  className="inline-flex items-center gap-1 px-2 py-0.5 font-mono text-[10px] uppercase tracking-[0.08em] border border-border bg-background"
-                >
-                  {r}
-                  <button
-                    type="button"
-                    onClick={() => removeRegion(r)}
-                    className="text-muted-foreground hover:text-destructive"
-                  >
-                    <X className="size-2.5" />
-                  </button>
-                </span>
-              ))}
-            </div>
-          )}
-          <p className="font-mono text-[10px] text-muted-foreground/70">
-            Region scope is a local filter. This feature is under development.
-          </p>
         </div>
       </DialogContent>
     </Dialog>

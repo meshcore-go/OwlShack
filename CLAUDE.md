@@ -76,6 +76,8 @@ There's a Playwright config at [`web/frontend/playwright.config.ts`](./web/front
 
 All SQLite writes MUST go through `store.WriteAsync(fn)` (RX/hot path; never blocks) or `store.WriteSync(fn)` (HTTP handlers; blocks until done so caller sees auto-generated IDs). Direct calls like `c.store.Peers.Upsert(...)` race with the writer goroutine and produce `SQLITE_BUSY` under load. The writer goroutine is the only goroutine that should call `db.Exec` outside of read paths. Don't call `WriteSync` from RX dispatch or from inside another writer closure — both deadlock.
 
+**Driver pragmas use modernc syntax.** `store.Open` sets pragmas via `_pragma=` query params (`?_pragma=busy_timeout(5000)&_pragma=journal_mode(WAL)&_pragma=foreign_keys(on)`). The driver is `modernc.org/sqlite`, **not** `mattn/go-sqlite3`, so the mattn-style `_journal_mode=WAL&_busy_timeout=...` form is silently ignored — which once left the DB in rollback-journal mode with no busy timeout, so concurrent reads raced the writer and failed immediately with `SQLITE_BUSY`. WAL lets readers run alongside the single writer; keep the `_pragma=` form.
+
 ---
 
 ## Repo layout
@@ -162,6 +164,9 @@ components/
   AppShell.tsx     sidebar + header + clock + theme toggle
   PageHeader.tsx   PageHeader, PageMeta
   PeerAvatar.tsx   hashed-color square avatar w/ first-letter or emoji
+  SectionTitle.tsx            shared panel header (eyebrow + title + trailing)
+  InlineConfirm.tsx           confirm-to-remove trigger ("Remove? yes/no" in place; iconOnly variant)
+  LoadErrorAlert.tsx          destructive alert + retry button for failed page loads
   SignalStrength.tsx          also exports snrTextClass / snrFill
   StatusIndicator.tsx         ConnectionPill, PeerTypePill, PEER_TYPE_HEX
   AddContactDialog.tsx        reusable manual-only add-contact modal (Type/Name/Pubkey), prefillable
@@ -174,13 +179,27 @@ components/
 hooks/
   useWebSocket.ts  single global WS, topic-subscription, reconnect with backoff,
                    returns { connected, messages } and accepts an optional
-                   per-message callback
+                   per-message callback. Mobile-resume aware: on visibilitychange/
+                   focus/online/pageshow it reconnects immediately (skipping the
+                   backoff) and probes an OPEN-but-suspect socket with
+                   {"action":"ping"} — no message within 5s ⇒ half-open ⇒ force
+                   reconnect. A backgrounded mobile tab WILL lose its socket (OS
+                   suspension, no web API prevents it); this makes recovery
+                   instant rather than backoff-delayed.
+  useApiList.ts    shared fetch scaffold for list endpoints — { items, setItems,
+                   loading, error, reload }; items is null until first success,
+                   then `json || []`; setItems is exposed for WS merging; pass
+                   url=null to defer. Use this instead of hand-rolling
+                   loading/error/useEffect fetch state on a page.
   use-mobile.ts    shadcn-shipped breakpoint hook
 
 lib/
   utils.ts         cn() (clsx + tailwind-merge)
   format.ts        timeAgo, formatDateTime, formatShortTime, truncate, truncateMid,
                    formatUptime, formatSecsAgo, formatBattery
+  leaflet.ts       shared CARTO tile plumbing: tileUrlForTheme, themeTileLayer(),
+                   useThemeTiles(mapRef, tileRef) — used by MapPage, TrackMap,
+                   RepeaterDetailPage's position picker. Use these for any new map.
   theme.tsx        ThemeProvider; light/dark/system, persists to localStorage,
                    toggles class on <html>
 
@@ -199,7 +218,6 @@ pages/
   ChannelsPage.tsx
   RepeatersListPage.tsx    per-companion repeater roster
   RepeaterDetailPage.tsx   login + 4 tabs (Status / Terminal / Neighbors / Settings)
-  _stub.tsx                placeholder; not routed; safe to delete
 ```
 
 ---
@@ -213,6 +231,7 @@ GET  /api/packets?limit=N
 
 GET  /api/companions
 GET  /api/companions/{name}/contacts
+GET  /api/companions/{name}/contacts/{pubkey}                (single contact; 404 if absent)
 POST /api/companions/{name}/contacts                         { pubkey }
 DELETE /api/companions/{name}/contacts/{pubkey}
 PATCH /api/companions/{name}/contacts/{pubkey}               { isRepeater?, repeaterPassword?, ... }
@@ -247,10 +266,30 @@ POST /api/companions/{name}/repeaters/{pubkey}/cli           { command }
 GET|DELETE /api/companions/{name}/repeaters/{pubkey}/session
 GET|DELETE|PUT /api/companions/{name}/repeaters/{pubkey}/path
 
+GET  /api/nodes/monitored
+GET  /api/nodes/{pubkey}/metrics
+GET  /api/nodes/{pubkey}/history?metric=&from=&to=&bucket=
+POST /api/nodes/{pubkey}/poll                                (on-demand poll; 502 on failure)
+
 WS   /api/ws
 ```
 
 `?afterId=` was added in the recent UI rewrite. `internal/store/message.go` exports `ListAfter(companionID, channel, afterID, limit)` and `routes_messages.go` honours `?afterId=` to return messages with `id > afterID` ordered ASC. The frontend uses this for delta backfill on cache re-open and on WS reconnect.
+
+---
+
+## Node monitoring
+
+A type-agnostic poller (`internal/monitor`) polls monitored contacts on a staggered schedule → `node_metrics` (time-series) + `node_state` (latest snapshot, JSON `metric→value`). Gotchas:
+
+- **Kind resolution is peer-type-first** (`monitorKind` in `internal/app/monitor_collector.go`): the advertised peer type wins when known; `metadata.isRepeater` is only the fallback for repeaters whose advert hasn't been heard. A stray `isRepeater` flag must never route a chat node to the repeater collector — companion firmware has no login handler, so that poll can only time out.
+- **Companions are sessionless, telemetry-only.** `companionCollector` sends one `REQ_TYPE_GET_TELEMETRY_DATA` contact request (ECDH with the static identity — no login, no password). What comes back is gated by the *remote* node's telemetry-sharing prefs (base/location/environment, optionally per-contact flags) and requires the bot to be in its contacts. `MonitoringSettings` takes a `kind` prop ("repeater" | "companion") and hides password/probes for companions; its save only writes `isRepeater`/`repeaterPassword`/`monitorProbes` for the repeater kind. Chat contacts enrol via the monitoring panel on `ContactDetailPage`.
+
+- **Metric keys are channel-faithful.** A node's *own* readings keep clean names (`mcu_temperature`, `battery`); *external* sensors carry their LPP channel (`temperature_ch2`, `humidity_ch3`) — the channel is the firmware's stable per-sensor identity on 1.16+. Status fields are fixed names (`last_snr`, `battery_mv`). Don't strip the channel to "unify" sensors — that makes multi-sensor identity order-dependent. Frontend tiles pattern-match by type (`metricKeysOfType` in `NodeStatTiles.tsx`), so they render whatever channel a board uses; `metricDef`/`metricOrderIndex` resolve `_chN` keys back to the base catalogue.
+- **Firmware channel split:** ≤1.15 lumps all sensors on the self channel (ch1); 1.16+ gives each its own (ch2+). `parseRepeaterTelemetry` marks only the FIRST self-type reading on the self channel as the node's own (MCU temp/battery/location), the rest external — otherwise 1.15's external temp collides with the MCU temp under `mcu_temperature` and is lost. A 1.15→1.16 upgrade changes a board's channel keys (accepted one-off history discontinuity).
+- **Snapshot merges, never blanks:** `UpsertNodeState` merges new readings onto the stored snapshot, so a partial poll (status OK, telemetry failed) keeps last-known values; a fully-failed poll uses `MarkPollFailure` (touches only `last_poll_ts`/`last_error`). Telemetry/neighbours probes retry once in-poll (`monitorProbeAttempts`).
+- **Manual poll:** `monitor.Service.PollNow` (behind `POST /api/nodes/{pubkey}/poll`) runs an out-of-band poll, serialized against scheduled polls via `pollMu.TryLock` (returns "a poll is already in progress" rather than racing the radio).
+- **Overview staleness dot** derives from each node's configured interval, not a constant: stale when `age > interval + max(25%, 5min)`. The interval is exposed per-node via `intervalSecs` on `/api/nodes/monitored`.
 
 ---
 
@@ -262,6 +301,8 @@ Topics emitted from the Go side:
 - `packets` — `{ id?, receivedAt, direction, raw, payloadType, route, pathHashSize, hops, packetHash, summary, snr, rssi }`
 - `messages` — **flat** payload `{ companion, channel, sender, text, direction, timestamp, id, snr?, rssi?, hops?, pathHashSize?, repeatCount? }`. There is **no `message` wrapper.** A previous bug had the React handler reading `payload.message` and silently dropping every WS message — re-introducing that wrapper would re-create the bug. The action variant `{ action: "repeatCount", companion, channel, id, repeatCount }` updates a tx echo count.
 - `traces` — `{ companion, tag, hops, path, hopSNRs, snr }`
+
+**Keepalive**: the hub pings every 50 s with a 75 s read deadline (zombie clients are reaped; browsers answer protocol pings automatically). Clients may send `{"action":"ping"}` and get `{"topic":"pong"}` back — used by `useWebSocket` to detect half-open sockets on mobile tab resume. Page handlers must filter by topic anyway, so the `pong` topic reaching them is harmless.
 
 > **SNR vs RSSI.** SNR is **real dB** end-to-end (`snr REAL` / `*float64` / JSON number, rounded to 1 dp in UI). The wire/firmware value is quarter-dB (×4); meshcore-go converts it at ingest. RSSI is raw `int8` dBm. `<SignalStrength>` thresholds are real dB. Trace per-hop SNRs come from raw `pkt.Path` bytes (still ×4 — decoded `/4` in the bot); `meshcore.PathSNRdB(b)` helps.
 
@@ -519,11 +560,10 @@ Messages have a `status` column: `NULL` (rx/legacy), `"sending"`, `"delivered"`,
 
 ## Known limitations / tech debt
 
-- `_stub.tsx` exists but isn't routed anywhere. Safe to remove.
-- Bundle is large (~770 kB minified). Code-splitting via `React.lazy` would help; not done yet.
+- Routes are code-split (per-page chunks) but the main `index` chunk is still >500 kB minified — Vite's warning remains unactioned.
 - Status / Neighbors auto-fetch is **once per page mount**. After a long absence the user must hit Refresh.
 - Repeater login state is in-memory on the Go side — restart drops sessions.
-- The Position map picker is the only Leaflet usage in Settings; if you add more, factor out the shared `tileUrlForTheme` + observer logic from `RepeaterDetailPage.tsx`.
+- Settings-section CLI `get`s run sequentially on purpose (half-duplex radio; parallel requests compete for airtime). The Go client *could* correlate concurrent commands — it matches responses by a random per-command prefix — so this is a deliberate airtime trade-off, not a limitation of the protocol layer.
 - No automated Go tests yet — the package boundaries now make the domain unit-testable (e.g. `internal/config` validation/round-trip, `internal/repeater` parsers); the compiler + manual testing on Owly 2 are the only safety net today.
 - No automated tests for the frontend; Playwright is ad-hoc against the running binary.
 - Login timeout is identical for "wrong password" vs "unreachable" — would be nice to differentiate.

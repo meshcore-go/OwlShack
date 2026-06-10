@@ -1,13 +1,40 @@
 package api
 
 import (
+	"database/sql"
 	"encoding/hex"
+	"errors"
 	"net/http"
 	"strings"
 	"time"
 
 	"github.com/meshcore-go/meshcore-bot/internal/store"
 )
+
+type contactJSON struct {
+	PeerPubKey string                `json:"peerPubkey"`
+	Name       string                `json:"name"`
+	Type       string                `json:"type"`
+	AddedAt    string                `json:"addedAt"`
+	Metadata   store.ContactMetadata `json:"metadata"`
+}
+
+// contactToJSON resolves the contact's display name/type from discovered_peers.
+func (s *Server) contactToJSON(c *store.Contact) contactJSON {
+	peerName := ""
+	peerType := ""
+	if peer, err := s.store.Peers.GetByPubKey(c.PeerPubKey); err == nil && peer != nil {
+		peerName = peer.Name
+		peerType = peer.Type
+	}
+	return contactJSON{
+		PeerPubKey: hex.EncodeToString(c.PeerPubKey),
+		Name:       peerName,
+		Type:       peerType,
+		AddedAt:    c.AddedAt.UTC().Format(time.RFC3339),
+		Metadata:   c.Metadata,
+	}
+}
 
 // validPeerType reports whether t is one of the recognised MeshCore peer
 // types. Mirrors meshcore-go's advert type-string mapping.
@@ -32,32 +59,38 @@ func (s *Server) handleListContacts(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	type contactJSON struct {
-		PeerPubKey string                `json:"peerPubkey"`
-		Name       string                `json:"name"`
-		Type       string                `json:"type"`
-		AddedAt    string                `json:"addedAt"`
-		Metadata   store.ContactMetadata `json:"metadata"`
-	}
-
 	out := make([]contactJSON, 0, len(contacts))
 	for _, c := range contacts {
-		peerName := ""
-		peerType := ""
-		if peer, err := s.store.Peers.GetByPubKey(c.PeerPubKey); err == nil && peer != nil {
-			peerName = peer.Name
-			peerType = peer.Type
-		}
-		out = append(out, contactJSON{
-			PeerPubKey: hex.EncodeToString(c.PeerPubKey),
-			Name:       peerName,
-			Type:       peerType,
-			AddedAt:    c.AddedAt.UTC().Format(time.RFC3339),
-			Metadata:   c.Metadata,
-		})
+		out = append(out, s.contactToJSON(&c))
 	}
 
 	writeJSON(w, http.StatusOK, out)
+}
+
+func (s *Server) handleGetContact(w http.ResponseWriter, r *http.Request) {
+	name := r.PathValue("name")
+	if !s.companionExists(name) {
+		writeError(w, http.StatusNotFound, "companion not found")
+		return
+	}
+
+	pubkey, err := hex.DecodeString(r.PathValue("pubkey"))
+	if err != nil || len(pubkey) == 0 {
+		writeError(w, http.StatusBadRequest, "invalid pubkey hex")
+		return
+	}
+
+	c, err := s.store.Contacts.Get(name, pubkey)
+	if errors.Is(err, sql.ErrNoRows) {
+		writeError(w, http.StatusNotFound, "contact not found")
+		return
+	}
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, "failed to load contact")
+		return
+	}
+
+	writeJSON(w, http.StatusOK, s.contactToJSON(c))
 }
 
 func (s *Server) handleAddContact(w http.ResponseWriter, r *http.Request) {

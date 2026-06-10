@@ -24,6 +24,7 @@ type Store struct {
 	Conversations  *ConversationRepo
 	Echoes         *EchoRepo
 	BlockedSenders *BlockedSenderRepo
+	Metrics        *MetricsRepo
 
 	writerCh   chan func()
 	writerDone chan struct{}
@@ -32,7 +33,15 @@ type Store struct {
 }
 
 func Open(path string) (*Store, error) {
-	db, err := sql.Open("sqlite", path+"?_journal_mode=WAL&_busy_timeout=5000&_foreign_keys=ON")
+	// modernc.org/sqlite (NOT mattn/go-sqlite3) configures pragmas via "_pragma="
+	// query params applied to every pooled connection. The old mattn-style
+	// "_journal_mode=WAL&_busy_timeout=..." form was silently ignored, leaving the
+	// DB in rollback-journal mode (writer takes an exclusive lock) with no busy
+	// timeout — so concurrent reads raced the writer goroutine and failed with
+	// SQLITE_BUSY. WAL lets readers run alongside the single writer; busy_timeout
+	// makes the rest wait instead of erroring.
+	dsn := "file:" + path + "?_pragma=busy_timeout(5000)&_pragma=journal_mode(WAL)&_pragma=foreign_keys(on)"
+	db, err := sql.Open("sqlite", dsn)
 	if err != nil {
 		return nil, fmt.Errorf("opening database: %w", err)
 	}
@@ -51,6 +60,7 @@ func Open(path string) (*Store, error) {
 		Conversations:  &ConversationRepo{db: db},
 		Echoes:         &EchoRepo{db: db},
 		BlockedSenders: &BlockedSenderRepo{db: db},
+		Metrics:        &MetricsRepo{db: db},
 		writerCh:       make(chan func(), writerQueueDepth),
 		writerDone:     make(chan struct{}),
 	}
@@ -131,6 +141,8 @@ func (s *Store) migrate() error {
 
 	migrations := []func(*sql.DB) error{
 		migrateV1,
+		migrateV2,
+		migrateV3,
 	}
 
 	for i := version; i < len(migrations); i++ {
@@ -236,5 +248,60 @@ func migrateV1(db *sql.DB) error {
 		CREATE INDEX IF NOT EXISTS idx_messages_timestamp ON messages(timestamp);
 		CREATE INDEX IF NOT EXISTS idx_message_echoes_message ON message_echoes(message_id);
 	`)
+	return err
+}
+
+// migrateV2 adds the node-monitoring schema: a generic time-series table
+// (node_metrics) that stores any reading from any node type identically — a
+// repeater's battery_mv and a sensor's humidity@ch2 are stored the same way —
+// plus a latest-snapshot table (node_state) and neighbour SNR topology over
+// time (node_neighbors).
+//
+// Which nodes are monitored is NOT stored here: that is per-node interactive
+// state and lives in companion_contacts.metadata (monitor / monitorIntervalSecs)
+// alongside the repeater password it's set with — the same pattern, no extra
+// table. This keeps declarative config in the file and runtime state in the DB.
+//
+// All snr/value columns hold real decibels / decoded values (REAL), matching
+// the migrateV1 convention. ts columns are unix seconds (INTEGER).
+func migrateV2(db *sql.DB) error {
+	_, err := db.Exec(`
+		CREATE TABLE IF NOT EXISTS node_metrics (
+			id      INTEGER PRIMARY KEY AUTOINCREMENT,
+			ts      INTEGER NOT NULL,
+			pubkey  BLOB    NOT NULL,
+			metric  TEXT    NOT NULL,
+			channel INTEGER NOT NULL DEFAULT 0,
+			value   REAL    NOT NULL
+		);
+
+		CREATE TABLE IF NOT EXISTS node_state (
+			pubkey       BLOB PRIMARY KEY,
+			kind         TEXT    NOT NULL DEFAULT '',
+			name         TEXT    NOT NULL DEFAULT '',
+			last_poll_ts INTEGER NOT NULL DEFAULT 0,
+			last_ok_ts   INTEGER NOT NULL DEFAULT 0,
+			last_error   TEXT    NOT NULL DEFAULT '',
+			state        TEXT    NOT NULL DEFAULT '{}'
+		);
+
+		CREATE TABLE IF NOT EXISTS node_neighbors (
+			ts              INTEGER NOT NULL,
+			pubkey          BLOB    NOT NULL,
+			neighbor_pubkey BLOB    NOT NULL,
+			snr             REAL,
+			PRIMARY KEY (ts, pubkey, neighbor_pubkey)
+		);
+
+		CREATE INDEX IF NOT EXISTS idx_node_metrics_q ON node_metrics(pubkey, metric, ts);
+		CREATE INDEX IF NOT EXISTS idx_node_neighbors_pubkey ON node_neighbors(pubkey, ts);
+	`)
+	return err
+}
+
+// migrateV3 records which companion polled a node, so the monitoring UI (keyed
+// only by pubkey) can resolve the contact whose metadata holds the config.
+func migrateV3(db *sql.DB) error {
+	_, err := db.Exec(`ALTER TABLE node_state ADD COLUMN companion_id TEXT NOT NULL DEFAULT ''`)
 	return err
 }

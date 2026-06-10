@@ -1,4 +1,11 @@
-import { useCallback, useRef, useState, type KeyboardEvent, type RefObject } from "react";
+import {
+  useCallback,
+  useMemo,
+  useRef,
+  useState,
+  type KeyboardEvent,
+  type RefObject,
+} from "react";
 import { searchEmojis, trackEmojiUse, type EmojiHit } from "@/lib/emoji";
 import { cn } from "@/lib/utils";
 
@@ -94,8 +101,11 @@ export function useEmojiAutocomplete({
     [items, index, accept, close],
   );
 
-  const dropdown =
-    items.length > 0 ? (
+  // Memoized: this hook lives in the chat page, which re-renders on every WS
+  // message — the (usually empty) dropdown shouldn't be rebuilt each time.
+  const dropdown = useMemo(() => {
+    if (items.length === 0) return null;
+    return (
       <div className="absolute bottom-full left-3 mb-1 z-50 max-h-56 w-72 overflow-y-auto border border-border bg-popover shadow-md">
         {items.map((hit, i) => (
           <button
@@ -119,7 +129,8 @@ export function useEmojiAutocomplete({
           </button>
         ))}
       </div>
-    ) : null;
+    );
+  }, [items, index, accept]);
 
   return { handleChange, handleKeyDown, dropdown, close };
 }

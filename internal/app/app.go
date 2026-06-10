@@ -18,6 +18,7 @@ import (
 	"github.com/meshcore-go/meshcore-bot/internal/config"
 	"github.com/meshcore-go/meshcore-bot/internal/echo"
 	"github.com/meshcore-go/meshcore-bot/internal/modem"
+	"github.com/meshcore-go/meshcore-bot/internal/monitor"
 	"github.com/meshcore-go/meshcore-bot/internal/node/companion"
 	"github.com/meshcore-go/meshcore-bot/internal/store"
 	"github.com/meshcore-go/meshcore-bot/web"
@@ -75,11 +76,23 @@ func Run(ctx context.Context, cfg *config.Config, configPath string) error {
 
 	echoTracker := echo.NewTracker(db, srv.Hub(), slog.Default())
 
+	// The monitor service is started once and lives for the whole process: it
+	// persists across config reloads / modem reconnects (which recreate the
+	// companion set). It resolves the live companions through compReg, which we
+	// re-point on every reload, and derives its targets from contact metadata.
+	compReg := newCompanionRegistry()
+	mon := monitor.New(db, srv.Hub(), newContactLister(compReg, db), slog.Default())
+	mon.RegisterCollector("repeater", newRepeaterCollector(compReg, db, slog.Default()))
+	mon.RegisterCollector("companion", newCompanionCollector(compReg, slog.Default()))
+	mon.Start(ctx)
+	srv.SetPoller(mon) // long-lived: set once, never swapped on reload
+
 	companions, err := startCompanions(ctx, cfg, ms, mux, db, srv.Hub(), echoTracker)
 	if err != nil {
 		ms.Close()
 		return fmt.Errorf("companion startup: %w", err)
 	}
+	compReg.set(companions)
 	srv.SetBackend(newBackend(companions, cfg, configPath, reload))
 
 	for {
@@ -121,6 +134,7 @@ func Run(ctx context.Context, cfg *config.Config, configPath string) error {
 				return fmt.Errorf("companion restart after reload: %w", err)
 			}
 			cfg = newCfg
+			compReg.set(companions)
 			srv.SetBackend(newBackend(companions, cfg, configPath, reload))
 			slog.Info("config reloaded successfully")
 
@@ -141,6 +155,7 @@ func Run(ctx context.Context, cfg *config.Config, configPath string) error {
 				ms.Close()
 				return fmt.Errorf("companion restart after reconnect: %w", err)
 			}
+			compReg.set(companions)
 			srv.SetBackend(newBackend(companions, cfg, configPath, reload))
 			slog.Info("modem reconnected")
 		}
