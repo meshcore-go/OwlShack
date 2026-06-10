@@ -189,8 +189,8 @@ function EmptyState() {
       </p>
       <p className="text-sm text-muted-foreground/60 max-w-md">
         Open a repeater and toggle <span className="text-foreground">Monitor</span>{" "}
-        to start collecting analytics &amp; history. Nodes appear here after the
-        first poll.
+        to start collecting analytics &amp; history. Enabled nodes show up here
+        right away and fill in after their first poll.
       </p>
     </div>
   );
@@ -204,14 +204,18 @@ function NodeCard({
   history?: NodeHistory;
 }) {
   const ageSecs = node.lastOkTs ? nowSecs() - node.lastOkTs : -1;
+  // Never polled: enrolled (toggle on) but the scheduler hasn't reached it yet.
+  const pending = node.lastPollTs === 0;
   const errored = !!node.lastError && node.lastOkTs === 0;
   const threshold = staleThreshold(node.intervalSecs);
   const stale = threshold > 0 && ageSecs >= 0 && ageSecs > threshold;
-  const dot = errored
-    ? "bg-signal-weak"
-    : stale
-      ? "bg-warning"
-      : "bg-success scan-pulse";
+  const dot = pending
+    ? "bg-muted-foreground/40"
+    : errored
+      ? "bg-signal-weak"
+      : stale
+        ? "bg-warning"
+        : "bg-success scan-pulse";
 
   const label = node.name || node.pubkey.slice(0, 12);
   const [polling, setPolling] = useState(false);
@@ -273,7 +277,11 @@ function NodeCard({
 
       <footer className="flex items-center justify-between px-3 py-2 border-t border-border font-mono text-[10px] uppercase tracking-[0.1em] text-muted-foreground">
         <span className={cn(stale && "text-warning")}>
-          {ageSecs < 0 ? "never polled" : `polled ${formatSecsAgo(ageSecs)}`}
+          {pending
+            ? "waiting for first poll"
+            : ageSecs < 0
+              ? "never polled"
+              : `polled ${formatSecsAgo(ageSecs)}`}
         </span>
         <span className="inline-flex items-center gap-1 group-hover:text-primary transition-colors">
           charts <ArrowUpRight className="size-3" />

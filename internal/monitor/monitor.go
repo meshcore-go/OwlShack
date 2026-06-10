@@ -156,6 +156,13 @@ func New(st *store.Store, bc Broadcaster, lister Lister, log *slog.Logger) *Serv
 	}
 }
 
+// Targets returns the current monitor target set from the lister — the nodes
+// whose monitor toggle is on right now. The API uses this to list monitored
+// nodes, so a freshly enrolled node shows up before its first poll completes.
+func (s *Service) Targets() ([]Target, error) {
+	return s.lister.Targets()
+}
+
 // RegisterCollector wires a Collector for the given node kind (e.g. "repeater").
 // Safe to call before Start; calling for an existing kind replaces it.
 func (s *Service) RegisterCollector(kind string, c Collector) {

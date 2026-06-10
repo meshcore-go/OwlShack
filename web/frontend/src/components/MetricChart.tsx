@@ -204,6 +204,20 @@ export function Sparkline({
   if (data.length < 2) {
     return <div style={{ height }} className="w-full" />;
   }
+
+  // Recharts' implicit Y axis is zero-anchored, which flattens high-offset
+  // series — a ~4 V battery varies <1% of a 0-to-max scale, i.e. sub-pixel at
+  // this height. Fit the domain to the data instead: a sparkline shows shape,
+  // not magnitude. A flat series gets symmetric padding so the line sits
+  // mid-tile rather than on an edge.
+  let min = Infinity;
+  let max = -Infinity;
+  for (const p of data) {
+    if (p.value < min) min = p.value;
+    if (p.value > max) max = p.value;
+  }
+  const pad = (max - min) * 0.15 || Math.max(Math.abs(max) * 0.01, 0.5);
+
   return (
     <div style={{ height }} className="w-full">
       <ResponsiveContainer width="100%" height="100%">
@@ -214,6 +228,7 @@ export function Sparkline({
               <stop offset="100%" stopColor={color} stopOpacity={0} />
             </linearGradient>
           </defs>
+          <YAxis hide domain={[min - pad, max + pad]} />
           <Area
             type="linear"
             dataKey="value"

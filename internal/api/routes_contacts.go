@@ -124,37 +124,40 @@ func (s *Server) handleAddContact(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// Seed discovered_peers with the supplied name/type, but ONLY when the
-	// peer is unknown or has no name yet — never overwrite a peer we've already
-	// heard, so a crafted shared-contact message can't relabel a trusted peer.
-	// Existing rows are loaded and mutated in place to preserve lat/lon/path.
+	// Seed discovered_peers so the contact row's FK is satisfiable. An unknown
+	// peer is seeded even with blank name/type (the contract is POST {pubkey};
+	// a later advert fills them in). Known peers are only updated when nameless
+	// — never overwrite a peer we've already heard, so a crafted shared-contact
+	// message can't relabel a trusted peer. Existing rows are loaded and
+	// mutated in place to preserve lat/lon/path.
 	var seedPeer *store.Peer
-	if contactName != "" || contactType != "" {
-		if existing, gerr := s.store.Peers.GetByPubKey(pubkey); gerr == nil {
-			if existing == nil {
-				seedPeer = &store.Peer{
-					PubKey:   pubkey,
-					Name:     contactName,
-					Type:     contactType,
-					LastSeen: time.Now(),
-				}
-			} else if existing.Name == "" {
-				existing.Name = contactName
-				if contactType != "" {
-					existing.Type = contactType
-				}
-				seedPeer = existing
+	if existing, gerr := s.store.Peers.GetByPubKey(pubkey); gerr == nil {
+		if existing == nil {
+			seedPeer = &store.Peer{
+				PubKey:   pubkey,
+				Name:     contactName,
+				Type:     contactType,
+				LastSeen: time.Now(),
 			}
+		} else if existing.Name == "" && (contactName != "" || contactType != "") {
+			existing.Name = contactName
+			if contactType != "" {
+				existing.Type = contactType
+			}
+			seedPeer = existing
 		}
 	}
 
 	var addErr error
 	s.store.WriteSync(func() {
-		addErr = s.store.Contacts.Add(name, pubkey)
-		if addErr == nil && seedPeer != nil {
-			// Non-fatal: if this fails the contact is still added, just nameless.
+		// Seed the peer BEFORE the contact row: companion_contacts.peer_pubkey
+		// has a foreign key to discovered_peers, so for a never-heard peer the
+		// contact insert fails unless the peer row exists first.
+		if seedPeer != nil {
+			// Non-fatal for known peers: the contact is still added, just nameless.
 			_ = s.store.Peers.Upsert(seedPeer)
 		}
+		addErr = s.store.Contacts.Add(name, pubkey)
 	})
 	if addErr != nil {
 		writeError(w, http.StatusInternalServerError, "failed to add contact")
