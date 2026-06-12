@@ -91,6 +91,12 @@ type Config struct {
 	// Web UI
 	ListenAddr *string `json:"listenAddr" yaml:"listenAddr" toml:"listenAddr"`
 
+	// SetupComplete is nil/false until the first-run web wizard finishes. A
+	// fresh bootstrap leaves it false (so the UI shows the setup wizard);
+	// imported configs are marked complete. Lets us tell "never configured"
+	// apart from "deliberately observer-only" when there are no companions.
+	SetupComplete *bool `json:"setupComplete,omitempty" yaml:"setupComplete,omitempty" toml:"setupComplete,omitempty"`
+
 	// MQTT observer. Exactly one node feeds MQTT (Mqtt.Node selects it).
 	Mqtt *MqttConfig `json:"mqtt,omitempty" yaml:"mqtt,omitempty" toml:"mqtt,omitempty"`
 
@@ -105,7 +111,7 @@ func DefaultConfig() Config {
 	bw := 62.50
 	sf := uint8(7)
 	cr := uint8(8)
-	tx := uint8(2)
+	tx := uint8(22)
 
 	return Config{
 		Connection: &connection,
@@ -118,8 +124,32 @@ func DefaultConfig() Config {
 	}
 }
 
+// PublicChannelName is the well-known public channel every companion joins.
+const PublicChannelName = "Public"
+
+// ensurePublicChannel guarantees a companion is a member of the public channel.
+// Every companion must be in Public; this normalises configs from the wizard,
+// the add-companion form, imports, and hand-crafted PUTs alike.
+func ensurePublicChannel(comp *CompanionConfig) {
+	if comp.Channels == nil {
+		comp.Channels = &ChannelList{{Name: PublicChannelName}}
+		return
+	}
+	for _, ch := range *comp.Channels {
+		if ch.Name == PublicChannelName {
+			return
+		}
+	}
+	*comp.Channels = append(ChannelList{{Name: PublicChannelName}}, *comp.Channels...)
+}
+
 func (c *Config) ApplyDefaults() {
 	defaults := DefaultConfig()
+	// Normalise to a non-nil slice so JSON serialises companions as [] not
+	// null; the frontend (and its TS contract) treats companions as an array.
+	if c.Companions == nil {
+		c.Companions = []CompanionConfig{}
+	}
 	if c.Connection == nil {
 		c.Connection = defaults.Connection
 	}
@@ -146,6 +176,7 @@ func (c *Config) ApplyDefaults() {
 	// the first one wins and its companion becomes the selected node.
 	for i := range c.Companions {
 		comp := &c.Companions[i]
+		ensurePublicChannel(comp)
 		if comp.Mqtt == nil {
 			continue
 		}

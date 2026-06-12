@@ -141,9 +141,8 @@ func (c *Config) Validate() error {
 		return fmt.Errorf("tx must be between 0 and 22 dBm")
 	}
 
-	if len(c.Companions) == 0 {
-		return fmt.Errorf("at least one companion must be configured")
-	}
+	// Zero companions is a valid state: a fresh install boots quietly until the
+	// first-run wizard creates one, and an observer-only setup may keep none.
 
 	// A startCompanions failure after a reload exits the process, so anything
 	// that would fail companion construction (bad regex/cron/channel key) must

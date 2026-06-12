@@ -65,14 +65,13 @@ func resolveConfig(db *store.Store, importPath string) (*config.Config, error) {
 
 	def := config.DefaultConfig()
 	cfg = &def
-	cfg.Companions = []config.CompanionConfig{{Name: "MeshCore Bot"}}
-	if err := cfg.EnsureCompanionKeys(); err != nil {
-		return nil, err
-	}
+	// Leave Companions empty and SetupComplete false: the app boots quietly
+	// (radio observes, nothing adverts) and the web UI shows the first-run
+	// wizard. No fabricated identity flooding the mesh.
 	if err := saveConfig(db, cfg); err != nil {
 		return nil, err
 	}
-	slog.Info("no config found — bootstrapped a default config; edit it in the web UI")
+	slog.Info("no config found; bootstrapped a quiet default, complete setup in the web UI")
 	return cfg, nil
 }
 
@@ -90,10 +89,13 @@ func importConfigFile(db *store.Store, path string) (*config.Config, error) {
 	if err := cfg.Validate(); err != nil {
 		return nil, fmt.Errorf("config %s: %w", resolved, err)
 	}
+	// Importing a file is a deliberate configuration step, so skip the wizard.
+	complete := true
+	cfg.SetupComplete = &complete
 	if err := saveConfig(db, cfg); err != nil {
 		return nil, err
 	}
-	slog.Info("imported config file into database — the file is no longer read at runtime", "path", resolved)
+	slog.Info("imported config file into database; the file is no longer read at runtime", "path", resolved)
 	return cfg, nil
 }
 

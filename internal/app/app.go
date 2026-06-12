@@ -10,9 +10,11 @@ import (
 	"encoding/json"
 	"fmt"
 	"log/slog"
+	"net"
 	"net/http"
 	"os"
 	"os/signal"
+	"strings"
 	"syscall"
 	"time"
 
@@ -30,6 +32,36 @@ import (
 )
 
 const defaultListenAddr = ":8080"
+
+// applyListenEnvOverrides lets the HOST and PORT environment variables override
+// the stored web listen address (precedence: env > DB config > default). Either
+// may be set alone: an unset HOST binds all interfaces, an unset PORT keeps the
+// configured one. This is for deployments (Docker, PaaS) that set the bind
+// address out-of-band without editing the stored config.
+func applyListenEnvOverrides(addr string) string {
+	envHost, hasHost := os.LookupEnv("HOST")
+	envPort, hasPort := os.LookupEnv("PORT")
+	if !hasHost && !hasPort {
+		return addr
+	}
+
+	host, port, err := net.SplitHostPort(addr)
+	if err != nil {
+		// addr wasn't a clean host:port (e.g. a bare ":4432" edge or malformed);
+		// recover the port from a leading-colon form and leave host empty.
+		host, port = "", strings.TrimPrefix(addr, ":")
+	}
+	if hasHost {
+		host = envHost
+	}
+	if hasPort && envPort != "" {
+		port = envPort
+	}
+
+	overridden := net.JoinHostPort(host, port)
+	slog.Info("web listen address overridden by environment", "from", addr, "to", overridden)
+	return overridden
+}
 
 // Run starts the bot and blocks until ctx is cancelled. The config lives in
 // the database; importPath (the -config flag) imports a config file into it.
@@ -79,6 +111,7 @@ func Run(ctx context.Context, importPath string, verbosity int) error {
 	if cfg.ListenAddr != nil && *cfg.ListenAddr != "" {
 		listenAddr = *cfg.ListenAddr
 	}
+	listenAddr = applyListenEnvOverrides(listenAddr)
 	httpServer := &http.Server{Addr: listenAddr, Handler: srv}
 	go func() {
 		slog.Info("web UI listening", "addr", listenAddr)
@@ -127,10 +160,8 @@ func Run(ctx context.Context, importPath string, verbosity int) error {
 				slog.Error("config reload failed, keeping current config", "error", err)
 				continue
 			}
-			if len(newCfg.Companions) == 0 {
-				slog.Error("reloaded config has no companions, keeping current config")
-				continue
-			}
+			// Zero companions is allowed (observer-only / first-run wizard skip);
+			// reloadCompanions stops any running companions and starts none.
 
 			newLogLevel := ""
 			if newCfg.LogLevel != nil {

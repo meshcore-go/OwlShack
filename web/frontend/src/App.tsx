@@ -1,6 +1,7 @@
 import { lazy, Suspense } from "react";
 import { Route, Routes } from "react-router-dom";
 import { AppShell } from "@/components/AppShell";
+import { useConfig } from "@/hooks/useConfig";
 import { DashboardPage } from "@/pages/DashboardPage";
 import { PeersPage } from "@/pages/PeersPage";
 import { CompanionsPage } from "@/pages/CompanionsPage";
@@ -59,6 +60,11 @@ const MqttPage = lazy(() =>
 const RadioPage = lazy(() =>
   import("@/pages/RadioPage").then((m) => ({ default: m.RadioPage })),
 );
+// Lazy so Leaflet (pulled in by the position picker) stays out of the main
+// bundle — the wizard only renders on first run.
+const SetupWizard = lazy(() =>
+  import("@/components/SetupWizard").then((m) => ({ default: m.SetupWizard })),
+);
 
 function PageFallback() {
   return (
@@ -70,8 +76,22 @@ function PageFallback() {
 }
 
 export function App() {
+  const { config, save, reload } = useConfig();
+  // Fresh install: never configured (flag unset) and no companions yet. An
+  // observer-only setup that skipped the wizard has setupComplete=true, and
+  // existing installs always have >=1 companion, so neither re-triggers it.
+  const needsSetup =
+    config != null &&
+    config.setupComplete !== true &&
+    (config.companions?.length ?? 0) === 0;
+
   return (
     <AppShell>
+      {needsSetup && (
+        <Suspense fallback={null}>
+          <SetupWizard config={config} save={save} reload={reload} />
+        </Suspense>
+      )}
       <Suspense fallback={<PageFallback />}>
         <Routes>
           <Route path="/" element={<DashboardPage />} />

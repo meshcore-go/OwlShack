@@ -4,7 +4,7 @@
 # on first run (when the database has no config yet) a config.toml in the
 # working directory is imported automatically, or import explicitly with
 #   meshcore-bot -config myconfig.toml   (overwrites the stored config)
-# After that, manage everything from the web UI (default http://localhost:4432).
+# After that, manage everything from the web UI (default http://localhost:8080).
 
 # Connection Settings (KISS modem)
 connection = "serial:///dev/ttyACM0"

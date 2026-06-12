@@ -4,6 +4,7 @@ import { PageHeader } from "@/components/PageHeader";
 import { LoadErrorAlert } from "@/components/LoadErrorAlert";
 import { SectionTitle } from "@/components/SectionTitle";
 import { SelectField, TextField } from "@/components/ConfigFields";
+import { RadioPresetSelect } from "@/components/RadioPresetSelect";
 import { Button } from "@/components/ui/button";
 import { Skeleton } from "@/components/ui/skeleton";
 import { useConfig } from "@/hooks/useConfig";
@@ -111,13 +112,26 @@ export function RadioPage() {
 
           <section className="panel">
             <SectionTitle eyebrow="rf parameters" title="LoRa Radio" />
-            <div className="p-4 grid grid-cols-1 sm:grid-cols-3 lg:grid-cols-5 gap-4">
-              <TextField
-                label="Frequency (MHz)"
-                value={freq}
-                onChange={setFreq}
-                placeholder="917.375"
+            <div className="p-4 space-y-4">
+              <RadioPresetSelect
+                freq={freq}
+                bw={bw}
+                sf={sf}
+                cr={cr}
+                onApply={(p) => {
+                  setFreq(String(p.freq));
+                  setBw(String(p.bw));
+                  setSf(String(p.sf));
+                  setCr(String(p.cr));
+                }}
               />
+              <div className="grid grid-cols-1 sm:grid-cols-3 lg:grid-cols-5 gap-4">
+                <TextField
+                  label="Frequency (MHz)"
+                  value={freq}
+                  onChange={setFreq}
+                  placeholder="917.375"
+                />
               <SelectField
                 label="Bandwidth (kHz)"
                 value={bw}
@@ -151,6 +165,7 @@ export function RadioPage() {
                 onChange={setTx}
                 placeholder="0-22"
               />
+              </div>
             </div>
           </section>
 
@@ -161,8 +176,8 @@ export function RadioPage() {
                 label="Web listen address"
                 value={listenAddr}
                 onChange={setListenAddr}
-                placeholder=":4432"
-                hint="applies on next process restart"
+                placeholder=":8080"
+                hint="default :8080 · HOST/PORT env vars override this · applies on next process restart"
               />
               <SelectField
                 label="Log level"

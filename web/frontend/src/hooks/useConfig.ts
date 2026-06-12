@@ -72,6 +72,8 @@ export interface AppConfig {
   cr?: number | null;
   tx?: number | null;
   listenAddr?: string | null;
+  // false/absent until the first-run setup wizard finishes. Gates the wizard.
+  setupComplete?: boolean | null;
   mqtt?: MqttConfig | null;
   companions: CompanionConfig[];
 }
