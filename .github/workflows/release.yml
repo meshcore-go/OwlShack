@@ -10,8 +10,36 @@ permissions:
   packages: write
 
 jobs:
+  frontend:
+    name: Build Frontend
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v6
+
+      - uses: actions/setup-node@v6
+        with:
+          node-version: 24
+          cache: npm
+          cache-dependency-path: web/frontend/package-lock.json
+
+      # The SPA is embedded into the binary via go:embed of web/frontend/dist,
+      # which is gitignored — every Go build needs this output first.
+      - name: Build SPA
+        working-directory: web/frontend
+        run: |
+          npm ci
+          npm run build
+
+      - uses: actions/upload-artifact@v7
+        if: ${{ !env.ACT }}
+        with:
+          name: frontend-dist
+          path: web/frontend/dist
+          if-no-files-found: error
+
   build:
     name: Build Binaries
+    needs: frontend
     runs-on: ubuntu-latest
     strategy:
       matrix:
@@ -50,6 +78,13 @@ jobs:
       - uses: actions/setup-go@v6
         with:
           go-version-file: go.mod
+          cache-dependency-path: go.sum
+
+      - uses: actions/download-artifact@v8
+        if: ${{ !env.ACT }}
+        with:
+          name: frontend-dist
+          path: web/frontend/dist
 
       - name: Build
         env:
@@ -79,6 +114,7 @@ jobs:
     steps:
       - uses: actions/download-artifact@v8
         with:
+          pattern: meshcore-bot-*
           path: artifacts
           merge-multiple: true
 

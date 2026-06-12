@@ -109,6 +109,7 @@ import {
   MonitoringSettings,
   type MonitorMetadata,
 } from "@/components/MonitoringSettings";
+import { advertPathInfo } from "@/components/PeerDetailSheet";
 
 interface Contact {
   peerPubkey: string;
@@ -510,7 +511,12 @@ export function RepeaterDetailPage() {
               <DropdownMenuContent align="end" className="rounded-sm">
                 <DropdownMenuItem
                   onClick={() => {
-                    setPathInput(pathInfo?.outPath || "");
+                    setPathInput(
+                      advertPathInfo(
+                        pathInfo?.outPath,
+                        pathInfo?.pathHashSize,
+                      ).path.join(",").toUpperCase(),
+                    );
                     setPathHashSizeInput(pathInfo?.pathHashSize || 1);
                     setPathDialogOpen(true);
                   }}

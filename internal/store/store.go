@@ -25,6 +25,7 @@ type Store struct {
 	Echoes         *EchoRepo
 	BlockedSenders *BlockedSenderRepo
 	Metrics        *MetricsRepo
+	AppConfig      *AppConfigRepo
 
 	writerCh   chan func()
 	writerDone chan struct{}
@@ -61,6 +62,7 @@ func Open(path string) (*Store, error) {
 		Echoes:         &EchoRepo{db: db},
 		BlockedSenders: &BlockedSenderRepo{db: db},
 		Metrics:        &MetricsRepo{db: db},
+		AppConfig:      &AppConfigRepo{db: db},
 		writerCh:       make(chan func(), writerQueueDepth),
 		writerDone:     make(chan struct{}),
 	}
@@ -143,6 +145,7 @@ func (s *Store) migrate() error {
 		migrateV1,
 		migrateV2,
 		migrateV3,
+		migrateV4,
 	}
 
 	for i := version; i < len(migrations); i++ {
@@ -303,5 +306,17 @@ func migrateV2(db *sql.DB) error {
 // only by pubkey) can resolve the contact whose metadata holds the config.
 func migrateV3(db *sql.DB) error {
 	_, err := db.Exec(`ALTER TABLE node_state ADD COLUMN companion_id TEXT NOT NULL DEFAULT ''`)
+	return err
+}
+
+// migrateV4 adds the single-row app_config table — the bot's config lives in
+// the database; config files are one-time imports.
+func migrateV4(db *sql.DB) error {
+	_, err := db.Exec(`
+		CREATE TABLE IF NOT EXISTS app_config (
+			id         INTEGER PRIMARY KEY CHECK (id = 1),
+			config     TEXT NOT NULL,
+			updated_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP
+		)`)
 	return err
 }

@@ -74,12 +74,6 @@ func NewCompanion(cfg config.CompanionConfig, mux *node.RadioMux, st *store.Stor
 		return nil, fmt.Errorf("companion name is required")
 	}
 
-	keyFile := strings.TrimSpace(cfg.KeyFile)
-	if keyFile == "" {
-		// Default keyfile is <Ascii name>_companion.key
-		keyFile = strings.ToValidUTF8(name, "") + "_companion.key"
-	}
-
 	radio := mux.NewRadio()
 	log := slog.Default().With("component", "companion", "name", name)
 	opts := append([]node.Option{
@@ -91,7 +85,9 @@ func NewCompanion(cfg config.CompanionConfig, mux *node.RadioMux, st *store.Stor
 	// Out-paths learned via path-returns only; appended last to set on the final table.
 	opts = append(opts, node.WithLearnedPathsOnly())
 
-	id, err := loadOrCreateIdentity(keyFile)
+	// Identities are pinned in the config (EnsureCompanionKeys fills empty
+	// ones before any config is persisted).
+	id, err := identityFromHexSeed(cfg.PrivateKey)
 	if err != nil {
 		return nil, fmt.Errorf("companion identity: %w", err)
 	}
@@ -396,14 +392,20 @@ const dmAckDelay = 200 * time.Millisecond
 // extracted from a received DM via plaintext[4]>>2 to detect repeater CLI replies.
 const txtTypeCliData = 1
 
+// txtTypeSignedPlain (TXT_TYPE_SIGNED_PLAIN) marks a post pushed by a room server.
+const txtTypeSignedPlain = 2
+
 // sendDMAck sends an ACK back to the DM sender. For flood-routed messages,
 // it builds a PathReturn (with ACK as extra data) so the sender learns the
 // path to us. For direct-routed messages, it sends a plain ACK packet using
 // the peer's known out_path (or floods if no path known).
-func (c *Companion) sendDMAck(pkt *meshcore.Packet, senderPubKey []byte, sharedSecret []byte, ackPlaintext []byte, attemptByte byte) {
+//
+// ackHashKey is the pubkey hashed into the ACK CRC — the sender's for DMs,
+// OUR own for room post pushes.
+func (c *Companion) sendDMAck(pkt *meshcore.Packet, senderPubKey []byte, sharedSecret []byte, ackPlaintext []byte, ackHashKey []byte, attemptByte byte) {
 	var randomByte [1]byte
 	rand.Read(randomByte[:])
-	ackPayload := meshcore.BuildAckPayload(ackPlaintext, senderPubKey, attemptByte, randomByte[0])
+	ackPayload := meshcore.BuildAckPayload(ackPlaintext, ackHashKey, attemptByte, randomByte[0])
 
 	if pkt.IsRouteFlood() {
 		// Build PathReturn with ACK as extra data — tells the sender the path to us
@@ -478,6 +480,86 @@ func (c *Companion) buildPathReturn(destPubKey []byte, sharedSecret []byte, inPa
 		Payload:    payload,
 	}
 	return pkt, nil
+}
+
+// handleRoomPush handles a room-server post pushed to us as a TXT_MSG flagged
+// TXT_TYPE_SIGNED_PLAIN: [post_timestamp:4][flags:1][author_pubkey_prefix:4][text:N].
+// Pushes are ACK-gated — the server won't advance our sync_since or send the
+// next post until it sees our ACK (hashed with OUR pubkey, not the sender's).
+func (c *Companion) handleRoomPush(pkt *meshcore.Packet, roomPubKey []byte, roomPubKeyHex string, sharedSecret []byte, plaintext []byte) {
+	if len(plaintext) < 9 {
+		c.log.Debug("room push plaintext too short", "room", roomPubKeyHex[:12])
+		return
+	}
+
+	postTs := binary.LittleEndian.Uint32(plaintext[:4])
+	authorPrefix := plaintext[5:9]
+	text := strings.TrimRight(string(plaintext[9:]), "\x00")
+
+	// ACK even duplicates — each retry carries a fresh attempt byte, so a
+	// previous ACK can't satisfy it.
+	selfPubKey := c.node.Identity().PublicKey()
+	c.sendDMAck(pkt, roomPubKey, sharedSecret, plaintext[:9+len(text)], selfPubKey[:], 0)
+
+	channelKey := "dm:" + roomPubKeyHex
+
+	// Dedup re-pushed posts: the server's backlog holds at most 32, so 50
+	// recent rows cover the resync window.
+	recent, err := c.store.Messages.List(c.cfg.Name, channelKey, 50, 0)
+	if err == nil {
+		for _, m := range recent {
+			if m.Direction == "rx" && m.Timestamp.Unix() == int64(postTs) && m.Text == text {
+				c.log.Debug("room push duplicate ignored", "room", roomPubKeyHex[:12], "postTs", postTs)
+				return
+			}
+		}
+	}
+
+	authorName := hex.EncodeToString(authorPrefix) + "…"
+	if names, lookupErr := c.store.Peers.LookupByHash(authorPrefix); lookupErr == nil && len(names) > 0 {
+		authorName = names[0]
+	}
+
+	msg := &store.Message{
+		CompanionID: c.cfg.Name,
+		Channel:     channelKey,
+		ChannelHash: 0,
+		Sender:      authorName,
+		Text:        text,
+		Direction:   "rx",
+		Timestamp:   time.Unix(int64(postTs), 0),
+	}
+	if pkt.HasSignalInfo {
+		snr := float64(pkt.SNR)
+		rssi := pkt.RSSI
+		msg.SNR = &snr
+		msg.RSSI = &rssi
+	}
+
+	c.store.WriteAsync(func() {
+		if insertErr := c.store.Messages.Insert(msg); insertErr != nil {
+			c.log.Error("failed to persist room post", "error", insertErr)
+		}
+
+		c.log.Info("room post received", "room", roomPubKeyHex[:12], "author", authorName, "text", text)
+
+		if c.hub != nil {
+			wsMsg := map[string]any{
+				"companion": c.cfg.Name,
+				"channel":   channelKey,
+				"sender":    authorName,
+				"text":      text,
+				"direction": "rx",
+				"timestamp": msg.Timestamp.UTC().Format(time.RFC3339),
+				"id":        msg.ID,
+			}
+			if pkt.HasSignalInfo {
+				wsMsg["snr"] = pkt.SNR
+				wsMsg["rssi"] = pkt.RSSI
+			}
+			c.hub.Broadcast("messages", wsMsg)
+		}
+	})
 }
 
 // handleDMPathReturn processes incoming Path packets as potential DM ACK
@@ -802,13 +884,18 @@ func (c *Companion) registerPacketHandlers() {
 			return
 		}
 
+		if flags == txtTypeSignedPlain {
+			c.handleRoomPush(pkt, senderPubKey, senderPubKeyHex, sharedSecret, plaintext)
+			return
+		}
+
 		// Send ACK for plain text DMs
 		ackPlaintext := plaintext[:5+len(text)]
 		var attemptByte byte
 		if 5+len(text)+1 < len(plaintext) {
 			attemptByte = plaintext[5+len(text)+1]
 		}
-		c.sendDMAck(pkt, senderPubKey, sharedSecret, ackPlaintext, attemptByte)
+		c.sendDMAck(pkt, senderPubKey, sharedSecret, ackPlaintext, senderPubKey, attemptByte)
 
 		channelKey := "dm:" + senderPubKeyHex
 

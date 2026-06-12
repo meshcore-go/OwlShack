@@ -10,13 +10,12 @@ import (
 
 	"github.com/meshcore-go/meshcore-bot/internal/app"
 	"github.com/meshcore-go/meshcore-bot/internal/buildinfo"
-	"github.com/meshcore-go/meshcore-bot/internal/config"
 	"github.com/meshcore-go/meshcore-bot/internal/logging"
 	flag "github.com/spf13/pflag"
 )
 
 func main() {
-	configPath := flag.StringP("config", "c", "", "path to config file (toml, yaml, or json)")
+	configPath := flag.StringP("config", "c", "", "import a config file (toml, yaml, or json) into the database and run with it")
 	showVersion := flag.BoolP("version", "V", false, "print version and exit")
 	verbosity := flag.CountP("verbose", "v", "increase log verbosity (-v=debug, -vv=trace, -vvv=trace+)")
 	flag.Parse()
@@ -26,26 +25,13 @@ func main() {
 		return
 	}
 
-	cfg, resolvedPath, err := config.Load(*configPath)
-	if err != nil {
-		fmt.Fprintf(os.Stderr, "Error: %v\n", err)
-		os.Exit(1)
-	}
-	if len(cfg.Companions) == 0 {
-		fmt.Fprintln(os.Stderr, "Error: no companions configured")
-		os.Exit(1)
-	}
-
-	logLevel := ""
-	if cfg.LogLevel != nil {
-		logLevel = *cfg.LogLevel
-	}
-	logging.Configure(*verbosity, logLevel)
+	// Configured again inside app.Run once the stored log level is known.
+	logging.Configure(*verbosity, "")
 
 	ctx, stop := signal.NotifyContext(context.Background(), syscall.SIGINT, syscall.SIGTERM)
 	defer stop()
 
-	if err := app.Run(ctx, cfg, resolvedPath); err != nil {
+	if err := app.Run(ctx, *configPath, *verbosity); err != nil {
 		slog.Error("fatal", "error", err)
 		os.Exit(1)
 	}

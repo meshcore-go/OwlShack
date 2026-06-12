@@ -33,11 +33,17 @@ func (cl *ChannelList) UnmarshalJSON(data []byte) error {
 			result = append(result, ChannelRef{Name: s})
 			continue
 		}
-		var ref ChannelRef
+		// Decode into a tag-equivalent struct: ChannelRef implements
+		// encoding.TextUnmarshaler (for TOML string entries), which makes
+		// encoding/json demand a string and reject the object form.
+		var ref struct {
+			Name       string `json:"name"`
+			PrivateKey string `json:"privateKey"`
+		}
 		if err := json.Unmarshal(item, &ref); err != nil {
 			return fmt.Errorf("channel entry must be a string or {name, privateKey} object: %w", err)
 		}
-		result = append(result, ref)
+		result = append(result, ChannelRef{Name: ref.Name, PrivateKey: ref.PrivateKey})
 	}
 	*cl = result
 	return nil
@@ -71,12 +77,11 @@ type Config struct {
 	// Logging
 	LogLevel *string `json:"logLevel" yaml:"logLevel" toml:"logLevel"`
 
-	// Connection Settings
-	NodeType   *string `json:"nodeType" yaml:"nodeType" toml:"nodeType"`       // kiss or companion
+	// Connection Settings (KISS modem)
 	Connection *string `json:"connection" yaml:"connection" toml:"connection"` // serial://<path> or tcp://<host:port>
 	BaudRate   *int    `json:"baudRate" yaml:"baudRate" toml:"baudRate"`       // Default 115200 if using serial
 
-	// Radio Settings - Only for KISS Radio
+	// Radio Settings
 	Freq *float64 `json:"freq" yaml:"freq" toml:"freq"` // e.g. 917.375
 	Bw   *float64 `json:"bw" yaml:"bw" toml:"bw"`       // e.g. 62.50
 	SF   *uint8   `json:"sf" yaml:"sf" toml:"sf"`       // e.g. 7
@@ -86,12 +91,14 @@ type Config struct {
 	// Web UI
 	ListenAddr *string `json:"listenAddr" yaml:"listenAddr" toml:"listenAddr"`
 
+	// MQTT observer. Exactly one node feeds MQTT (Mqtt.Node selects it).
+	Mqtt *MqttConfig `json:"mqtt,omitempty" yaml:"mqtt,omitempty" toml:"mqtt,omitempty"`
+
 	// Companions
 	Companions []CompanionConfig `json:"companions" yaml:"companions" toml:"companion"`
 }
 
 func DefaultConfig() Config {
-	nodeType := "kiss"
 	connection := "serial:///dev/ttyACM0"
 	baudRate := 115200
 	freq := 917.375
@@ -101,7 +108,6 @@ func DefaultConfig() Config {
 	tx := uint8(2)
 
 	return Config{
-		NodeType:   &nodeType,
 		Connection: &connection,
 		BaudRate:   &baudRate,
 		Freq:       &freq,
@@ -114,9 +120,6 @@ func DefaultConfig() Config {
 
 func (c *Config) ApplyDefaults() {
 	defaults := DefaultConfig()
-	if c.NodeType == nil {
-		c.NodeType = defaults.NodeType
-	}
 	if c.Connection == nil {
 		c.Connection = defaults.Connection
 	}
@@ -137,6 +140,28 @@ func (c *Config) ApplyDefaults() {
 	}
 	if c.TX == nil {
 		c.TX = defaults.TX
+	}
+
+	// Migrate legacy per-companion mqtt blocks to the single top-level block:
+	// the first one wins and its companion becomes the selected node.
+	for i := range c.Companions {
+		comp := &c.Companions[i]
+		if comp.Mqtt == nil {
+			continue
+		}
+		if c.Mqtt == nil {
+			hoisted := *comp.Mqtt
+			name := comp.Name
+			hoisted.Node = &name
+			c.Mqtt = &hoisted
+		}
+		comp.Mqtt = nil
+	}
+
+	if c.Mqtt != nil {
+		for i := range c.Mqtt.Brokers {
+			c.Mqtt.Brokers[i].migrateTopicPrefix()
+		}
 	}
 }
 

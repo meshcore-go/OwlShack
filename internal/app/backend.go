@@ -5,12 +5,12 @@ import (
 	"encoding/json"
 	"fmt"
 	"log/slog"
-	"os"
 	"time"
 
 	"github.com/meshcore-go/meshcore-bot/internal/api"
 	"github.com/meshcore-go/meshcore-bot/internal/config"
 	"github.com/meshcore-go/meshcore-bot/internal/node/companion"
+	"github.com/meshcore-go/meshcore-bot/internal/store"
 )
 
 // repeaterReqTimeout bounds every repeater round-trip initiated from the API.
@@ -22,12 +22,12 @@ const repeaterReqTimeout = 10 * time.Second
 type backend struct {
 	companions []*companion.Companion
 	cfg        *config.Config
-	configPath string
+	db         *store.Store
 	reload     func() error
 }
 
-func newBackend(companions []*companion.Companion, cfg *config.Config, configPath string, reload func() error) *backend {
-	return &backend{companions: companions, cfg: cfg, configPath: configPath, reload: reload}
+func newBackend(companions []*companion.Companion, cfg *config.Config, db *store.Store, reload func() error) *backend {
+	return &backend{companions: companions, cfg: cfg, db: db, reload: reload}
 }
 
 func (b *backend) find(name string) (*companion.Companion, bool) {
@@ -120,6 +120,9 @@ func (b *backend) Repeater(name string) (*api.RepeaterOps, bool) {
 		Login: func(pubkeyHex, password string) (any, error) {
 			return rm.SendLogin(pubkeyHex, password, repeaterReqTimeout)
 		},
+		RoomLogin: func(pubkeyHex, password string, syncSince uint32) (any, error) {
+			return rm.SendRoomLogin(pubkeyHex, password, syncSince, repeaterReqTimeout)
+		},
 		StatusReq: func(pubkeyHex string) (any, error) {
 			return rm.SendStatusReq(pubkeyHex, repeaterReqTimeout)
 		},
@@ -165,11 +168,7 @@ func (b *backend) Repeater(name string) (*api.RepeaterOps, bool) {
 // PersistChannels writes each companion's current standalone channels back to
 // the config file, leaving the rest of the file intact.
 func (b *backend) PersistChannels() error {
-	if b.configPath == "" {
-		return fmt.Errorf("config path not set")
-	}
-
-	cfg, _, err := config.LoadFromPath(b.configPath)
+	cfg, err := loadConfigFromDB(b.db)
 	if err != nil {
 		return fmt.Errorf("reading config for persist: %w", err)
 	}
@@ -187,13 +186,8 @@ func (b *backend) PersistChannels() error {
 		}
 	}
 
-	data, err := config.Marshal(b.configPath, cfg)
-	if err != nil {
-		return fmt.Errorf("marshalling config: %w", err)
-	}
-
-	if err := os.WriteFile(b.configPath, data, 0644); err != nil {
-		return fmt.Errorf("writing config: %w", err)
+	if err := saveConfig(b.db, cfg); err != nil {
+		return err
 	}
 
 	slog.Info("config persisted with channel changes")
@@ -201,10 +195,7 @@ func (b *backend) PersistChannels() error {
 }
 
 func (b *backend) Config() any {
-	if b.configPath == "" {
-		return b.cfg
-	}
-	current, _, err := config.LoadFromPath(b.configPath)
+	current, err := loadConfigFromDB(b.db)
 	if err != nil {
 		return b.cfg
 	}
@@ -212,33 +203,30 @@ func (b *backend) Config() any {
 }
 
 func (b *backend) UpdateConfig(input map[string]any) error {
-	if b.configPath == "" {
-		return fmt.Errorf("config path not set")
-	}
-
 	raw, err := json.Marshal(input)
 	if err != nil {
 		return fmt.Errorf("invalid config data: %w", err)
 	}
 
-	var newCfg config.Config
-	if err := json.Unmarshal(raw, &newCfg); err != nil {
+	newCfg, err := config.UnmarshalConfigJson(raw)
+	if err != nil {
 		return fmt.Errorf("config validation failed: %w", err)
+	}
+
+	// Never let a PUT that omits a key silently rotate a running identity.
+	if prev, perr := loadConfigFromDB(b.db); perr == nil {
+		inheritCompanionKeys(newCfg, prev)
+	}
+	if err := newCfg.EnsureCompanionKeys(); err != nil {
+		return err
 	}
 
 	if err := newCfg.Validate(); err != nil {
 		return err
 	}
 
-	newCfg.ApplyDefaults()
-
-	data, err := config.Marshal(b.configPath, &newCfg)
-	if err != nil {
-		return fmt.Errorf("failed to encode config: %w", err)
-	}
-
-	if err := os.WriteFile(b.configPath, data, 0644); err != nil {
-		return fmt.Errorf("failed to write config: %w", err)
+	if err := saveConfig(b.db, newCfg); err != nil {
+		return err
 	}
 
 	if b.reload != nil {

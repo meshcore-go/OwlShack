@@ -175,6 +175,28 @@ func (r *MessageRepo) ListAll(companionID string, limit, offset int) ([]Message,
 	return messages, rows.Err()
 }
 
+// LatestRx returns the most recently inserted rx message for a channel, or nil.
+func (r *MessageRepo) LatestRx(companionID, channel string) (*Message, error) {
+	var m Message
+	err := r.db.QueryRow(`
+		SELECT id, companion_id, channel, channel_hash, sender, text, direction, timestamp, snr, rssi, confirmed, path_hashes, path_hash_size, hops, status
+		FROM messages
+		WHERE companion_id = ? AND channel = ? AND direction = 'rx'
+		ORDER BY id DESC LIMIT 1`, companionID, channel).Scan(
+		&m.ID, &m.CompanionID, &m.Channel, &m.ChannelHash,
+		&m.Sender, &m.Text, &m.Direction, &m.Timestamp,
+		&m.SNR, &m.RSSI, &m.RepeatCount,
+		&m.PathHashes, &m.PathHashSize, &m.Hops, &m.Status,
+	)
+	if err == sql.ErrNoRows {
+		return nil, nil
+	}
+	if err != nil {
+		return nil, err
+	}
+	return &m, nil
+}
+
 func (r *MessageRepo) Delete(id int64) error {
 	_, err := r.db.Exec(`DELETE FROM messages WHERE id = ?`, id)
 	return err

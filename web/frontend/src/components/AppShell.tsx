@@ -1,7 +1,9 @@
 import { useEffect, useState } from "react";
 import {
   Activity,
+  Antenna,
   AudioLines,
+  Bot,
   Gauge,
   LayoutDashboard,
   MapPinned,
@@ -9,6 +11,7 @@ import {
   Moon,
   Radar,
   Radio,
+  Rss,
   Sun,
   Users,
   Waves,
@@ -83,6 +86,27 @@ const COMMS: NavItem[] = [
     label: "Companions",
     icon: MessagesSquare,
     match: (p) => p.startsWith("/companions"),
+  },
+  {
+    to: "/bots",
+    label: "Bots",
+    icon: Bot,
+    match: (p) => p === "/bots",
+  },
+];
+
+const SYSTEM: NavItem[] = [
+  {
+    to: "/mqtt",
+    label: "MQTT",
+    icon: Rss,
+    match: (p) => p === "/mqtt",
+  },
+  {
+    to: "/radio",
+    label: "Radio",
+    icon: Antenna,
+    match: (p) => p === "/radio",
   },
 ];
 
@@ -185,7 +209,7 @@ export function AppShell({ children }: { children: React.ReactNode }) {
             </div>
             <div className="flex flex-col leading-tight group-data-[collapsible=icon]:hidden">
               <span className="font-mono text-[11px] uppercase tracking-[0.18em] text-muted-foreground">
-                MeshCore
+                OwlShack
               </span>
               <span className="font-mono text-[10px] uppercase tracking-[0.14em] text-primary">
                 operator console
@@ -204,6 +228,8 @@ export function AppShell({ children }: { children: React.ReactNode }) {
           />
           <Separator className="mx-3 bg-sidebar-border/50" />
           <NavSection label="Comms" items={COMMS} pathname={pathname} />
+          <Separator className="mx-3 bg-sidebar-border/50" />
+          <NavSection label="System" items={SYSTEM} pathname={pathname} />
         </SidebarContent>
 
         <SidebarFooter className="border-t border-sidebar-border px-2 py-2 gap-1 group-data-[collapsible=icon]:hidden">
@@ -225,8 +251,6 @@ export function AppShell({ children }: { children: React.ReactNode }) {
           <Separator orientation="vertical" className="h-5" />
           <div className="flex items-center gap-2 font-mono text-[11px] uppercase tracking-[0.14em] text-muted-foreground min-w-0 overflow-hidden">
             <Waves className="size-3.5 text-primary shrink-0" />
-            <span className="hidden sm:inline">meshnet</span>
-            <span className="hidden sm:inline text-muted-foreground/40">/</span>
             <span className="text-foreground truncate">{routeLabel(pathname)}</span>
           </div>
           <div className="ml-auto flex items-center gap-3 font-mono text-[10px] uppercase tracking-[0.12em] text-muted-foreground/70">

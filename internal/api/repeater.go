@@ -37,6 +37,48 @@ func (s *Server) handleRepeaterLogin(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, result)
 }
 
+// handleRoomLogin logs in to a room server. When the body omits syncSince it
+// is derived from the newest stored post, so only unseen posts backfill.
+func (s *Server) handleRoomLogin(w http.ResponseWriter, r *http.Request) {
+	name := r.PathValue("name")
+	ops, ok := s.repeaterOps(name)
+	if !ok {
+		writeError(w, http.StatusNotFound, "companion not found")
+		return
+	}
+	if ops.RoomLogin == nil {
+		writeError(w, http.StatusServiceUnavailable, "room login not available")
+		return
+	}
+
+	var body struct {
+		Password  string `json:"password"`
+		SyncSince *int64 `json:"syncSince"`
+	}
+	if err := readJSON(r, &body); err != nil {
+		writeError(w, http.StatusBadRequest, "invalid request body")
+		return
+	}
+
+	pubkey := r.PathValue("pubkey")
+	var syncSince uint32
+	if body.SyncSince != nil {
+		if *body.SyncSince > 0 {
+			syncSince = uint32(*body.SyncSince)
+		}
+	} else if latest, err := s.store.Messages.LatestRx(name, "dm:"+pubkey); err == nil && latest != nil {
+		syncSince = uint32(latest.Timestamp.Unix())
+	}
+
+	result, err := ops.RoomLogin(pubkey, body.Password, syncSince)
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, err.Error())
+		return
+	}
+
+	writeJSON(w, http.StatusOK, result)
+}
+
 func (s *Server) handleRepeaterStatus(w http.ResponseWriter, r *http.Request) {
 	ops, ok := s.repeaterOps(r.PathValue("name"))
 	if !ok {

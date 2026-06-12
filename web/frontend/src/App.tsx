@@ -50,6 +50,15 @@ const MonitoringDetailPage = lazy(() =>
     default: m.MonitoringDetailPage,
   })),
 );
+const BotsPage = lazy(() =>
+  import("@/pages/BotsPage").then((m) => ({ default: m.BotsPage })),
+);
+const MqttPage = lazy(() =>
+  import("@/pages/MqttPage").then((m) => ({ default: m.MqttPage })),
+);
+const RadioPage = lazy(() =>
+  import("@/pages/RadioPage").then((m) => ({ default: m.RadioPage })),
+);
 
 function PageFallback() {
   return (
@@ -72,6 +81,9 @@ export function App() {
           <Route path="/traces" element={<TracesPage />} />
           <Route path="/monitoring" element={<MonitoringPage />} />
           <Route path="/monitoring/:pubkey" element={<MonitoringDetailPage />} />
+          <Route path="/bots" element={<BotsPage />} />
+          <Route path="/mqtt" element={<MqttPage />} />
+          <Route path="/radio" element={<RadioPage />} />
           <Route path="/companions" element={<CompanionsPage />} />
           <Route path="/companions/:name" element={<CompanionDetailPage />} />
           <Route

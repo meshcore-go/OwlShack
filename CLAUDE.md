@@ -37,10 +37,10 @@ Capabilities visible in the UI:
 | Frontend | **React 19** + Vite 6 + TypeScript 5.7, Tailwind v4, **shadcn/ui (new-york style)** |
 | Routing | `react-router-dom@7` |
 | Real-time | WebSocket at `/api/ws`, topics: `peers`, `packets`, `messages`, `traces` |
-| Mesh proto | `github.com/meshcore-go/meshcore-go` (locally replaced via `../meshcore-go` in `go.mod`) |
+| Mesh proto | `github.com/meshcore-go/meshcore-go` (lockstep local dev via untracked `go.work` pointing at `../meshcore-go`; `go.mod` pins the published release that CI builds against) |
 | Map | Leaflet + CARTO tiles (dark/light auto-switch via `<html class="dark">`) |
 | Toasts | `sonner` |
-| Config | TOML at `config.toml` in CWD (see `config.toml.example`) |
+| Config | Stored in SQLite (`app_config` table); config files are one-time imports (see `config.toml.example`) |
 
 > **Important**: The frontend is React, not Preact. Migrating off Preact was the first large change in the recent UI rewrite — DaisyUI, PicoCSS, preact-router, `@preact/preset-vite`, lucide-preact have been removed and must NOT be reintroduced.
 
@@ -114,7 +114,8 @@ internal/
   client/                  clients for remote nodes we TALK TO
     repeater/              repeater.Client: login, status, CLI, path, neighbours, telemetry, ACL
   echo/                    echo.Tracker: tx echoes/repeats; emits repeatCount WS updates
-  modem/                   modem.Setup/State/MuxOptions + KISS/companion stats providers
+  modem/                   modem.Setup/State/MuxOptions + KISS stats provider
+                           (KISS modems only — companion-modem mode was removed)
   mqtt/                    MQTT observer + packet/status formatting + JWT auth
   trigger/                 Trigger interface, ChannelTrigger, CronTrigger, Templater
   api/                     HTTP+WS server (mux, routes, websocket hub); Backend seam
@@ -192,6 +193,8 @@ hooks/
                    url=null to defer. Use this instead of hand-rolling
                    loading/error/useEffect fetch state on a page.
   use-mobile.ts    shadcn-shipped breakpoint hook
+  useConfig.ts     config types + GET /api/config + full-document PUT save()
+                   (see "Config management" section — always clone & mutate)
 
 lib/
   utils.ts         cn() (clsx + tailwind-merge)
@@ -218,6 +221,9 @@ pages/
   ChannelsPage.tsx
   RepeatersListPage.tsx    per-companion repeater roster
   RepeaterDetailPage.tsx   login + 4 tabs (Status / Terminal / Neighbors / Settings)
+  BotsPage.tsx             trigger CRUD across companions (group/cron, dialog editor)
+  MqttPage.tsx             top-level mqtt block: node selector + broker CRUD
+  RadioPage.tsx            connection/baud + RF params + listenAddr/logLevel
 ```
 
 ---
@@ -266,6 +272,12 @@ POST /api/companions/{name}/repeaters/{pubkey}/cli           { command }
 GET|DELETE /api/companions/{name}/repeaters/{pubkey}/session
 GET|DELETE|PUT /api/companions/{name}/repeaters/{pubkey}/path
 
+POST /api/companions/{name}/rooms/{pubkey}/login             { password, syncSince? }
+GET|DELETE /api/companions/{name}/rooms/{pubkey}/session
+
+GET  /api/config                                              (full config JSON, fresh from disk)
+PUT  /api/config                                              (full-document replace → validate → write → SIGHUP reload)
+
 GET  /api/nodes/monitored
 GET  /api/nodes/{pubkey}/metrics
 GET  /api/nodes/{pubkey}/history?metric=&from=&to=&bucket=
@@ -277,6 +289,70 @@ WS   /api/ws
 `?afterId=` was added in the recent UI rewrite. `internal/store/message.go` exports `ListAfter(companionID, channel, afterID, limit)` and `routes_messages.go` honours `?afterId=` to return messages with `id > afterID` ordered ASC. The frontend uses this for delta backfill on cache re-open and on WS reconnect.
 
 ---
+
+## Config management (web UI)
+
+The sidebar has **Bots** (Comms) and **MQTT** / **Radio** (System) plus
+add/edit/delete on the Companions page. All of them edit the config through
+one seam: `hooks/useConfig.ts` GETs `/api/config`, the page mutates a
+`structuredClone`, and PUTs the **whole document** back —
+`backend.UpdateConfig` validates, stores it, and SIGHUPs the supervisor.
+Reloads are diff-based (`reloadCompanions` in `internal/app/app.go`): only
+companions whose *effective* block changed (JSON-compared after the mqtt
+injection) are restarted — unchanged ones keep running, sessions intact, no
+re-advert; log-level changes apply with zero restarts. A radio/connection
+change still restarts everything (modem reconnect); `listenAddr` needs a
+process restart.
+
+- **The database is the source of truth** (`app_config` single-row table,
+  JSON). Config files are one-time imports (`internal/app/config.go`
+  `resolveConfig`): an explicit `-config path` flag imports and **overwrites**
+  the stored config; otherwise the DB wins; a first run imports a
+  default-named file from the cwd or bootstraps a default config with one
+  generated companion. SIGHUP reloads from the DB. Export/import endpoints
+  are future work — `GET /api/config` is a de-facto JSON export today.
+
+- **Validation is the crash guard.** A `startCompanions` failure after reload
+  **exits the process**, so `Config.Validate()` must reject anything that
+  would fail companion construction: trigger type/template/regex/cron,
+  channel privateKey hex, duplicate companion names (the store keys
+  messages/contacts by name), mqtt node references, broker fields.
+  `TriggerConfig.Validate` parse-checks templates with stubbed trigger funcs
+  (`formatPathBytes`) — extend the stubs if the templater gains functions.
+- **MQTT is top-level, one node.** `Config.Mqtt` (`mqtt.node` selects the
+  feeding companion, empty = first; `enabled` nil = on). Legacy per-companion
+  `[companion.mqtt]` blocks are hoisted by `ApplyDefaults` on load — first
+  one wins. At runtime `startCompanions` copies the block into the selected
+  companion's config; `CompanionConfig.Mqtt` is otherwise deprecated.
+- **Broker topics are templates.** `broker.packetTopic` / `broker.statusTopic`
+  take placeholders `{iata} {pubkey} {name}` (meshcoretomqtt's `{IATA}` /
+  `{PUBLIC_KEY}` uppercase forms also resolve); empty = the old hardcoded
+  `meshcore/{iata}/{pubkey}/<kind>`. The deprecated `topicPrefix` field is
+  folded into explicit templates by `ApplyDefaults` (`migrateTopicPrefix`).
+  Resolution is `resolveTopics` in `internal/mqtt/observer.go` — the LWT in
+  `connectBroker` must use the same resolution as the live status publisher.
+  Templates are validated in `BrokerConfig.Validate` (unknown placeholders,
+  MQTT wildcards). Per-broker auth: `token` (Ed25519 JWT from the node
+  identity, username `v1_<pubkey>`, 10-min lifetime, auto-refresh) or `basic`
+  (user/pass). The Add Broker modal has presets (`BROKER_PRESETS` in
+  `MqttPage.tsx`) mirroring meshcoretomqtt's: LetsMesh US/EU, Waev A/B,
+  MeshMapper — update there if upstream endpoints change.
+- **`ChannelRef` JSON gotcha**: it implements `UnmarshalText` (TOML string
+  form), which makes encoding/json demand a string — `ChannelList`'s
+  `UnmarshalJSON` therefore decodes objects into a tag-equivalent anonymous
+  struct. Don't "simplify" it back to unmarshalling `ChannelRef` directly;
+  that breaks the GET→PUT round-trip with a 422.
+- **Companion identity lives inline**: `companion.privateKey` (64-hex ed25519
+  seed). Empty keys are generated by `EnsureCompanionKeys` whenever a config
+  is persisted, and `UpdateConfig` inherits missing keys from the stored
+  config **by companion name** (`inheritCompanionKeys`) so a PUT that omits
+  keys can never silently rotate a running identity. Legacy `keyFile` entries
+  are read and inlined at file import (`MigrateKeyFiles`); the old key files
+  on disk become unused. Note: GET /api/config therefore returns private
+  keys. Renaming a companion orphans its DB history (keyed by name) — the
+  editor warns — and breaks key inheritance for that PUT (the spread of the
+  existing object preserves the key client-side, so this only matters for
+  hand-crafted PUTs).
 
 ## Node monitoring
 
@@ -512,6 +588,57 @@ flags_byte = (type << 2) | (attempt & 3)
 
 ---
 
+## Room servers (chat — "talking" is implemented; management UI is not)
+
+A room server (peer type `ROOM`) hosts a server-stored chat: clients log in
+(ANON_REQ), **post** via plain DMs, and the server **pushes** stored posts back
+one-at-a-time, ACK-gated. Key design decision: **a room conversation IS the
+`dm:<pubkey>` thread** — posting reuses `SendContactMessage` verbatim (the
+room session secret equals the static-identity ECDH secret, because login
+sends our static pubkey), so delivery status, retry, WS shapes and the chat UI
+all come for free. Sender labels vary per message (group-chat-like) — the
+existing `MessageGroup` sender rendering already handles that.
+
+- **Login** (`repeater.Client.SendRoomLogin`): plaintext is
+  `[timestamp:4][sync_since:4][password:N]` — the extra `sync_since` is the
+  "push me posts newer than this" cursor. Response byte[6] role: `1`=admin,
+  `2`=read-only (guest), `0`=read-write. Sessions share the repeater session
+  map (`Session.IsRoom`/`Role`). Blank password = re-auth by pubkey if already
+  in the server's ACL.
+- **sync_since derivation**: `handleRoomLogin` uses the newest stored rx
+  message in the `dm:<pubkey>` thread (`store.Messages.LatestRx`) when the
+  body omits `syncSince`. No separate cursor column — the messages table is
+  the cursor. First join (no history) sends 0 → server backfills its whole
+  cyclic queue (max 32 posts).
+- **Push RX** (`companion.handleRoomPush`): a TXT_MSG with
+  `plaintext[4]>>2 == 2` (TXT_TYPE_SIGNED_PLAIN), layout
+  `[post_timestamp:4][flags:1][author_pubkey_prefix:4][text:N]`. **The ACK
+  CRC hashes OUR pubkey** (`sha256(plaintext_unpadded || recipient_key)`),
+  unlike DM ACKs which hash the sender's — `sendDMAck` takes an `ackHashKey`
+  param for this. Not ACKing stalls the server's push stream for us. Dedup is
+  by (post timestamp, text) against the last 50 stored rows — retries carry a
+  fresh attempt byte so the packet differs, but the post is the same.
+- **Receive survives restarts without re-login**: the server's ACL + secret
+  persist on its filesystem and pushes decrypt with the contact ECDH secret,
+  so posts keep flowing in and get ACKed with no local session. The session
+  only gates the UI (join bar / read-only composer) and posting freshness.
+- **Author names** resolve from the 4-byte pubkey prefix via
+  `store.Peers.LookupByHash`; unknown authors render as the hex prefix.
+- **Posts cap at 151 chars** (firmware `MAX_POST_TEXT_LEN = 160-9`); the
+  composer charLimit drops to 151 for ROOM threads — longer text would be
+  silently truncated server-side.
+- **UI**: `CompanionDetailPage` shows a `RoomJoinBar` instead of the composer
+  for an un-joined ROOM thread (password + save-to-contact switch → POST
+  `/rooms/{pubkey}/login`); saved password lives in contact metadata
+  `roomPassword`. The PATCH contact-metadata endpoint **replaces** the whole
+  blob — always GET + spread + PATCH (RoomJoinBar does). Read-only role
+  disables the composer. `/rooms/{pubkey}/session` returns the bare session
+  or `{loggedIn:false}` (and `null` before any login — same presence-of-
+  `pubkeyHex` derivation as repeaters).
+- **Not done yet**: room management page (status tail differs: bytes 48–52 are
+  `n_posted`/`n_post_push` u16s, not `rx_air_time` — `parseRepeaterStatus`
+  would mis-read them), keep-alive (REQ 0x02) resync, auto re-join on startup.
+
 ## Message delivery status
 
 Messages have a `status` column: `NULL` (rx/legacy), `"sending"`, `"delivered"`, `"failed"`.
@@ -541,6 +668,8 @@ Messages have a `status` column: `NULL` (rx/legacy), `"sending"`, `"delivered"`,
 | Repeater login appears successful but stays on login screen | `loggedIn` derivation in `RepeaterDetailPage.tsx`. |
 | Settings load shows blank value | Real CLI command name — check it against `MeshCore/src/helpers/CommonCLI.cpp`. Don't assume the firmware has combined commands like `get coords`. |
 | Threads list shows repeaters | Confirm `isRepeater` is set on the conversation row — set by `routes_conversations.go` from contact metadata or peer type. |
+| Room posts stop arriving mid-backlog | The push stream is ACK-gated — check `handleRoomPush` sent the ACK (hashes OUR pubkey, not the room's) and that it reached the server (it retries ~3× then gives up until the next login/post). |
+| Room post shows garbled 4 leading bytes | The SIGNED_PLAIN branch was bypassed — text must parse from `plaintext[9:]`, not `[5:]`. |
 | Map marker icon broken | Default-icon `mergeOptions` at top of `RepeaterDetailPage.tsx`; Vite needs explicit imports of leaflet's marker images. |
 | "Works on Owly 1 but not Owly 2" or vice versa | They have different admin passwords. Settings tab is admin-only; logging in as guest hides Settings. |
 | Bundle warning > 500 kB | Known. Code-splitting routes via `React.lazy` would help; not done yet. |

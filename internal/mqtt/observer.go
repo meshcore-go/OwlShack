@@ -48,7 +48,10 @@ type brokerClient struct {
 	client   paho.Client
 	pubKeyHx string
 	iata     string
-	prefix   string
+
+	// Resolved (placeholder-expanded) publish topics for this broker.
+	packetTopicStr string
+	statusTopicStr string
 
 	disallowed map[byte]bool
 	dedup      *meshcore.DedupCache // nil when dedup disabled for this broker
@@ -71,12 +74,32 @@ func (b *brokerClient) swapClient(c paho.Client) {
 	b.clientMu.Unlock()
 }
 
-func (b *brokerClient) packetTopic() string {
-	return fmt.Sprintf("%s/%s/%s/packets", b.prefix, b.iata, b.pubKeyHx)
-}
+func (b *brokerClient) packetTopic() string { return b.packetTopicStr }
 
-func (b *brokerClient) statusTopic() string {
-	return fmt.Sprintf("%s/%s/%s/status", b.prefix, b.iata, b.pubKeyHx)
+func (b *brokerClient) statusTopic() string { return b.statusTopicStr }
+
+const (
+	defaultPacketTopic = "meshcore/{iata}/{pubkey}/packets"
+	defaultStatusTopic = "meshcore/{iata}/{pubkey}/status"
+)
+
+// resolveTopics expands a broker's topic templates (defaulting to the
+// meshcoretomqtt-compatible "meshcore/{iata}/{pubkey}/<kind>" structure).
+func resolveTopics(bcfg config.BrokerConfig, iata, pubKeyHx, origin string) (packetTopic, statusTopic string) {
+	expand := func(tmpl, fallback string) string {
+		if tmpl == "" {
+			tmpl = fallback
+		}
+		return strings.NewReplacer(
+			"{iata}", iata, "{IATA}", iata,
+			"{pubkey}", pubKeyHx, "{PUBKEY}", pubKeyHx,
+			"{publicKey}", pubKeyHx, "{PUBLIC_KEY}", pubKeyHx,
+			"{name}", origin, "{NAME}", origin, "{origin}", origin,
+		).Replace(tmpl)
+	}
+
+	return expand(bcfg.PacketTopic, defaultPacketTopic),
+		expand(bcfg.StatusTopic, defaultStatusTopic)
 }
 
 func (b *brokerClient) isAllowed(payloadType byte) bool {
@@ -145,20 +168,18 @@ func (o *Observer) Start(ctx context.Context) error {
 		}
 
 		disallowed := parseDisallowed(bcfg.DisallowedPacketTypes)
-		prefix := bcfg.TopicPrefix
-		if prefix == "" {
-			prefix = "meshcore"
-		}
+		packetTopic, statusTopic := resolveTopics(bcfg, iata, o.pubKeyHx, o.originName)
 
 		bc := &brokerClient{
-			cfg:        bcfg,
-			client:     client,
-			pubKeyHx:   o.pubKeyHx,
-			iata:       iata,
-			prefix:     prefix,
-			disallowed: disallowed,
-			publishCh:  make(chan publishJob, publishQueueDepth),
-			workerDone: make(chan struct{}),
+			cfg:            bcfg,
+			client:         client,
+			pubKeyHx:       o.pubKeyHx,
+			iata:           iata,
+			packetTopicStr: packetTopic,
+			statusTopicStr: statusTopic,
+			disallowed:     disallowed,
+			publishCh:      make(chan publishJob, publishQueueDepth),
+			workerDone:     make(chan struct{}),
 		}
 		if bcfg.Dedup {
 			bc.dedup = &meshcore.DedupCache{}
@@ -432,11 +453,7 @@ func (o *Observer) connectBroker(bcfg config.BrokerConfig, iata string) (paho.Cl
 		opts.SetPassword(bcfg.Password)
 	}
 
-	prefix := bcfg.TopicPrefix
-	if prefix == "" {
-		prefix = "meshcore"
-	}
-	statusTopic := fmt.Sprintf("%s/%s/%s/status", prefix, iata, o.pubKeyHx)
+	_, statusTopic := resolveTopics(bcfg, iata, o.pubKeyHx, o.originName)
 
 	// LWT uses minimal status (no live stats — we're about to disconnect).
 	offlinePayload, _ := formatStatus("offline", o.originName, o.pubKeyHx, modem.RadioInfo{}, modem.DeviceStats{}, PacketCounts{}, 0)

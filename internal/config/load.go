@@ -46,6 +46,17 @@ func loadFromCwd() (*Config, string, error) {
 	return nil, "", fmt.Errorf("no config file found in %s (tried %s)", cwd, strings.Join(defaultConfigNames, ", "))
 }
 
+// FindDefaultConfig returns the path of a default-named config file in the
+// working directory, or "" when none exists.
+func FindDefaultConfig() string {
+	for _, name := range defaultConfigNames {
+		if _, err := os.Stat(name); err == nil {
+			return name
+		}
+	}
+	return ""
+}
+
 // LoadFromPath reads and parses the config at path, selecting the decoder from
 // the file extension.
 func LoadFromPath(path string) (*Config, string, error) {
@@ -99,14 +110,6 @@ func ParseConnection(conn string) (scheme, addr string, ok bool) {
 // Validate checks that the config's fields are within acceptable ranges. Nil
 // pointer fields are treated as "use default" and skipped.
 func (c *Config) Validate() error {
-	if c.NodeType != nil {
-		switch *c.NodeType {
-		case "kiss", "companion":
-		default:
-			return fmt.Errorf("invalid nodeType %q: must be \"kiss\" or \"companion\"", *c.NodeType)
-		}
-	}
-
 	if c.Connection != nil {
 		_, _, ok := ParseConnection(*c.Connection)
 		if !ok {
@@ -142,12 +145,46 @@ func (c *Config) Validate() error {
 		return fmt.Errorf("at least one companion must be configured")
 	}
 
+	// A startCompanions failure after a reload exits the process, so anything
+	// that would fail companion construction (bad regex/cron/channel key) must
+	// be rejected here, before the config is ever written.
+	seen := make(map[string]bool, len(c.Companions))
+	seenKeys := make(map[string]string, len(c.Companions))
 	for i, comp := range c.Companions {
 		if comp.Name == "" {
 			return fmt.Errorf("companion[%d]: name is required", i)
 		}
-		if comp.KeyFile == "" {
-			return fmt.Errorf("companion[%d] %q: keyFile is required", i, comp.Name)
+		// The store keys all persisted state (messages, contacts) by name.
+		if seen[comp.Name] {
+			return fmt.Errorf("duplicate companion name %q", comp.Name)
+		}
+		seen[comp.Name] = true
+		if comp.PrivateKey != "" {
+			if err := validateSeedHex(comp.PrivateKey); err != nil {
+				return fmt.Errorf("companion %q: %w", comp.Name, err)
+			}
+			if other, dup := seenKeys[comp.PrivateKey]; dup {
+				return fmt.Errorf("companions %q and %q share the same privateKey", other, comp.Name)
+			}
+			seenKeys[comp.PrivateKey] = comp.Name
+		}
+		if comp.Triggers != nil {
+			for j, trig := range *comp.Triggers {
+				if err := trig.Validate(); err != nil {
+					return fmt.Errorf("companion %q trigger[%d]: %w", comp.Name, j, err)
+				}
+			}
+		}
+	}
+
+	if c.Mqtt != nil {
+		if c.Mqtt.Node != nil && *c.Mqtt.Node != "" && !seen[*c.Mqtt.Node] {
+			return fmt.Errorf("mqtt node %q does not match any companion", *c.Mqtt.Node)
+		}
+		for i, b := range c.Mqtt.Brokers {
+			if err := b.Validate(); err != nil {
+				return fmt.Errorf("mqtt broker[%d] %q: %w", i, b.Name, err)
+			}
 		}
 	}
 
@@ -157,25 +194,13 @@ func (c *Config) Validate() error {
 // ModemSettingsChanged reports whether a config reload altered any field that
 // requires tearing down and re-establishing the modem connection.
 func ModemSettingsChanged(old, new_ *Config) bool {
-	if derefStr(old.NodeType) != derefStr(new_.NodeType) {
-		return true
-	}
-
-	switch derefStr(old.NodeType) {
-	case "companion":
-		return derefStr(old.Connection) != derefStr(new_.Connection) ||
-			derefInt(old.BaudRate) != derefInt(new_.BaudRate)
-	case "kiss":
-		return derefStr(old.Connection) != derefStr(new_.Connection) ||
-			derefInt(old.BaudRate) != derefInt(new_.BaudRate) ||
-			derefFloat(old.Freq) != derefFloat(new_.Freq) ||
-			derefFloat(old.Bw) != derefFloat(new_.Bw) ||
-			derefUint8(old.SF) != derefUint8(new_.SF) ||
-			derefUint8(old.CR) != derefUint8(new_.CR) ||
-			derefUint8(old.TX) != derefUint8(new_.TX)
-	}
-
-	return false
+	return derefStr(old.Connection) != derefStr(new_.Connection) ||
+		derefInt(old.BaudRate) != derefInt(new_.BaudRate) ||
+		derefFloat(old.Freq) != derefFloat(new_.Freq) ||
+		derefFloat(old.Bw) != derefFloat(new_.Bw) ||
+		derefUint8(old.SF) != derefUint8(new_.SF) ||
+		derefUint8(old.CR) != derefUint8(new_.CR) ||
+		derefUint8(old.TX) != derefUint8(new_.TX)
 }
 
 func derefStr(p *string) string {

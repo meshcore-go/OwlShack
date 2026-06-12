@@ -83,14 +83,17 @@ type Status struct {
 type Session struct {
 	PubKeyHex    string    `json:"pubkeyHex"`
 	IsAdmin      bool      `json:"isAdmin"`
+	Role         string    `json:"role,omitempty"` // room sessions: "admin" | "read-write" | "read-only"
+	IsRoom       bool      `json:"isRoom,omitempty"`
 	LoggedInAt   time.Time `json:"loggedInAt"`
 	sharedSecret []byte
 	localPubKey  [32]byte
 }
 
 type LoginResult struct {
-	Success bool `json:"success"`
-	IsAdmin bool `json:"isAdmin"`
+	Success bool   `json:"success"`
+	IsAdmin bool   `json:"isAdmin"`
+	Role    string `json:"role,omitempty"`
 }
 
 type pendingRequest struct {
@@ -247,6 +250,16 @@ func (rm *Client) SetPeerPath(pubkeyHex, pathHex string, pathHashSize int) error
 }
 
 func (rm *Client) SendLogin(pubkeyHex, password string, timeout time.Duration) (*LoginResult, error) {
+	return rm.sendLogin(pubkeyHex, password, nil, timeout)
+}
+
+// SendRoomLogin logs in to a room server — same flow as SendLogin, but the
+// plaintext carries a sync_since cursor (the server pushes posts newer than it).
+func (rm *Client) SendRoomLogin(pubkeyHex, password string, syncSince uint32, timeout time.Duration) (*LoginResult, error) {
+	return rm.sendLogin(pubkeyHex, password, &syncSince, timeout)
+}
+
+func (rm *Client) sendLogin(pubkeyHex, password string, roomSyncSince *uint32, timeout time.Duration) (*LoginResult, error) {
 	pubkeyBytes, err := hex.DecodeString(pubkeyHex)
 	if err != nil {
 		return nil, fmt.Errorf("invalid pubkey hex: %w", err)
@@ -275,9 +288,19 @@ func (rm *Client) SendLogin(pubkeyHex, password string, timeout time.Duration) (
 		return nil, fmt.Errorf("deriving shared secret: %w", err)
 	}
 
-	plaintext := make([]byte, 4+len(password))
-	binary.LittleEndian.PutUint32(plaintext[:4], uint32(time.Now().Unix()))
-	copy(plaintext[4:], password)
+	var plaintext []byte
+	if roomSyncSince != nil {
+		// Room login: [timestamp:4][sync_since:4][password:N]
+		plaintext = make([]byte, 8+len(password))
+		binary.LittleEndian.PutUint32(plaintext[:4], uint32(time.Now().Unix()))
+		binary.LittleEndian.PutUint32(plaintext[4:8], *roomSyncSince)
+		copy(plaintext[8:], password)
+	} else {
+		// Repeater login: [timestamp:4][password:N]
+		plaintext = make([]byte, 4+len(password))
+		binary.LittleEndian.PutUint32(plaintext[:4], uint32(time.Now().Unix()))
+		copy(plaintext[4:], password)
+	}
 
 	encrypted, err := meshcore.EncryptThenMAC(sharedSecret, plaintext)
 	if err != nil {
@@ -349,16 +372,31 @@ func (rm *Client) SendLogin(pubkeyHex, password string, timeout time.Duration) (
 	select {
 	case data := <-resultCh:
 		isAdmin := len(data) > 6 && data[6] == 1
+		role := ""
+		if roomSyncSince != nil {
+			// Room login response byte 6: 1=admin, 2=read-only (guest), 0=read-write
+			role = "read-write"
+			if len(data) > 6 {
+				switch data[6] {
+				case 1:
+					role = "admin"
+				case 2:
+					role = "read-only"
+				}
+			}
+		}
 		rm.mu.Lock()
 		rm.sessions[pubkeyHex] = &Session{
 			PubKeyHex:    pubkeyHex,
 			IsAdmin:      isAdmin,
+			Role:         role,
+			IsRoom:       roomSyncSince != nil,
 			LoggedInAt:   time.Now(),
 			sharedSecret: sharedSecret,
 			localPubKey:  selfIdentity.PublicKey(),
 		}
 		rm.mu.Unlock()
-		return &LoginResult{Success: true, IsAdmin: isAdmin}, nil
+		return &LoginResult{Success: true, IsAdmin: isAdmin, Role: role}, nil
 	case <-time.After(timeout):
 		return nil, fmt.Errorf("login timed out")
 	}

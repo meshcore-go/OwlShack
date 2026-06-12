@@ -1,8 +1,15 @@
 package config
 
 type CompanionConfig struct {
-	Name    string `json:"name" yaml:"name" toml:"name"`
-	KeyFile string `json:"keyFile" yaml:"keyFile" toml:"keyFile"`
+	Name string `json:"name" yaml:"name" toml:"name"`
+
+	// PrivateKey is the companion's identity as a hex ed25519 seed (64 hex
+	// chars). Empty = generated when the config is persisted.
+	PrivateKey string `json:"privateKey,omitempty" yaml:"privateKey,omitempty" toml:"privateKey,omitempty"`
+
+	// Deprecated: identities live inline in PrivateKey now. Key files named
+	// here are read and inlined when a file config is imported.
+	KeyFile string `json:"keyFile,omitempty" yaml:"keyFile,omitempty" toml:"keyFile,omitempty"`
 
 	// Advert Data
 	Latitude       *float64 `json:"latitude" yaml:"latitude" toml:"latitude"`
@@ -13,10 +20,13 @@ type CompanionConfig struct {
 	Channels *ChannelList `json:"channels,omitempty" yaml:"channels,omitempty" toml:"channels,omitempty"`
 
 	// Bots
-	Triggers *[]TriggerConfig `json:"triggers" yaml:"triggers" toml:"trigger"`
+	Triggers *[]TriggerConfig `json:"triggers,omitempty" yaml:"triggers,omitempty" toml:"trigger,omitempty"`
 
-	// MQTT Out Config
-	Mqtt *MqttConfig `json:"mqtt" yaml:"mqtt" toml:"mqtt"`
+	// Deprecated: mqtt lives at the top level of Config (one observer, one
+	// node, selected by mqtt.node). Legacy blocks here are hoisted by
+	// ApplyDefaults; at runtime the field is only set by startCompanions for
+	// the selected node.
+	Mqtt *MqttConfig `json:"mqtt,omitempty" yaml:"mqtt,omitempty" toml:"mqtt,omitempty"`
 }
 
 func (c *CompanionConfig) HasLatLon() bool {

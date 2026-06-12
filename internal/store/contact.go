@@ -9,6 +9,7 @@ import (
 type ContactMetadata struct {
 	IsRepeater       bool   `json:"isRepeater,omitempty"`
 	RepeaterPassword string `json:"repeaterPassword,omitempty"`
+	RoomPassword     string `json:"roomPassword,omitempty"`
 
 	// Monitor enables background analytics/history polling for this node. Set
 	// via the UI alongside the repeater password — runtime per-node state, same

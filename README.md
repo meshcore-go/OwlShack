@@ -1,6 +1,8 @@
-# meshcore-bot
+# OwlShack
 
 A configurable bot framework for [MeshCore](https://github.com/meshcore-dev/MeshCore) mesh networks, built with the pure Go [meshcore-go](https://github.com/meshcore-go/meshcore-go) library.
+
+> **Note:** OwlShack is the project's new name. The repository, release binaries and Docker image are still published as `meshcore-bot` for now, so the commands below use that name.
 
 ## Features
 
@@ -70,7 +72,6 @@ Log out and back in (or reboot) for the change to take effect.
 Create a file called `config.toml` in the same folder as the binary. Here's a minimal example that responds to "ping" on the `#testing` channel:
 
 ```toml
-nodeType = "kiss"
 connection = "serial:///dev/ttyACM0"
 
 freq = 917.375
@@ -132,12 +133,11 @@ docker run -d \
 
 | Field | Description | Default |
 |-------|-------------|---------|
-| `nodeType` | `"kiss"` (direct radio) or `"companion"` (piggyback on existing device) | `"kiss"` |
 | `connection` | `serial:///dev/ttyACM0` or `tcp://host:port` | `serial:///dev/ttyACM0` |
 | `baudRate` | Serial baud rate | `115200` |
 | `logLevel` | Log level: `debug`, `info`, `warn`, `error`, `trace` (overridden by `-v` flags) | `info` |
 
-### Radio Settings (KISS only)
+### Radio Settings
 
 | Field | Description | Default |
 |-------|-------------|---------|
@@ -232,7 +232,6 @@ After sending a message, the bot listens for the message to be repeated back by 
 ### KISS Node with Private Channel
 
 ```toml
-nodeType = "kiss"
 connection = "serial:///dev/ttyACM0"
 baudRate = 115200
 
@@ -255,22 +254,6 @@ name = "MyPrivateChannel"
 privateKey = "7d78eab105a663ab3504d99a0e5b1891"
 ```
 
-### Companion Node
-
-```toml
-nodeType = "companion"
-connection = "tcp://127.0.0.1:8001"
-
-[[bot]]
-name = "Companion Bot"
-
-[[bot.trigger]]
-type = "channel"
-template = "I am running via companion! Hello {{.Sender}}"
-channels = ["#testing"]
-match = ["(?i)^!hello"]
-```
-
 ### Cron Trigger
 
 ```toml
@@ -291,7 +274,7 @@ template = "Periodic update: The time is {{.Time}}"
 
 ## MQTT Integration
 
-meshcore-bot can publish observed mesh traffic to MQTT brokers. This is used by services like [LetsMesh](https://letsmesh.net) to aggregate mesh network data.
+OwlShack can publish observed mesh traffic to MQTT brokers. This is used by services like [LetsMesh](https://letsmesh.net) to aggregate mesh network data.
 
 Each `[[observer]]` defines an MQTT observer node that forwards packets to one or more brokers. A unique identity key file is used for authentication.
 

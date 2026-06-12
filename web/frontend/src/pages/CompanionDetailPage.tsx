@@ -25,6 +25,7 @@ import {
   ExternalLink,
   Hash,
   Loader2,
+  LogIn,
   MessageSquare,
   MoreVertical,
   Radar,
@@ -46,6 +47,7 @@ import { PeerAvatar } from "@/components/PeerAvatar";
 import { snrTextClass } from "@/components/SignalStrength";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
+import { Switch } from "@/components/ui/switch";
 import { Textarea } from "@/components/ui/textarea";
 import {
   Select,
@@ -119,6 +121,15 @@ interface Message {
   hops?: number | null;
   pathHashSize?: number | null;
   status?: string | null;
+}
+
+// GET /rooms/{pubkey}/session returns {loggedIn:false} or the bare session
+// struct — presence of pubkeyHex means logged in, same rule as repeaters.
+interface RoomSession {
+  loggedIn?: boolean;
+  pubkeyHex?: string;
+  isAdmin?: boolean;
+  role?: string;
 }
 
 interface PathHop {
@@ -264,9 +275,42 @@ export function CompanionDetailPage() {
   );
 
   const isContact = activeConversation?.type === "contact";
-  const charLimit = isContact
-    ? 155
-    : Math.max(0, 153 - decodedName.length);
+  const isRoom = activeConversation?.peerType === "ROOM";
+  // Rooms silently truncate posts at 151 chars (firmware MAX_POST_TEXT_LEN).
+  const charLimit = isRoom
+    ? 151
+    : isContact
+      ? 155
+      : Math.max(0, 153 - decodedName.length);
+
+  const roomPubkey = isRoom ? (activeConversation?.pubkey ?? null) : null;
+  const [roomSession, setRoomSession] = useState<RoomSession | null>(null);
+  const [roomSessionLoading, setRoomSessionLoading] = useState(false);
+
+  useEffect(() => {
+    setRoomSession(null);
+    if (!roomPubkey || !decodedName) return;
+    let cancelled = false;
+    setRoomSessionLoading(true);
+    fetch(
+      `/api/companions/${encodeURIComponent(decodedName)}/rooms/${roomPubkey}/session`,
+    )
+      .then((r) => (r.ok ? r.json() : null))
+      .then((s: RoomSession | null) => {
+        if (!cancelled) setRoomSession(s);
+      })
+      .catch(() => {})
+      .finally(() => {
+        if (!cancelled) setRoomSessionLoading(false);
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [decodedName, roomPubkey]);
+
+  const roomLoggedIn =
+    !!roomSession && roomSession.loggedIn !== false && !!roomSession.pubkeyHex;
+  const roomReadOnly = roomLoggedIn && roomSession?.role === "read-only";
 
   useEffect(() => {
     if (typeof window !== "undefined") {
@@ -1028,7 +1072,11 @@ export function CompanionDetailPage() {
                   <div className="text-mono-xs text-muted-foreground">
                     {activeConversation.type === "channel"
                       ? "broadcast channel"
-                      : "direct message"}
+                      : isRoom
+                        ? roomLoggedIn
+                          ? `room server · ${roomSession?.role ?? "joined"}`
+                          : "room server · not joined"
+                        : "direct message"}
                     {activeConversation.lastActive && (
                       <>
                         {" "}
@@ -1103,6 +1151,14 @@ export function CompanionDetailPage() {
                 <div ref={messagesEndRef} />
               </div>
 
+              {isRoom && !roomLoggedIn ? (
+                <RoomJoinBar
+                  companion={decodedName}
+                  pubkey={roomPubkey ?? ""}
+                  checking={roomSessionLoading}
+                  onJoined={setRoomSession}
+                />
+              ) : (
               <div className="relative border-t border-border bg-card">
                 {emojiAC.dropdown}
                 <div className="px-3 py-2 flex items-end gap-2">
@@ -1135,14 +1191,17 @@ export function CompanionDetailPage() {
                     }}
                     onKeyDown={onComposerKey}
                     onBlur={() => emojiAC.close()}
-                    placeholder="transmit…"
+                    placeholder={
+                      roomReadOnly ? "read-only access" : "transmit…"
+                    }
+                    disabled={roomReadOnly}
                     className="resize-none rounded-none border-border font-mono text-sm min-h-[2.25rem] max-h-[100px] bg-background"
                     style={{ height: "auto" }}
                   />
                   <Button
                     onClick={send}
                     disabled={
-                      sending || !composer.trim() || overLimit
+                      sending || !composer.trim() || overLimit || roomReadOnly
                     }
                     size="sm"
                     className="rounded-none h-9 font-mono text-[11px] uppercase tracking-[0.12em]"
@@ -1153,7 +1212,9 @@ export function CompanionDetailPage() {
                 </div>
                 <div className="px-3 pb-2 flex items-center justify-between">
                   <span className="text-mono-xs text-muted-foreground/60 hidden sm:inline">
-                    Enter sends · Shift+Enter newline
+                    {roomReadOnly
+                      ? "read-only access — posting disabled"
+                      : "Enter sends · Shift+Enter newline"}
                   </span>
                   <span
                     className={cn(
@@ -1177,6 +1238,7 @@ export function CompanionDetailPage() {
                   </div>
                 )}
               </div>
+              )}
             </>
           ) : (
             <div className="h-full grid place-items-center text-center p-8">
@@ -1448,6 +1510,143 @@ function ConversationRow({
         </div>
       </div>
     </button>
+  );
+}
+
+// Replaces the composer for a room thread until a login session exists.
+function RoomJoinBar({
+  companion,
+  pubkey,
+  checking,
+  onJoined,
+}: {
+  companion: string;
+  pubkey: string;
+  checking: boolean;
+  onJoined: (s: RoomSession) => void;
+}) {
+  const [password, setPassword] = useState("");
+  const [savePw, setSavePw] = useState(false);
+  const [savedPw, setSavedPw] = useState("");
+  const [metadata, setMetadata] = useState<Record<string, unknown> | null>(
+    null,
+  );
+  const [joining, setJoining] = useState(false);
+
+  useEffect(() => {
+    let cancelled = false;
+    setPassword("");
+    setSavedPw("");
+    setSavePw(false);
+    setMetadata(null);
+    fetch(
+      `/api/companions/${encodeURIComponent(companion)}/contacts/${pubkey}`,
+    )
+      .then((r) => (r.ok ? r.json() : null))
+      .then((c: { metadata?: Record<string, unknown> } | null) => {
+        if (cancelled || !c) return;
+        const meta = c.metadata ?? {};
+        setMetadata(meta);
+        const pw =
+          typeof meta.roomPassword === "string" ? meta.roomPassword : "";
+        setSavedPw(pw);
+        if (pw) setSavePw(true);
+      })
+      .catch(() => {});
+    return () => {
+      cancelled = true;
+    };
+  }, [companion, pubkey]);
+
+  const join = useCallback(async () => {
+    setJoining(true);
+    try {
+      const pw = password || savedPw;
+      const r = await fetch(
+        `/api/companions/${encodeURIComponent(companion)}/rooms/${pubkey}/login`,
+        {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ password: pw }),
+        },
+      );
+      if (!r.ok) {
+        const err = (await r.json().catch(() => null)) as {
+          error?: string;
+        } | null;
+        throw new Error(err?.error || "Join failed");
+      }
+      const result = (await r.json()) as { role?: string };
+
+      // PATCH replaces the whole metadata blob — merge with what's stored.
+      const desired = savePw ? pw : "";
+      if (metadata && (metadata.roomPassword ?? "") !== desired) {
+        await fetch(
+          `/api/companions/${encodeURIComponent(companion)}/contacts/${pubkey}`,
+          {
+            method: "PATCH",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({ ...metadata, roomPassword: desired }),
+          },
+        ).catch(() => {});
+      }
+
+      const sr = await fetch(
+        `/api/companions/${encodeURIComponent(companion)}/rooms/${pubkey}/session`,
+      );
+      const sess = sr.ok ? ((await sr.json()) as RoomSession) : null;
+      onJoined(
+        sess && sess.pubkeyHex
+          ? sess
+          : { pubkeyHex: pubkey, role: result.role },
+      );
+      toast.success(`Joined room${result.role ? ` · ${result.role}` : ""}`);
+    } catch (e) {
+      toast.error(e instanceof Error ? e.message : "Failed to join room");
+    } finally {
+      setJoining(false);
+    }
+  }, [companion, pubkey, password, savedPw, savePw, metadata, onJoined]);
+
+  return (
+    <div className="border-t border-border bg-card px-3 py-3 space-y-2">
+      <div className="flex items-center gap-2 font-mono text-[11px] uppercase tracking-[0.12em] text-muted-foreground">
+        <LogIn className="size-3.5" />
+        Join room to post &amp; sync messages
+      </div>
+      <div className="flex items-center gap-2">
+        <Input
+          type="password"
+          value={password}
+          onChange={(e) => setPassword(e.target.value)}
+          onKeyDown={(e) => {
+            if (e.key === "Enter") void join();
+          }}
+          placeholder={
+            savedPw ? "•••••• (saved)" : "room password (blank to re-auth)"
+          }
+          disabled={joining}
+          className="h-9 font-mono text-sm rounded-none border-border bg-background"
+        />
+        <Button
+          onClick={join}
+          disabled={joining || checking}
+          size="sm"
+          className="rounded-none h-9 font-mono text-[11px] uppercase tracking-[0.12em]"
+        >
+          {joining ? (
+            <Loader2 className="size-3.5 animate-spin" />
+          ) : (
+            <LogIn className="size-3.5" />
+          )}
+          join
+        </Button>
+      </div>
+      <label className="flex items-center gap-2 cursor-pointer text-mono-xs text-muted-foreground w-fit">
+        <Switch checked={savePw} onCheckedChange={setSavePw} />
+        save password to contact
+      </label>
+    </div>
   );
 }
 

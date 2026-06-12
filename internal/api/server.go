@@ -33,6 +33,7 @@ type CompanionChannelMutator func(name string) (adder ChannelAdder, remover Chan
 
 type RepeaterOps struct {
 	Login        func(pubkeyHex, password string) (any, error)
+	RoomLogin    func(pubkeyHex, password string, syncSince uint32) (any, error)
 	StatusReq    func(pubkeyHex string) (any, error)
 	CLI          func(pubkeyHex, command string) (string, error)
 	Session      func(pubkeyHex string) any
@@ -122,6 +123,9 @@ func (s *Server) routes() {
 	s.mux.HandleFunc("GET /api/companions/{name}/repeaters/{pubkey}/access", s.handleRepeaterAccessList)
 	s.mux.HandleFunc("PUT /api/companions/{name}/repeaters/{pubkey}/access/{target}", s.handleRepeaterAccessSet)
 	s.mux.HandleFunc("DELETE /api/companions/{name}/repeaters/{pubkey}/access/{target}", s.handleRepeaterAccessRemove)
+	s.mux.HandleFunc("POST /api/companions/{name}/rooms/{pubkey}/login", s.handleRoomLogin)
+	s.mux.HandleFunc("GET /api/companions/{name}/rooms/{pubkey}/session", s.handleRepeaterSession)
+	s.mux.HandleFunc("DELETE /api/companions/{name}/rooms/{pubkey}/session", s.handleRepeaterLogout)
 	s.mux.HandleFunc("GET /api/nodes/monitored", s.handleListMonitoredNodes)
 	s.mux.HandleFunc("GET /api/nodes/{pubkey}/metrics", s.handleListNodeMetricNames)
 	s.mux.HandleFunc("GET /api/nodes/{pubkey}/history", s.handleNodeHistory)
