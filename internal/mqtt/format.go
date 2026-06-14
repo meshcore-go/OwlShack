@@ -12,6 +12,13 @@ import (
 	meshcore "github.com/meshcore-go/meshcore-go"
 )
 
+// rxTimeLayout is an RFC3339-style timestamp with microsecond precision. The
+// trailing Z07:00 emits "Z" for UTC, making the value zone-aware. Combined with
+// a UTC clock (time.Now().UTC()) this stops downstream observers from treating
+// our feed as a naive local-time clock and clamping per-packet rxTime to their
+// ingest time. Always format a UTC time with this layout.
+const rxTimeLayout = "2006-01-02T15:04:05.000000Z07:00"
+
 type packetMessage struct {
 	Timestamp  string `json:"timestamp"`
 	OriginID   string `json:"origin_id"`
@@ -31,7 +38,7 @@ type packetMessage struct {
 }
 
 func formatPacket(pkt *meshcore.Packet, rawBytes []byte, originName, originID, direction string) ([]byte, error) {
-	now := time.Now()
+	now := time.Now().UTC()
 
 	route := "F"
 	if pkt.IsRouteDirect() {
@@ -41,7 +48,7 @@ func formatPacket(pkt *meshcore.Packet, rawBytes []byte, originName, originID, d
 	hash := pkt.PacketHash()
 
 	msg := packetMessage{
-		Timestamp:  now.Format("2006-01-02T15:04:05.000000"),
+		Timestamp:  now.Format(rxTimeLayout),
 		OriginID:   originID,
 		Origin:     originName,
 		Type:       "PACKET",
@@ -116,7 +123,7 @@ func formatStatus(status, originName, originID string, radio modem.RadioInfo, ds
 
 	msg := statusMessage{
 		Status:          status,
-		Timestamp:       time.Now().Format("2006-01-02T15:04:05.000000"),
+		Timestamp:       time.Now().UTC().Format(rxTimeLayout),
 		Origin:          originName,
 		OriginID:        originID,
 		Model:           "meshcore-bot",
