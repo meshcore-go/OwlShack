@@ -19,6 +19,11 @@ export interface MetricDef {
   //           line only ever climbs and is meaningless, so we plot the per-bucket
   //           delta (rate of change) as bars instead.
   kind: MetricKind;
+  // When true the metric is shown only as a current-value stat tile, never
+  // charted — a time-series of it carries no information (e.g. uptime climbs
+  // 1:1 with wall-clock, so a line is a 45° ramp and its per-bucket delta is
+  // just the bucket size).
+  noChart?: boolean;
 }
 
 const COUNT = (v: number) => Math.round(v).toLocaleString();
@@ -41,7 +46,7 @@ export const METRIC_DEFS: Record<string, MetricDef> = {
   pressure: { label: "Pressure", unit: "hPa", format: (v) => `${v.toFixed(0)} hPa`, color: "var(--chart-1)", kind: "gauge" },
   mcu_temperature: { label: "MCU temp", unit: "°C", format: (v) => `${v.toFixed(1)}°C`, color: "var(--chart-4)", kind: "gauge" },
   // health / state
-  uptime: { label: "Uptime", format: formatUptime, color: "var(--chart-3)", kind: "gauge" },
+  uptime: { label: "Uptime", format: formatUptime, color: "var(--chart-3)", kind: "gauge", noChart: true },
   neighbor_count: { label: "Neighbors", format: COUNT, color: "var(--chart-3)", kind: "gauge" },
   queue_len: { label: "TX queue", format: COUNT, color: "var(--chart-2)", kind: "gauge" },
   // traffic (counters → rate bars)
@@ -54,7 +59,10 @@ export const METRIC_DEFS: Record<string, MetricDef> = {
   rx_air_secs: { label: "RX airtime", unit: "s", format: COUNT, color: "var(--chart-5)", kind: "counter" },
   tx_air_secs: { label: "TX airtime", unit: "s", format: COUNT, color: "var(--chart-4)", kind: "counter" },
   // errors (counters → rate bars)
-  err_events: { label: "Error events", format: COUNT, color: "var(--chart-2)", kind: "counter" },
+  // _err_flags bitmask (sticky fatal-event flags) — an instantaneous flag set,
+  // not a count, so kind is "gauge" and noChart suppresses it; it's decoded into
+  // labels via lib/errEvents and shown as chips instead. See Dispatcher.h.
+  err_events: { label: "Error events", format: COUNT, color: "var(--chart-2)", kind: "gauge", noChart: true },
   recv_errors: { label: "Recv errors", format: COUNT, color: "var(--chart-4)", kind: "counter" },
   flood_dups: { label: "Flood dups", format: COUNT, color: "var(--chart-5)", kind: "counter" },
   direct_dups: { label: "Direct dups", format: COUNT, color: "var(--chart-1)", kind: "counter" },

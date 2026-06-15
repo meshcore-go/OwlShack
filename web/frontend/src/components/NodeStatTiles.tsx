@@ -11,6 +11,7 @@ import {
   type Band,
 } from "@/lib/metrics";
 import { Sparkline, type SeriesPoint } from "@/components/MetricChart";
+import { ErrEventBadges } from "@/components/ErrEventBadges";
 
 // compactUptime renders seconds as the two most-significant units (e.g. "5d 15h").
 function compactUptime(secs: number): string {
@@ -155,6 +156,18 @@ export function nodeTiles(m: Record<string, number>): TileSpec[] {
   if (m.chan_util !== undefined)
     tiles.push({ key: "util", label: "Chan util", value: m.chan_util.toFixed(1), unit: "%", metric: "chan_util" });
 
+  // Error events: a sticky _err_flags bitmask, not a count. Only surface it when
+  // something is flagged (cards stay clean otherwise); decode bits to chips. No
+  // `metric` → no sparkline (a bitmask trend is meaningless).
+  if (m.err_events !== undefined && m.err_events > 0) {
+    tiles.push({
+      key: "err_events",
+      label: "Errors",
+      colSpan: 2,
+      content: <ErrEventBadges mask={m.err_events} />,
+    });
+  }
+
   // Prefer an external temperature sensor (any channel); fall back to the MCU's
   // own temperature, labelled "MCU temp" so it's clear it isn't ambient. Humidity
   // is always an external sensor. The detail page shows every channel; the card
@@ -223,7 +236,7 @@ export function NodeStatGrid({
   if (tiles.length === 0) {
     return (
       <div className="px-3 py-6 text-center">
-        <span className="font-mono text-[10px] uppercase tracking-[0.1em] text-muted-foreground/50">
+        <span className="font-mono text-[10px] uppercase tracking-widest text-muted-foreground/50">
           awaiting first reading
         </span>
       </div>

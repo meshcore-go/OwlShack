@@ -12,7 +12,7 @@ import { Button } from "@/components/ui/button";
 import { Skeleton } from "@/components/ui/skeleton";
 import { cn } from "@/lib/utils";
 import { formatSecsAgo } from "@/lib/format";
-import { metricOrderIndex } from "@/lib/metrics";
+import { metricDef, metricOrderIndex } from "@/lib/metrics";
 
 interface MonitoredNode {
   pubkey: string;
@@ -63,7 +63,8 @@ const TRACK_METRICS = new Set(["location_lat", "location_lon"]);
 function orderGridMetrics(available: string[]): string[] {
   const hero = new Set(HERO_METRICS);
   return available
-    .filter((m) => !hero.has(m) && !TRACK_METRICS.has(m))
+    // noChart metrics (e.g. uptime) live only as stat tiles in NodeStatGrid.
+    .filter((m) => !hero.has(m) && !TRACK_METRICS.has(m) && !metricDef(m).noChart)
     .sort((a, b) => {
       const ia = metricOrderIndex(a);
       const ib = metricOrderIndex(b);

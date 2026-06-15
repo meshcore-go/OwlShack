@@ -105,6 +105,7 @@ import {
   truncateMid,
 } from "@/lib/format";
 import { cn } from "@/lib/utils";
+import { ErrEventBadges } from "@/components/ErrEventBadges";
 import {
   MonitoringSettings,
   type MonitorMetadata,
@@ -1019,11 +1020,7 @@ function StatusTab({
             value={`${status.recvErrors}`}
             icon={<AlertTriangle className="size-3.5" />}
           />
-          <StatTile
-            label="Err events"
-            value={`${status.errEvents}`}
-            icon={<AlertTriangle className="size-3.5" />}
-          />
+          <ErrEventsTile mask={status.errEvents} />
           <StatTile label="Pkts sent" value={`${status.packetsSent}`} />
           <StatTile label="Pkts recv" value={`${status.packetsRecv}`} />
           <StatTile label="Flood TX" value={`${status.floodTx}`} />
@@ -1080,6 +1077,33 @@ function StatTile({
       >
         {value}
       </span>
+    </div>
+  );
+}
+
+// ErrEventsTile renders the status `errEvents` value (firmware _err_flags) as
+// decoded warning chips rather than a raw number — a nonzero value is a bitmask
+// of fatal events, not a count. "none" (success) when no bits are set.
+function ErrEventsTile({ mask }: { mask: number }) {
+  const hasErrors = mask !== 0;
+  return (
+    <div className="bg-card relative px-4 py-3 flex flex-col gap-1.5 group">
+      <div className="flex items-center justify-between">
+        <span className="label-overline">Err events</span>
+        <span
+          className={cn(
+            "transition-colors",
+            hasErrors ? "text-warning" : "text-muted-foreground/50 group-hover:text-primary",
+          )}
+        >
+          <AlertTriangle className="size-3.5" />
+        </span>
+      </div>
+      {hasErrors ? (
+        <ErrEventBadges mask={mask} />
+      ) : (
+        <span className="font-mono text-lg font-semibold leading-none text-success">none</span>
+      )}
     </div>
   );
 }
