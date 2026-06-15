@@ -42,6 +42,21 @@ export function formatShortTime(ts: string): string {
   }
 }
 
+// formatClockTime renders just the wall-clock time with seconds — for events
+// that share a date and where only their order/second distinguishes them (e.g.
+// a packet's repeated receptions within a few seconds).
+export function formatClockTime(ts: string): string {
+  try {
+    return new Date(ts).toLocaleTimeString(undefined, {
+      hour: "2-digit",
+      minute: "2-digit",
+      second: "2-digit",
+    });
+  } catch {
+    return "";
+  }
+}
+
 export function truncate(s: string, n: number): string {
   if (!s) return "";
   return s.length > n ? s.slice(0, n) + "…" : s;

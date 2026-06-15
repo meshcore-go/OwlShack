@@ -20,6 +20,7 @@ import {
   Ban,
   CheckCheck,
   ChevronLeft,
+  ChevronRight,
   Copy,
   CornerUpLeft,
   ExternalLink,
@@ -87,7 +88,7 @@ import {
   type ContactPrefill,
   type ContactType,
 } from "@/components/AddContactDialog";
-import { formatDateTime, formatShortTime, timeAgo, truncateMid } from "@/lib/format";
+import { formatClockTime, formatDateTime, formatShortTime, timeAgo, truncateMid } from "@/lib/format";
 import { cn } from "@/lib/utils";
 
 interface Conversation {
@@ -152,6 +153,59 @@ interface EchoEntry {
   path: PathHop[];
   snr?: number | null;
   rssi?: number | null;
+}
+
+// A single time we heard a packet — the original reception plus each
+// distinct-path repeat — unified so "View paths" can list every hearing in
+// first-heard order.
+interface Hearing {
+  key: string;
+  receivedAt: string;
+  hops: number;
+  path: PathHop[];
+  snr?: number | null;
+  isOriginal: boolean;
+}
+
+// hearingVia labels who we last heard a packet from: the final repeater in the
+// path (closest to us), or "Direct" when there were no hops — heard straight off
+// the air by the companion (direct DM / room-server push).
+function hearingVia(path: PathHop[]): string {
+  if (path.length === 0) return "Direct";
+  const last = path[path.length - 1];
+  return last.peerNames?.[0] || `#${last.hash}`;
+}
+
+// buildHearings merges the original reception (from the message + its path) with
+// every echo into one list ordered first-heard first. The original is only added
+// when its path was loaded (the echoes-only modal omits it).
+function buildHearings(
+  path: PathInfo | null,
+  echoes: EchoEntry[] | null,
+  msg: Message | undefined,
+): Hearing[] {
+  const list: Hearing[] = [];
+  if (path && msg) {
+    list.push({
+      key: "rx",
+      receivedAt: msg.timestamp,
+      hops: path.hops,
+      path: path.path,
+      snr: msg.snr,
+      isOriginal: true,
+    });
+  }
+  for (const e of echoes ?? []) {
+    list.push({
+      key: `echo-${e.id}`,
+      receivedAt: e.receivedAt,
+      hops: e.hops,
+      path: e.path,
+      snr: e.snr,
+      isOriginal: false,
+    });
+  }
+  return list.sort((a, b) => tsValue(a.receivedAt) - tsValue(b.receivedAt));
 }
 
 type SortMode = "recent" | "name" | "unread";
@@ -903,6 +957,13 @@ export function CompanionDetailPage() {
     setModalEchoes(null);
   }, []);
 
+  // Unified first-heard-first list for the path/echoes modals. rxPaths loads both
+  // the original path and the echoes; the TX echoes modal loads echoes only.
+  const hearings = useMemo(
+    () => buildHearings(modalPath, modalEchoes, modal?.message),
+    [modalPath, modalEchoes, modal?.message],
+  );
+
   const composerLen = composer.length;
   const overLimit = composerLen > charLimit;
 
@@ -1322,7 +1383,7 @@ export function CompanionDetailPage() {
               <DialogTitle className="font-mono text-sm uppercase tracking-[0.12em]">
                 {modal?.kind === "path" && "Receive path"}
                 {modal?.kind === "echoes" && "Echo observations"}
-                {modal?.kind === "rxPaths" && "Path & echoes"}
+                {modal?.kind === "rxPaths" && "Reception paths"}
               </DialogTitle>
             </div>
             <DialogDescription className="font-mono text-xs text-muted-foreground">
@@ -1344,16 +1405,11 @@ export function CompanionDetailPage() {
               </div>
             ) : (
               <>
-                {(modal?.kind === "path" || modal?.kind === "rxPaths") &&
-                  modalPath && <PathTimeline path={modalPath} />}
-                {(modal?.kind === "echoes" || modal?.kind === "rxPaths") &&
-                  modalEchoes && (
-                    <EchoList echoes={modalEchoes} />
-                  )}
-                {modal?.kind === "rxPaths" && !modalPath && !modalEchoes && (
-                  <p className="font-mono text-xs text-muted-foreground/60">
-                    No path data.
-                  </p>
+                {modal?.kind === "path" && modalPath && (
+                  <PathTimeline path={modalPath} />
+                )}
+                {(modal?.kind === "rxPaths" || modal?.kind === "echoes") && (
+                  <HearingList hearings={hearings} />
                 )}
               </>
             )}
@@ -1802,8 +1858,19 @@ function MessageBubble({
               </span>
             )}
             {msg.repeatCount != null && msg.repeatCount > 0 && (
-              <span className="text-success/80 inline-flex items-center gap-1">
-                <Reply className="size-2.5" />×{msg.repeatCount}
+              // For received messages the total times we heard the packet is the
+              // first reception plus each distinct-path repeat; for our own sends
+              // it's just the repeats we heard echoed back.
+              <span
+                className="text-success/80 inline-flex items-center gap-1"
+                title={
+                  isTx
+                    ? `Repeated ${msg.repeatCount}×`
+                    : `Heard ${msg.repeatCount + 1}× total`
+                }
+              >
+                <Reply className="size-2.5" />×
+                {isTx ? msg.repeatCount : msg.repeatCount + 1}
               </span>
             )}
             {isTx && msg.status === "sending" && (
@@ -2181,58 +2248,85 @@ function PathTimeline({ path }: { path: PathInfo }) {
   );
 }
 
-function EchoList({ echoes }: { echoes: EchoEntry[] }) {
-  if (echoes.length === 0) {
+function HearingList({ hearings }: { hearings: Hearing[] }) {
+  if (hearings.length === 0) {
     return (
       <p className="font-mono text-xs text-muted-foreground/60 px-1 mt-3">
-        No echo observations.
+        No reception data.
       </p>
     );
   }
   return (
-    <div className="mt-3 space-y-2 px-1">
+    <div className="mt-3 space-y-1.5 px-1">
       <div className="text-mono-xs text-muted-foreground">
-        {echoes.length} echo{echoes.length === 1 ? "" : "es"}
+        Heard {hearings.length}× via {hearings.length === 1 ? "1 path" : `${hearings.length} paths`}
       </div>
-      {echoes.map((e) => (
-        <div
-          key={e.id}
-          className="border border-border bg-card/50 p-2.5 space-y-1.5"
-        >
-          <div className="flex items-baseline justify-between font-mono text-[10px] tabular-nums uppercase tracking-[0.08em]">
-            <span className="text-muted-foreground">
-              {formatDateTime(e.receivedAt)}
-            </span>
-            <span className="flex items-center gap-2">
-              <span>{e.hops} hop{e.hops === 1 ? "" : "s"}</span>
-              {e.snr != null && (
-                <span className={snrTextClass(e.snr)}>{e.snr}dB</span>
-              )}
-            </span>
-          </div>
-          {e.path.length > 0 && (
-            <ol className="pl-3 border-l border-border space-y-1">
-              {e.path.map((hop, i) => (
-                <li
-                  key={`${hop.hash}-${i}`}
-                  className="font-mono text-[11px] flex items-baseline justify-between gap-2"
-                >
-                  <span>
-                    {hop.peerNames?.[0] || (
-                      <span className="text-muted-foreground/60 italic">
-                        unknown
-                      </span>
-                    )}
-                  </span>
-                  <code className="text-muted-foreground/60 text-[10px]">
-                    {hop.hash}
-                  </code>
-                </li>
-              ))}
-            </ol>
-          )}
-        </div>
+      {hearings.map((h, i) => (
+        <HearingRow key={h.key} hearing={h} first={i === 0} />
       ))}
+    </div>
+  );
+}
+
+// A single hearing: a tappable summary (who we heard it from, hops, signal,
+// time) that expands to the full hop-by-hop path. Direct (0-hop) hearings have
+// nothing to expand.
+function HearingRow({ hearing, first }: { hearing: Hearing; first: boolean }) {
+  const [open, setOpen] = useState(false);
+  const direct = hearing.path.length === 0;
+  const time = formatClockTime(hearing.receivedAt);
+  return (
+    <div className="border border-border bg-card/50">
+      <button
+        type="button"
+        disabled={direct}
+        onClick={() => !direct && setOpen((v) => !v)}
+        className={cn(
+          "w-full flex items-center gap-2 p-2.5 text-left",
+          !direct && "hover:bg-muted/40",
+        )}
+      >
+        <ChevronRight
+          className={cn(
+            "size-3 shrink-0 text-muted-foreground/60 transition-transform",
+            open && "rotate-90",
+            direct && "opacity-0",
+          )}
+        />
+        <span className="flex items-center gap-1.5 font-mono text-xs min-w-0">
+          {direct ? (
+            <Radio className="size-3 shrink-0 text-success/70" />
+          ) : (
+            <Radar className="size-3 shrink-0 text-muted-foreground/60" />
+          )}
+          <span className="truncate">{hearingVia(hearing.path)}</span>
+        </span>
+        <span className="ml-auto flex items-center gap-2 font-mono text-[10px] tabular-nums uppercase tracking-widest text-muted-foreground shrink-0">
+          {first && <span className="text-primary/70">first</span>}
+          <span>{hearing.hops} hop{hearing.hops === 1 ? "" : "s"}</span>
+          {hearing.snr != null && (
+            <span className={snrTextClass(hearing.snr)}>{hearing.snr.toFixed(1)}dB</span>
+          )}
+          <span>{time}</span>
+        </span>
+      </button>
+      {open && !direct && (
+        <ol className="pl-6 pr-3 pb-2.5 pt-2 border-t border-border/60 space-y-1">
+          {hearing.path.map((hop, i) => (
+            <li
+              key={`${hop.hash}-${i}`}
+              className="font-mono text-[11px] flex items-baseline justify-between gap-2"
+            >
+              <span>
+                {hop.peerNames?.[0] || (
+                  <span className="text-muted-foreground/60 italic">unknown</span>
+                )}
+              </span>
+              <code className="text-muted-foreground/60 text-[10px]">{hop.hash}</code>
+            </li>
+          ))}
+        </ol>
+      )}
     </div>
   );
 }
