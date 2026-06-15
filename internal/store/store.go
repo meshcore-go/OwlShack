@@ -1,6 +1,7 @@
 package store
 
 import (
+	"context"
 	"database/sql"
 	"fmt"
 	"log/slog"
@@ -26,6 +27,12 @@ type Store struct {
 	BlockedSenders *BlockedSenderRepo
 	Metrics        *MetricsRepo
 	AppConfig      *AppConfigRepo
+	Settings       *SettingsRepo
+	Mqtt           *MqttRepo
+	Brokers        *BrokerRepo
+	Companions     *CompanionRepo
+	Channels       *ChannelRepo
+	Triggers       *TriggerRepo
 
 	writerCh   chan func()
 	writerDone chan struct{}
@@ -63,6 +70,12 @@ func Open(path string) (*Store, error) {
 		BlockedSenders: &BlockedSenderRepo{db: db},
 		Metrics:        &MetricsRepo{db: db},
 		AppConfig:      &AppConfigRepo{db: db},
+		Settings:       &SettingsRepo{db: db},
+		Mqtt:           &MqttRepo{db: db},
+		Brokers:        &BrokerRepo{db: db},
+		Companions:     &CompanionRepo{db: db},
+		Channels:       &ChannelRepo{db: db},
+		Triggers:       &TriggerRepo{db: db},
 		writerCh:       make(chan func(), writerQueueDepth),
 		writerDone:     make(chan struct{}),
 	}
@@ -146,6 +159,8 @@ func (s *Store) migrate() error {
 		migrateV2,
 		migrateV3,
 		migrateV4,
+		migrateV5,
+		migrateV6,
 	}
 
 	for i := version; i < len(migrations); i++ {
@@ -319,4 +334,249 @@ func migrateV4(db *sql.DB) error {
 			updated_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP
 		)`)
 	return err
+}
+
+// migrateV5 replaces the single-row JSON config blob (app_config) with a proper
+// relational schema. Every entity gets a surrogate INTEGER primary key, so
+// names, pubkeys and private keys are all mutable columns that nothing
+// references — a companion can be renamed or have its keypair rotated without
+// breaking any reference (mqtt node selection, trigger ownership, message
+// history FKs).
+//
+// This migration creates SCHEMA ONLY. The one-shot import of the existing
+// app_config blob into these tables (and the reconcile of name-keyed FKs on
+// messages/contacts/etc to the new companion ids) runs at the app layer after
+// store.Open, where the config types are available to parse the blob.
+//
+// Leaf string lists (a trigger's match patterns / contacts, a broker's
+// disallowed packet types) are CSV TEXT columns rather than child tables — they
+// are edited as a set and never queried individually. Channels DO get their own
+// table because they carry a private key and are referenced by triggers via the
+// trigger_channels join, so the key is stored once and shared by reference.
+func migrateV5(db *sql.DB) error {
+	_, err := db.Exec(`
+		CREATE TABLE IF NOT EXISTS settings (
+			id              INTEGER PRIMARY KEY CHECK (id = 1),
+			log_level       TEXT,
+			connection_type TEXT NOT NULL DEFAULT 'kiss',
+			connection      TEXT,
+			baud_rate       INTEGER,
+			freq            REAL,
+			bw              REAL,
+			sf              INTEGER,
+			cr              INTEGER,
+			tx              INTEGER,
+			listen_addr     TEXT,
+			setup_complete  INTEGER NOT NULL DEFAULT 0
+		);
+
+		CREATE TABLE IF NOT EXISTS companions (
+			id              INTEGER PRIMARY KEY AUTOINCREMENT,
+			name            TEXT    NOT NULL,
+			private_key     TEXT    NOT NULL DEFAULT '',
+			pubkey          TEXT    NOT NULL DEFAULT '',
+			latitude        REAL,
+			longitude       REAL,
+			advert_interval INTEGER
+		);
+
+		CREATE TABLE IF NOT EXISTS companion_channels (
+			id           INTEGER PRIMARY KEY AUTOINCREMENT,
+			companion_id INTEGER NOT NULL REFERENCES companions(id) ON DELETE CASCADE,
+			name         TEXT    NOT NULL,
+			private_key  TEXT    NOT NULL DEFAULT '',
+			UNIQUE (companion_id, name)
+		);
+
+		CREATE TABLE IF NOT EXISTS triggers (
+			id                   INTEGER PRIMARY KEY AUTOINCREMENT,
+			companion_id         INTEGER NOT NULL REFERENCES companions(id) ON DELETE CASCADE,
+			type                 TEXT    NOT NULL,
+			template             TEXT    NOT NULL DEFAULT '',
+			char_limit_behaviour TEXT,
+			match_patterns       TEXT    NOT NULL DEFAULT '',
+			contacts             TEXT    NOT NULL DEFAULT '',
+			retry_timeout        INTEGER,
+			max_retries          INTEGER,
+			path_hash_size       INTEGER,
+			schedule             TEXT
+		);
+
+		CREATE TABLE IF NOT EXISTS trigger_channels (
+			trigger_id INTEGER NOT NULL REFERENCES triggers(id) ON DELETE CASCADE,
+			channel_id INTEGER NOT NULL REFERENCES companion_channels(id) ON DELETE CASCADE,
+			PRIMARY KEY (trigger_id, channel_id)
+		);
+
+		CREATE TABLE IF NOT EXISTS mqtt_settings (
+			id                INTEGER PRIMARY KEY CHECK (id = 1),
+			enabled           INTEGER,
+			node_companion_id INTEGER REFERENCES companions(id) ON DELETE SET NULL,
+			iata_code         TEXT,
+			status_interval   INTEGER,
+			owner             TEXT,
+			email             TEXT
+		);
+
+		CREATE TABLE IF NOT EXISTS mqtt_brokers (
+			id                      INTEGER PRIMARY KEY AUTOINCREMENT,
+			name                    TEXT    NOT NULL,
+			enabled                 INTEGER NOT NULL DEFAULT 1,
+			dedup                   INTEGER NOT NULL DEFAULT 0,
+			transport               TEXT    NOT NULL DEFAULT 'tcp',
+			host                    TEXT    NOT NULL DEFAULT '',
+			port                    INTEGER NOT NULL DEFAULT 0,
+			packet_topic            TEXT,
+			status_topic            TEXT,
+			disallowed_packet_types TEXT    NOT NULL DEFAULT '',
+			retain_status           INTEGER NOT NULL DEFAULT 0,
+			tls_enabled             INTEGER NOT NULL DEFAULT 0,
+			tls_insecure            INTEGER NOT NULL DEFAULT 0,
+			auth_type               TEXT    NOT NULL DEFAULT 'none',
+			username                TEXT    NOT NULL DEFAULT '',
+			password                TEXT    NOT NULL DEFAULT '',
+			path                    TEXT    NOT NULL DEFAULT '',
+			audience                TEXT    NOT NULL DEFAULT ''
+		);
+
+		CREATE INDEX IF NOT EXISTS idx_companion_channels_companion ON companion_channels(companion_id);
+		CREATE INDEX IF NOT EXISTS idx_triggers_companion ON triggers(companion_id);
+		CREATE INDEX IF NOT EXISTS idx_trigger_channels_trigger ON trigger_channels(trigger_id);
+	`)
+	return err
+}
+
+// migrateV6 re-keys the per-companion history tables (messages,
+// companion_contacts, conversation_reads, blocked_senders) from the mutable
+// companion NAME to the surrogate companions.id, with a real FK + ON DELETE
+// CASCADE. Until now these stored the name in a TEXT companion_id column, so
+// renaming a companion orphaned all of its history; keyed by id, a rename is
+// just an UPDATE to companions.name and the history follows.
+//
+// node_state is intentionally NOT migrated: it is keyed by pubkey (node-centric)
+// and its companion_id is a "last polled by" label refreshed on every poll, not
+// durable history — re-keying it would force monitor.Target to carry an id and
+// change the monitoring WS/API shape for no real benefit.
+//
+// The rebuild runs on a single pinned connection with foreign_keys OFF: with
+// enforcement on, DROP TABLE messages does an implicit row delete that would
+// cascade-wipe message_echoes. The id backfill JOINs companions by name, so
+// orphaned history (a companion that no longer exists by that name, e.g. from a
+// past rename) can't be re-linked and is dropped — logged for transparency,
+// none on a clean DB.
+func migrateV6(db *sql.DB) error {
+	ctx := context.Background()
+	conn, err := db.Conn(ctx)
+	if err != nil {
+		return err
+	}
+	defer conn.Close()
+
+	if _, err := conn.ExecContext(ctx, "PRAGMA foreign_keys=OFF"); err != nil {
+		return err
+	}
+	// Restore enforcement before the connection returns to the pool.
+	defer conn.ExecContext(ctx, "PRAGMA foreign_keys=ON")
+
+	for _, tbl := range []string{"messages", "companion_contacts", "conversation_reads", "blocked_senders"} {
+		var n int64
+		if err := conn.QueryRowContext(ctx, fmt.Sprintf(
+			`SELECT COUNT(*) FROM %s t WHERE NOT EXISTS (SELECT 1 FROM companions c WHERE c.name = t.companion_id)`, tbl,
+		)).Scan(&n); err == nil && n > 0 {
+			slog.Warn("migrateV6 dropping orphaned history with no matching companion", "table", tbl, "rows", n)
+		}
+	}
+
+	tx, err := conn.BeginTx(ctx, nil)
+	if err != nil {
+		return err
+	}
+	defer tx.Rollback()
+
+	stmts := []string{
+		`CREATE TABLE messages_v6 (
+			id             INTEGER PRIMARY KEY AUTOINCREMENT,
+			companion_id   INTEGER NOT NULL REFERENCES companions(id) ON DELETE CASCADE,
+			channel        TEXT NOT NULL,
+			channel_hash   INTEGER NOT NULL,
+			sender         TEXT NOT NULL DEFAULT '',
+			text           TEXT NOT NULL DEFAULT '',
+			direction      TEXT NOT NULL,
+			timestamp      DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+			snr            REAL,
+			rssi           INTEGER,
+			confirmed      INTEGER,
+			path_hashes    BLOB,
+			path_hash_size INTEGER,
+			hops           INTEGER,
+			status         TEXT
+		)`,
+		`INSERT INTO messages_v6 (id, companion_id, channel, channel_hash, sender, text, direction, timestamp, snr, rssi, confirmed, path_hashes, path_hash_size, hops, status)
+			SELECT m.id, c.id, m.channel, m.channel_hash, m.sender, m.text, m.direction, m.timestamp, m.snr, m.rssi, m.confirmed, m.path_hashes, m.path_hash_size, m.hops, m.status
+			FROM messages m JOIN companions c ON c.name = m.companion_id`,
+		`DROP TABLE messages`,
+		`ALTER TABLE messages_v6 RENAME TO messages`,
+
+		`CREATE TABLE companion_contacts_v6 (
+			companion_id INTEGER  NOT NULL REFERENCES companions(id) ON DELETE CASCADE,
+			peer_pubkey  BLOB     NOT NULL,
+			added_at     DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+			metadata     TEXT     NOT NULL DEFAULT '{}',
+			PRIMARY KEY (companion_id, peer_pubkey),
+			FOREIGN KEY (peer_pubkey) REFERENCES discovered_peers(pubkey) ON DELETE CASCADE
+		)`,
+		`INSERT INTO companion_contacts_v6 (companion_id, peer_pubkey, added_at, metadata)
+			SELECT c.id, cc.peer_pubkey, cc.added_at, cc.metadata
+			FROM companion_contacts cc JOIN companions c ON c.name = cc.companion_id`,
+		`DROP TABLE companion_contacts`,
+		`ALTER TABLE companion_contacts_v6 RENAME TO companion_contacts`,
+
+		`CREATE TABLE conversation_reads_v6 (
+			companion_id    INTEGER NOT NULL REFERENCES companions(id) ON DELETE CASCADE,
+			conversation_id TEXT NOT NULL,
+			last_read_id    INTEGER NOT NULL DEFAULT 0,
+			PRIMARY KEY (companion_id, conversation_id)
+		)`,
+		`INSERT INTO conversation_reads_v6 (companion_id, conversation_id, last_read_id)
+			SELECT c.id, cr.conversation_id, cr.last_read_id
+			FROM conversation_reads cr JOIN companions c ON c.name = cr.companion_id`,
+		`DROP TABLE conversation_reads`,
+		`ALTER TABLE conversation_reads_v6 RENAME TO conversation_reads`,
+
+		`CREATE TABLE blocked_senders_v6 (
+			companion_id    INTEGER NOT NULL REFERENCES companions(id) ON DELETE CASCADE,
+			conversation_id TEXT NOT NULL,
+			sender          TEXT NOT NULL,
+			blocked_at      DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+			PRIMARY KEY (companion_id, conversation_id, sender)
+		)`,
+		`INSERT INTO blocked_senders_v6 (companion_id, conversation_id, sender, blocked_at)
+			SELECT c.id, bs.conversation_id, bs.sender, bs.blocked_at
+			FROM blocked_senders bs JOIN companions c ON c.name = bs.companion_id`,
+		`DROP TABLE blocked_senders`,
+		`ALTER TABLE blocked_senders_v6 RENAME TO blocked_senders`,
+
+		// Indexes were dropped with their tables; recreate them.
+		`CREATE INDEX IF NOT EXISTS idx_companion_contacts_companion ON companion_contacts(companion_id)`,
+		`CREATE INDEX IF NOT EXISTS idx_messages_companion_channel ON messages(companion_id, channel)`,
+		`CREATE INDEX IF NOT EXISTS idx_messages_timestamp ON messages(timestamp)`,
+	}
+	for _, stmt := range stmts {
+		if _, err := tx.ExecContext(ctx, stmt); err != nil {
+			return fmt.Errorf("migrateV6 rebuild: %w", err)
+		}
+	}
+
+	// Verify referential integrity before committing.
+	rows, err := tx.QueryContext(ctx, "PRAGMA foreign_key_check")
+	if err != nil {
+		return err
+	}
+	hasViolation := rows.Next()
+	rows.Close()
+	if hasViolation {
+		return fmt.Errorf("migrateV6: foreign key check reported violations after rebuild")
+	}
+
+	return tx.Commit()
 }

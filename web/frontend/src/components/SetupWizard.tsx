@@ -22,9 +22,10 @@ import { Button } from "@/components/ui/button";
 import { Label } from "@/components/ui/label";
 import { TextField, SelectField } from "@/components/ConfigFields";
 import { RadioPresetSelect } from "@/components/RadioPresetSelect";
+import { toast } from "sonner";
 import { themeTileLayer, useThemeTiles } from "@/lib/leaflet";
 import { cn } from "@/lib/utils";
-import type { AppConfig, CompanionConfig } from "@/hooks/useConfig";
+import { configApi, type Settings } from "@/lib/configApi";
 
 // Leaflet's default marker icon URLs break under bundlers; rebind once at load.
 type MarkerProto = L.Icon.Default & { _getIconUrl?: () => string };
@@ -167,29 +168,27 @@ function StepDots({ current }: { current: Step }) {
 }
 
 export function SetupWizard({
-  config,
-  save,
-  reload,
+  settings,
+  onComplete,
 }: {
-  config: AppConfig;
-  save: (next: AppConfig) => Promise<boolean>;
-  reload: () => void;
+  settings: Settings;
+  onComplete: () => void;
 }) {
   const [step, setStep] = useState<Step>("welcome");
   const [busy, setBusy] = useState(false);
 
   // Radio (pre-filled from the bootstrapped defaults).
   const [connection, setConnection] = useState(
-    config.connection ?? "serial:///dev/ttyACM0",
+    settings.connection ?? "serial:///dev/ttyACM0",
   );
-  const [baudRate, setBaudRate] = useState(String(config.baudRate ?? 115200));
+  const [baudRate, setBaudRate] = useState(String(settings.baudRate ?? 115200));
   const [freq, setFreq] = useState(
-    config.freq != null ? String(config.freq) : "917.375",
+    settings.freq != null ? String(settings.freq) : "917.375",
   );
-  const [bw, setBw] = useState(config.bw != null ? String(config.bw) : "62.5");
-  const [sf, setSf] = useState(config.sf != null ? String(config.sf) : "7");
-  const [cr, setCr] = useState(config.cr != null ? String(config.cr) : "8");
-  const [tx, setTx] = useState(config.tx != null ? String(config.tx) : "22");
+  const [bw, setBw] = useState(settings.bw != null ? String(settings.bw) : "62.5");
+  const [sf, setSf] = useState(settings.sf != null ? String(settings.sf) : "7");
+  const [cr, setCr] = useState(settings.cr != null ? String(settings.cr) : "8");
+  const [tx, setTx] = useState(settings.tx != null ? String(settings.tx) : "22");
 
   // Companion.
   const [skipCompanion, setSkipCompanion] = useState(false);
@@ -210,34 +209,44 @@ export function SetupWizard({
 
   const finish = async () => {
     setBusy(true);
-    const next = structuredClone(config) as AppConfig;
-    next.connection = connection.trim();
-    next.baudRate = parseInt(baudRate, 10) || 115200;
-    next.freq = parseFloat(freq) || null;
-    next.bw = parseFloat(bw) || null;
-    next.sf = parseInt(sf, 10) || null;
-    next.cr = parseInt(cr, 10) || null;
-    next.tx = tx === "" ? null : parseInt(tx, 10);
-    next.setupComplete = true;
-
-    if (!skipCompanion && name.trim()) {
-      const comp: CompanionConfig = {
-        name: name.trim(),
-        latitude: lat === "" ? null : parseFloat(lat) || 0,
-        longitude: lon === "" ? null : parseFloat(lon) || 0,
-        channels: [{ name: "Public" }],
-      };
-      if (privateKey.trim()) comp.privateKey = privateKey.trim();
-      if (advertInterval.trim())
-        comp.advertInterval = parseInt(advertInterval, 10) || 0;
-      next.companions = [...(next.companions ?? []), comp];
+    try {
+      // Create the companion first (it auto-joins Public server-side). Doing it
+      // before flipping setupComplete means a failure here keeps the wizard
+      // open rather than stranding a half-configured install.
+      if (!skipCompanion && name.trim()) {
+        await configApi.saveCompanion({
+          name: name.trim(),
+          latitude: lat === "" ? null : parseFloat(lat) || 0,
+          longitude: lon === "" ? null : parseFloat(lon) || 0,
+          privateKey: privateKey.trim() || undefined,
+          advertInterval: advertInterval.trim()
+            ? parseInt(advertInterval, 10) || 0
+            : undefined,
+        });
+      }
+      await configApi.putSettings({
+        // Round-trip the values the wizard doesn't edit so saving them with the
+        // setupComplete flag never clears them.
+        connectionType: settings.connectionType,
+        logLevel: settings.logLevel,
+        listenAddr: settings.listenAddr,
+        connection: connection.trim(),
+        baudRate: parseInt(baudRate, 10) || 115200,
+        freq: parseFloat(freq) || null,
+        bw: parseFloat(bw) || null,
+        sf: parseInt(sf, 10) || null,
+        cr: parseInt(cr, 10) || null,
+        tx: tx === "" ? null : parseInt(tx, 10),
+        setupComplete: true,
+      });
+      // The writes are validated + reloaded server-side before they return, so
+      // the re-fetched config already carries setupComplete and the App gate
+      // unmounts this wizard.
+      onComplete();
+    } catch (e) {
+      toast.error(e instanceof Error ? e.message : "Setup failed");
+      setBusy(false);
     }
-
-    const ok = await save(next);
-    setBusy(false);
-    // Once the reload settles, the re-fetched config carries setupComplete and
-    // the gate in App.tsx unmounts this wizard.
-    if (ok) window.setTimeout(reload, 1600);
   };
 
   return (

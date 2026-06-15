@@ -28,7 +28,7 @@ type ContactMetadata struct {
 }
 
 type Contact struct {
-	CompanionID string
+	CompanionID int64
 	PeerPubKey  []byte
 	AddedAt     time.Time
 	Metadata    ContactMetadata
@@ -38,7 +38,7 @@ type ContactRepo struct {
 	db *sql.DB
 }
 
-func (r *ContactRepo) Add(companionID string, peerPubKey []byte) error {
+func (r *ContactRepo) Add(companionID int64, peerPubKey []byte) error {
 	_, err := r.db.Exec(`
 		INSERT INTO companion_contacts (companion_id, peer_pubkey)
 		VALUES (?, ?)
@@ -48,7 +48,7 @@ func (r *ContactRepo) Add(companionID string, peerPubKey []byte) error {
 	return err
 }
 
-func (r *ContactRepo) List(companionID string) ([]Contact, error) {
+func (r *ContactRepo) List(companionID int64) ([]Contact, error) {
 	rows, err := r.db.Query(`
 		SELECT companion_id, peer_pubkey, added_at, metadata
 		FROM companion_contacts
@@ -72,7 +72,7 @@ func (r *ContactRepo) List(companionID string) ([]Contact, error) {
 	return contacts, rows.Err()
 }
 
-func (r *ContactRepo) UpdateMetadata(companionID string, peerPubKey []byte, meta ContactMetadata) error {
+func (r *ContactRepo) UpdateMetadata(companionID int64, peerPubKey []byte, meta ContactMetadata) error {
 	metaJSON, err := json.Marshal(meta)
 	if err != nil {
 		return err
@@ -85,7 +85,7 @@ func (r *ContactRepo) UpdateMetadata(companionID string, peerPubKey []byte, meta
 	return err
 }
 
-func (r *ContactRepo) Get(companionID string, peerPubKey []byte) (*Contact, error) {
+func (r *ContactRepo) Get(companionID int64, peerPubKey []byte) (*Contact, error) {
 	var c Contact
 	var metaStr string
 	err := r.db.QueryRow(`
@@ -101,7 +101,7 @@ func (r *ContactRepo) Get(companionID string, peerPubKey []byte) (*Contact, erro
 	return &c, nil
 }
 
-func (r *ContactRepo) Delete(companionID string, peerPubKey []byte) error {
+func (r *ContactRepo) Delete(companionID int64, peerPubKey []byte) error {
 	_, err := r.db.Exec(`
 		DELETE FROM companion_contacts
 		WHERE companion_id = ? AND peer_pubkey = ?`,
@@ -110,7 +110,7 @@ func (r *ContactRepo) Delete(companionID string, peerPubKey []byte) error {
 	return err
 }
 
-func (r *ContactRepo) DeleteAll(companionID string) error {
+func (r *ContactRepo) DeleteAll(companionID int64) error {
 	_, err := r.db.Exec("DELETE FROM companion_contacts WHERE companion_id = ?", companionID)
 	return err
 }

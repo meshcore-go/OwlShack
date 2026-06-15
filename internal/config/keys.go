@@ -1,6 +1,7 @@
 package config
 
 import (
+	"crypto/ed25519"
 	"crypto/rand"
 	"encoding/hex"
 	"fmt"
@@ -12,6 +13,30 @@ import (
 
 const seedLen = 32 // ed25519 seed bytes
 
+// PubKeyHexFromSeed derives the hex ed25519 public key from a hex seed. Returns
+// "" for an empty seed. Used to cache a companion's pubkey (its stable mesh
+// identity) alongside the stored private key.
+func PubKeyHexFromSeed(seedHex string) (string, error) {
+	if seedHex == "" {
+		return "", nil
+	}
+	seed, err := hex.DecodeString(seedHex)
+	if err != nil || len(seed) != seedLen {
+		return "", fmt.Errorf("invalid seed: must be %d hex chars", seedLen*2)
+	}
+	pub := ed25519.NewKeyFromSeed(seed).Public().(ed25519.PublicKey)
+	return hex.EncodeToString(pub), nil
+}
+
+// GenerateSeedHex returns a fresh random hex ed25519 seed (a new identity).
+func GenerateSeedHex() (string, error) {
+	seed := make([]byte, seedLen)
+	if _, err := rand.Read(seed); err != nil {
+		return "", fmt.Errorf("generating identity seed: %w", err)
+	}
+	return hex.EncodeToString(seed), nil
+}
+
 // EnsureCompanionKeys generates a private key for every companion that has
 // none. Call before persisting a config so identities are pinned in it.
 func (c *Config) EnsureCompanionKeys() error {
@@ -19,11 +44,11 @@ func (c *Config) EnsureCompanionKeys() error {
 		if c.Companions[i].PrivateKey != "" {
 			continue
 		}
-		seed := make([]byte, seedLen)
-		if _, err := rand.Read(seed); err != nil {
-			return fmt.Errorf("generating key for companion %q: %w", c.Companions[i].Name, err)
+		seed, err := GenerateSeedHex()
+		if err != nil {
+			return fmt.Errorf("companion %q: %w", c.Companions[i].Name, err)
 		}
-		c.Companions[i].PrivateKey = hex.EncodeToString(seed)
+		c.Companions[i].PrivateKey = seed
 		slog.Info("generated companion identity", "companion", c.Companions[i].Name)
 	}
 	return nil

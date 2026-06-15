@@ -5,6 +5,7 @@ import (
 	"io/fs"
 	"log/slog"
 	"net/http"
+	"strings"
 	"sync"
 
 	"github.com/meshcore-go/meshcore-bot/internal/store"
@@ -86,8 +87,29 @@ func (s *Server) routes() {
 	s.mux.HandleFunc("DELETE /api/companions/{name}/contacts/{pubkey}", s.handleDeleteContact)
 	s.mux.HandleFunc("PATCH /api/companions/{name}/contacts/{pubkey}", s.handleUpdateContactMetadata)
 	s.mux.HandleFunc("GET /api/companions/{name}/contacts/{pubkey}/telemetry", s.handleContactTelemetry)
-	s.mux.HandleFunc("GET /api/config", s.handleGetConfig)
-	s.mux.HandleFunc("PUT /api/config", s.handlePutConfig)
+	// Per-resource config REST (reads; scoped + secret-redacted).
+	s.mux.HandleFunc("GET /api/config/settings", s.handleGetSettings)
+	s.mux.HandleFunc("GET /api/config/mqtt", s.handleGetMqtt)
+	s.mux.HandleFunc("GET /api/config/mqtt/brokers", s.handleGetBrokers)
+	s.mux.HandleFunc("GET /api/config/companions", s.handleGetCompanions)
+	s.mux.HandleFunc("GET /api/config/companions/{id}/channels", s.handleGetCompanionChannels)
+	s.mux.HandleFunc("GET /api/config/channels", s.handleGetAllChannels)
+	s.mux.HandleFunc("GET /api/config/triggers", s.handleGetTriggers)
+	// Per-resource config REST (writes; validated + reloaded server-side).
+	s.mux.HandleFunc("PUT /api/config/settings", s.handlePutSettings)
+	s.mux.HandleFunc("PUT /api/config/mqtt", s.handlePutMqtt)
+	s.mux.HandleFunc("POST /api/config/mqtt/brokers", s.handleSaveBroker)
+	s.mux.HandleFunc("PUT /api/config/mqtt/brokers/{id}", s.handleSaveBroker)
+	s.mux.HandleFunc("DELETE /api/config/mqtt/brokers/{id}", s.handleDeleteBroker)
+	s.mux.HandleFunc("POST /api/config/companions", s.handleSaveCompanion)
+	s.mux.HandleFunc("PUT /api/config/companions/{id}", s.handleSaveCompanion)
+	s.mux.HandleFunc("DELETE /api/config/companions/{id}", s.handleDeleteCompanion)
+	s.mux.HandleFunc("POST /api/config/companions/{id}/channels", s.handleCreateChannel)
+	s.mux.HandleFunc("PUT /api/config/channels/{id}", s.handleSaveChannel)
+	s.mux.HandleFunc("DELETE /api/config/channels/{id}", s.handleDeleteChannel)
+	s.mux.HandleFunc("POST /api/config/triggers", s.handleSaveTrigger)
+	s.mux.HandleFunc("PUT /api/config/triggers/{id}", s.handleSaveTrigger)
+	s.mux.HandleFunc("DELETE /api/config/triggers/{id}", s.handleDeleteTrigger)
 	s.mux.HandleFunc("GET /api/companions/{name}/channels", s.handleListChannels)
 	s.mux.HandleFunc("POST /api/companions/{name}/channels", s.handleAddChannel)
 	s.mux.HandleFunc("DELETE /api/companions/{name}/channels/{channel}", s.handleRemoveChannel)
@@ -228,6 +250,12 @@ func (s *Server) traceSenderLookup() TraceSenderLookup {
 func (s *Server) spaHandler() http.Handler {
 	fileServer := http.FileServerFS(s.assets)
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		// Unmatched API paths must 404, not fall through to the SPA index — a
+		// retired endpoint should read as "gone", not return HTML.
+		if strings.HasPrefix(r.URL.Path, "/api/") {
+			writeError(w, http.StatusNotFound, "not found")
+			return
+		}
 		f, err := s.assets.Open(r.URL.Path[1:])
 		if err != nil {
 			w.Header().Set("Cache-Control", "no-cache, no-store, must-revalidate")

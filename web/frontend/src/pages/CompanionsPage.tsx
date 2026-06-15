@@ -1,4 +1,4 @@
-import { useState } from "react";
+import { useMemo, useState } from "react";
 import { Link } from "react-router-dom";
 import {
   Crosshair,
@@ -20,18 +20,16 @@ import {
   DialogTitle,
 } from "@/components/ui/dialog";
 import { useApiList } from "@/hooks/useApiList";
-import {
-  useConfig,
-  type AppConfig,
-  type CompanionConfig,
-} from "@/hooks/useConfig";
+import { configApi, type ConfigCompanion } from "@/lib/configApi";
 import { LoadErrorAlert } from "@/components/LoadErrorAlert";
 import { PageHeader } from "@/components/PageHeader";
 import { InlineConfirm } from "@/components/InlineConfirm";
 import { TextField } from "@/components/ConfigFields";
 import { truncateMid } from "@/lib/format";
 
-interface Companion {
+// Runtime roster (/api/companions) — keyed by the live identity, used only to
+// enrich the config list with peer/channel counts.
+interface RuntimeCompanion {
   name: string;
   pubkey: string;
   peerCount: number;
@@ -44,46 +42,53 @@ export function CompanionsPage() {
     loading,
     error,
     reload,
-  } = useApiList<Companion>("/api/companions", "Failed to load companions");
-  const {
-    config,
-    saving,
-    save,
-    reload: reloadConfig,
-  } = useConfig();
+  } = useApiList<ConfigCompanion>(
+    "/api/config/companions",
+    "Failed to load companions",
+  );
+  const { items: runtime, reload: reloadRuntime } = useApiList<RuntimeCompanion>(
+    "/api/companions",
+    "Failed to load companion roster",
+  );
 
-  const [editing, setEditing] = useState<number | "new" | null>(null);
-  const [confirming, setConfirming] = useState<string | null>(null);
+  const [editing, setEditing] = useState<ConfigCompanion | "new" | null>(null);
+  const [confirming, setConfirming] = useState<number | null>(null);
+
+  const runtimeByPubkey = useMemo(() => {
+    const m = new Map<string, RuntimeCompanion>();
+    for (const r of runtime ?? []) m.set(r.pubkey, r);
+    return m;
+  }, [runtime]);
 
   const total = companions?.length ?? 0;
-  const totalChannels =
-    companions?.reduce((s, c) => s + (c.channels?.length || 0), 0) ?? 0;
   const totalPeers =
-    companions?.reduce((s, c) => s + (c.peerCount || 0), 0) ?? 0;
+    companions?.reduce(
+      (s, c) => s + (runtimeByPubkey.get(c.pubkey)?.peerCount ?? 0),
+      0,
+    ) ?? 0;
+  const totalChannels =
+    companions?.reduce(
+      (s, c) => s + (runtimeByPubkey.get(c.pubkey)?.channels?.length ?? 0),
+      0,
+    ) ?? 0;
 
-  // The save triggers a bot reload; re-fetch the runtime roster once the
-  // companions have restarted.
-  const saveAndRefresh = async (next: AppConfig): Promise<boolean> => {
-    const ok = await save(next);
-    if (ok) window.setTimeout(reload, 1800);
-    return ok;
+  // A write reloads the bot; refresh both the config list and the runtime
+  // roster (peer/channel counts) once the companions have restarted.
+  const refresh = () => {
+    reload();
+    window.setTimeout(reloadRuntime, 1200);
   };
 
-  const removeCompanion = async (name: string) => {
-    if (!config) return;
+  const removeCompanion = async (c: ConfigCompanion) => {
     setConfirming(null);
-    if (config.companions.length <= 1) {
-      toast.error("At least one companion must remain configured");
-      return;
+    try {
+      await configApi.deleteCompanion(c.id);
+      toast.success(`Companion "${c.name}" removed`);
+      refresh();
+    } catch (e) {
+      toast.error(e instanceof Error ? e.message : "Failed to remove companion");
     }
-    const next = structuredClone(config) as AppConfig;
-    next.companions = next.companions.filter((c) => c.name !== name);
-    if (next.mqtt?.node === name) next.mqtt.node = next.companions[0]?.name;
-    await saveAndRefresh(next);
   };
-
-  const configIdx = (name: string) =>
-    config?.companions.findIndex((c) => c.name === name) ?? -1;
 
   return (
     <div className="space-y-4">
@@ -100,7 +105,6 @@ export function CompanionsPage() {
           <Button
             size="sm"
             onClick={() => setEditing("new")}
-            disabled={!config}
             className="rounded-none font-mono text-[11px] uppercase tracking-[0.12em]"
           >
             <Plus className="size-3.5" />
@@ -131,93 +135,87 @@ export function CompanionsPage() {
                 No companions configured
               </p>
               <p className="mt-2 text-xs text-muted-foreground/70">
-                Add a companion to begin.
+                Observer-only — add a companion to appear on the mesh.
               </p>
             </div>
           ) : (
             <div className="divide-y divide-border">
-              {companions.map((c) => (
-                <div
-                  key={c.name}
-                  className="group flex items-center gap-4 px-4 py-4 hover:bg-muted/40 transition-colors"
-                >
-                  <Link
-                    to={`/companions/${encodeURIComponent(c.name)}`}
-                    className="flex items-center gap-4 min-w-0 flex-1"
+              {companions.map((c) => {
+                const rt = runtimeByPubkey.get(c.pubkey);
+                return (
+                  <div
+                    key={c.id}
+                    className="group flex items-center gap-4 px-4 py-4 hover:bg-muted/40 transition-colors"
                   >
-                    <div className="size-10 grid place-items-center rounded-sm border border-primary/30 bg-primary/10 text-primary shrink-0">
-                      <MessagesSquare className="size-4" strokeWidth={1.6} />
-                    </div>
-
-                    <div className="min-w-0 flex-1 space-y-1">
-                      <div className="flex items-baseline gap-2">
-                        <h3 className="font-mono text-sm font-semibold uppercase tracking-[0.08em] truncate">
-                          {c.name}
-                        </h3>
-                      </div>
-                      <code className="font-mono text-xs text-muted-foreground block truncate">
-                        {c.pubkey ? truncateMid(c.pubkey, 8, 6) : "—"}
-                      </code>
-                    </div>
-
-                    <div className="hidden sm:flex items-center gap-5 shrink-0">
-                      <Stat
-                        icon={<Users className="size-3" strokeWidth={1.6} />}
-                        label="peers"
-                        value={c.peerCount.toString()}
-                      />
-                      <Stat
-                        icon={<Hash className="size-3" strokeWidth={1.6} />}
-                        label="ch"
-                        value={(c.channels?.length || 0).toString()}
-                      />
-                    </div>
-
-                    <Crosshair className="size-3.5 text-muted-foreground/40 group-hover:text-primary transition-colors shrink-0" />
-                  </Link>
-
-                  <div className="flex items-center gap-1 shrink-0">
-                    <Button
-                      variant="ghost"
-                      size="icon-xs"
-                      onClick={() => {
-                        const idx = configIdx(c.name);
-                        if (idx >= 0) setEditing(idx);
-                        else toast.error("Companion not found in config");
-                      }}
-                      disabled={!config}
-                      aria-label="Edit companion"
-                      className="text-muted-foreground/60 hover:text-foreground"
+                    <Link
+                      to={`/companions/${encodeURIComponent(c.name)}`}
+                      className="flex items-center gap-4 min-w-0 flex-1"
                     >
-                      <Pencil className="size-3.5" />
-                    </Button>
-                    <InlineConfirm
-                      iconOnly
-                      confirming={confirming === c.name}
-                      onAskRemove={() => setConfirming(c.name)}
-                      onCancel={() => setConfirming(null)}
-                      onConfirm={() => removeCompanion(c.name)}
-                      ariaLabel="Remove companion"
-                    />
+                      <div className="size-10 grid place-items-center rounded-sm border border-primary/30 bg-primary/10 text-primary shrink-0">
+                        <MessagesSquare className="size-4" strokeWidth={1.6} />
+                      </div>
+
+                      <div className="min-w-0 flex-1 space-y-1">
+                        <div className="flex items-baseline gap-2">
+                          <h3 className="font-mono text-sm font-semibold uppercase tracking-[0.08em] truncate">
+                            {c.name}
+                          </h3>
+                        </div>
+                        <code className="font-mono text-xs text-muted-foreground block truncate">
+                          {c.pubkey ? truncateMid(c.pubkey, 8, 6) : "—"}
+                        </code>
+                      </div>
+
+                      <div className="hidden sm:flex items-center gap-5 shrink-0">
+                        <Stat
+                          icon={<Users className="size-3" strokeWidth={1.6} />}
+                          label="peers"
+                          value={(rt?.peerCount ?? 0).toString()}
+                        />
+                        <Stat
+                          icon={<Hash className="size-3" strokeWidth={1.6} />}
+                          label="ch"
+                          value={(rt?.channels?.length ?? 0).toString()}
+                        />
+                      </div>
+
+                      <Crosshair className="size-3.5 text-muted-foreground/40 group-hover:text-primary transition-colors shrink-0" />
+                    </Link>
+
+                    <div className="flex items-center gap-1 shrink-0">
+                      <Button
+                        variant="ghost"
+                        size="icon-xs"
+                        onClick={() => setEditing(c)}
+                        aria-label="Edit companion"
+                        className="text-muted-foreground/60 hover:text-foreground"
+                      >
+                        <Pencil className="size-3.5" />
+                      </Button>
+                      <InlineConfirm
+                        iconOnly
+                        confirming={confirming === c.id}
+                        onAskRemove={() => setConfirming(c.id)}
+                        onCancel={() => setConfirming(null)}
+                        onConfirm={() => removeCompanion(c)}
+                        ariaLabel="Remove companion"
+                      />
+                    </div>
                   </div>
-                </div>
-              ))}
+                );
+              })}
             </div>
           )}
         </section>
       )}
 
-      {editing !== null && config && (
+      {editing !== null && (
         <CompanionEditor
-          config={config}
-          idx={editing === "new" ? null : editing}
-          saving={saving}
+          companion={editing === "new" ? null : editing}
           onClose={() => setEditing(null)}
-          onSave={async (next) => {
-            if (await saveAndRefresh(next)) {
-              setEditing(null);
-              reloadConfig();
-            }
+          onSaved={() => {
+            setEditing(null);
+            refresh();
           }}
         />
       )}
@@ -226,53 +224,52 @@ export function CompanionsPage() {
 }
 
 function CompanionEditor({
-  config,
-  idx,
-  saving,
+  companion,
   onClose,
-  onSave,
+  onSaved,
 }: {
-  config: AppConfig;
-  idx: number | null;
-  saving: boolean;
+  companion: ConfigCompanion | null;
   onClose: () => void;
-  onSave: (next: AppConfig) => Promise<void>;
+  onSaved: () => void;
 }) {
-  const existing = idx != null ? config.companions[idx] : null;
-  const [name, setName] = useState(existing?.name ?? "");
+  const [name, setName] = useState(companion?.name ?? "");
   const [privateKey, setPrivateKey] = useState("");
   const [latitude, setLatitude] = useState(
-    existing?.latitude != null ? String(existing.latitude) : "",
+    companion?.latitude != null ? String(companion.latitude) : "",
   );
   const [longitude, setLongitude] = useState(
-    existing?.longitude != null ? String(existing.longitude) : "",
+    companion?.longitude != null ? String(companion.longitude) : "",
   );
   const [advertInterval, setAdvertInterval] = useState(
-    existing?.advertInterval != null ? String(existing.advertInterval) : "",
+    companion?.advertInterval != null ? String(companion.advertInterval) : "",
   );
+  const [saving, setSaving] = useState(false);
 
-  const renamed = existing != null && name.trim() !== existing.name;
+  const renamed = companion != null && name.trim() !== companion.name;
 
   const submit = async () => {
-    const next = structuredClone(config) as AppConfig;
-    const trimmed = name.trim();
-    const built: CompanionConfig = {
-      ...(existing ?? {}),
-      name: trimmed,
-      ...(existing ? {} : { privateKey: privateKey.trim() || undefined }),
-      latitude: latitude === "" ? null : parseFloat(latitude) || 0,
-      longitude: longitude === "" ? null : parseFloat(longitude) || 0,
-      advertInterval:
-        advertInterval === "" ? null : parseInt(advertInterval, 10) || 0,
-    };
-    if (idx != null) {
-      const oldName = next.companions[idx].name;
-      next.companions[idx] = built;
-      if (next.mqtt?.node === oldName) next.mqtt.node = built.name;
-    } else {
-      next.companions.push(built);
+    setSaving(true);
+    try {
+      await configApi.saveCompanion(
+        {
+          name: name.trim(),
+          // Only send a key on create (blank = generated). Edits keep the
+          // stored identity (omitted → inherited server-side).
+          ...(companion ? {} : { privateKey: privateKey.trim() || undefined }),
+          latitude: latitude === "" ? null : parseFloat(latitude) || 0,
+          longitude: longitude === "" ? null : parseFloat(longitude) || 0,
+          advertInterval:
+            advertInterval === "" ? null : parseInt(advertInterval, 10) || 0,
+        },
+        companion?.id,
+      );
+      toast.success(companion ? "Companion saved" : `Companion "${name.trim()}" added`);
+      onSaved();
+    } catch (e) {
+      toast.error(e instanceof Error ? e.message : "Failed to save companion");
+    } finally {
+      setSaving(false);
     }
-    await onSave(next);
   };
 
   return (
@@ -280,7 +277,7 @@ function CompanionEditor({
       <DialogContent className="rounded-none sm:max-w-lg">
         <DialogHeader>
           <DialogTitle className="font-mono text-sm uppercase tracking-widest">
-            {existing ? `Edit companion — ${existing.name}` : "Add companion"}
+            {companion ? `Edit companion — ${companion.name}` : "Add companion"}
           </DialogTitle>
         </DialogHeader>
 
@@ -292,11 +289,11 @@ function CompanionEditor({
             placeholder="OwlShack"
             hint={
               renamed
-                ? "⚠ message history, contacts and conversations are keyed by name — renaming orphans them"
+                ? "renaming is safe — history, contacts and conversations follow the companion (keyed by its id)"
                 : "shown on the mesh and in adverts"
             }
           />
-          {!existing && (
+          {!companion && (
             <TextField
               label="Private key"
               type="password"

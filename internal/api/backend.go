@@ -34,9 +34,96 @@ type Backend interface {
 	// config file.
 	PersistChannels() error
 
-	// Config returns the current configuration as a JSON-serializable value.
-	Config() any
+	// Per-resource config writes. Each applies the change by surrogate id,
+	// re-validates the whole assembled config, and reloads — so an invalid edit
+	// is rejected before it persists. Save* with id==0 creates (returning the
+	// new id); id>0 updates. Secret fields typed *string mean "keep existing"
+	// when nil, set when non-nil, cleared when empty.
+	SaveSettings(in SettingsInput) error
+	SaveMqtt(in MqttInput) error
+	SaveBroker(in BrokerInput) (int64, error)
+	DeleteBroker(id int64) error
+	SaveCompanion(in CompanionInput) (int64, error)
+	DeleteCompanion(id int64) error
+	SaveChannel(in ChannelInput) (int64, error)
+	DeleteChannel(id int64) error
+	SaveTrigger(in TriggerInput) (int64, error)
+	DeleteTrigger(id int64) error
+}
 
-	// UpdateConfig validates and applies a new configuration from JSON input.
-	UpdateConfig(input map[string]any) error
+// --- per-resource config write inputs (JSON request bodies) ---
+
+type SettingsInput struct {
+	LogLevel       *string  `json:"logLevel"`
+	ConnectionType *string  `json:"connectionType"`
+	Connection     *string  `json:"connection"`
+	BaudRate       *int     `json:"baudRate"`
+	Freq           *float64 `json:"freq"`
+	BW             *float64 `json:"bw"`
+	SF             *int     `json:"sf"`
+	CR             *int     `json:"cr"`
+	TX             *int     `json:"tx"`
+	ListenAddr     *string  `json:"listenAddr"`
+	SetupComplete  *bool    `json:"setupComplete"`
+}
+
+type MqttInput struct {
+	Enabled         *bool   `json:"enabled"`
+	NodeCompanionID *int64  `json:"nodeCompanionId"`
+	IataCode        *string `json:"iataCode"`
+	StatusInterval  *int    `json:"statusInterval"`
+	Owner           *string `json:"owner"`
+	Email           *string `json:"email"`
+}
+
+type BrokerInput struct {
+	ID                    int64    `json:"id"`
+	Name                  string   `json:"name"`
+	Enabled               bool     `json:"enabled"`
+	Dedup                 bool     `json:"dedup"`
+	Transport             string   `json:"transport"`
+	Host                  string   `json:"host"`
+	Port                  int      `json:"port"`
+	PacketTopic           *string  `json:"packetTopic"`
+	StatusTopic           *string  `json:"statusTopic"`
+	DisallowedPacketTypes []string `json:"disallowedPacketTypes"`
+	RetainStatus          bool     `json:"retainStatus"`
+	TLSEnabled            bool     `json:"tlsEnabled"`
+	TLSInsecure           bool     `json:"tlsInsecure"`
+	AuthType              string   `json:"authType"`
+	Username              string   `json:"username"`
+	Password              *string  `json:"password"` // nil = keep existing
+	Path                  string   `json:"path"`
+	Audience              string   `json:"audience"`
+}
+
+type CompanionInput struct {
+	ID             int64    `json:"id"`
+	Name           string   `json:"name"`
+	PrivateKey     *string  `json:"privateKey"` // nil = keep (update) / generate (create)
+	Latitude       *float64 `json:"latitude"`
+	Longitude      *float64 `json:"longitude"`
+	AdvertInterval *int     `json:"advertInterval"`
+}
+
+type ChannelInput struct {
+	ID          int64   `json:"id"`
+	CompanionID int64   `json:"companionId"`
+	Name        string  `json:"name"`
+	PrivateKey  *string `json:"privateKey"` // nil = keep existing
+}
+
+type TriggerInput struct {
+	ID                 int64    `json:"id"`
+	CompanionID        int64    `json:"companionId"`
+	Type               string   `json:"type"`
+	Template           string   `json:"template"`
+	CharLimitBehaviour *string  `json:"charLimitBehaviour"`
+	Match              []string `json:"match"`
+	Contacts           []string `json:"contacts"`
+	ChannelIDs         []int64  `json:"channelIds"`
+	RetryTimeout       *int64   `json:"retryTimeout"`
+	MaxRetries         *int     `json:"maxRetries"`
+	PathHashSize       *int     `json:"pathHashSize"`
+	Schedule           *string  `json:"schedule"`
 }

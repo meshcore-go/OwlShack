@@ -1,7 +1,9 @@
 import { lazy, Suspense } from "react";
 import { Route, Routes } from "react-router-dom";
 import { AppShell } from "@/components/AppShell";
-import { useConfig } from "@/hooks/useConfig";
+import { useApiList } from "@/hooks/useApiList";
+import { useApiObject } from "@/hooks/useApiObject";
+import { type ConfigCompanion, type Settings } from "@/lib/configApi";
 import { DashboardPage } from "@/pages/DashboardPage";
 import { PeersPage } from "@/pages/PeersPage";
 import { CompanionsPage } from "@/pages/CompanionsPage";
@@ -76,20 +78,34 @@ function PageFallback() {
 }
 
 export function App() {
-  const { config, save, reload } = useConfig();
-  // Fresh install: never configured (flag unset) and no companions yet. An
-  // observer-only setup that skipped the wizard has setupComplete=true, and
-  // existing installs always have >=1 companion, so neither re-triggers it.
+  const { item: settings, reload: reloadSettings } = useApiObject<Settings>(
+    "/api/config/settings",
+    "Failed to load settings",
+  );
+  const { items: companions, reload: reloadCompanions } =
+    useApiList<ConfigCompanion>("/api/config/companions", "Failed to load companions");
+
+  // Fresh install: never configured (flag unset) and no companions yet. Wait
+  // for both fetches so an existing install (>=1 companion) never flashes the
+  // wizard, and an observer-only setup that finished (setupComplete=true) keeps
+  // it hidden.
   const needsSetup =
-    config != null &&
-    config.setupComplete !== true &&
-    (config.companions?.length ?? 0) === 0;
+    settings != null &&
+    companions != null &&
+    settings.setupComplete !== true &&
+    companions.length === 0;
 
   return (
     <AppShell>
-      {needsSetup && (
+      {needsSetup && settings && (
         <Suspense fallback={null}>
-          <SetupWizard config={config} save={save} reload={reload} />
+          <SetupWizard
+            settings={settings}
+            onComplete={() => {
+              reloadSettings();
+              reloadCompanions();
+            }}
+          />
         </Suspense>
       )}
       <Suspense fallback={<PageFallback />}>

@@ -7,6 +7,7 @@ import {
   Rss,
   Save,
 } from "lucide-react";
+import { toast } from "sonner";
 import { PageHeader } from "@/components/PageHeader";
 import { LoadErrorAlert } from "@/components/LoadErrorAlert";
 import { SectionTitle } from "@/components/SectionTitle";
@@ -20,13 +21,21 @@ import {
   DialogHeader,
   DialogTitle,
 } from "@/components/ui/dialog";
+import { useApiList } from "@/hooks/useApiList";
+import { useApiObject } from "@/hooks/useApiObject";
 import {
-  useConfig,
-  type AppConfig,
-  type BrokerConfig,
-} from "@/hooks/useConfig";
+  configApi,
+  type Broker,
+  type BrokerInput,
+  type ConfigCompanion,
+  type MqttSettings,
+} from "@/lib/configApi";
 
-const EMPTY_BROKER: BrokerConfig = {
+// A broker draft is the editable form state: every broker field except the
+// secret, which is entered separately (blank = keep the stored one).
+type BrokerDraft = Omit<BrokerInput, "password">;
+
+const EMPTY_BROKER: BrokerDraft = {
   name: "",
   enabled: true,
   dedup: true,
@@ -41,7 +50,6 @@ const EMPTY_BROKER: BrokerConfig = {
   tlsInsecure: false,
   authType: "token",
   username: "",
-  password: "",
   path: "/",
   audience: "",
 };
@@ -49,7 +57,7 @@ const EMPTY_BROKER: BrokerConfig = {
 // Mirrors meshcoretomqtt's broker presets (github.com/Cisien/meshcoretomqtt
 // presets/): websockets on 443, verified TLS, signed-token auth with the
 // audience pinned to the broker host, explicit meshcoretomqtt topic paths.
-function tokenBrokerPreset(name: string, host: string): BrokerConfig {
+function tokenBrokerPreset(name: string, host: string): BrokerDraft {
   return {
     ...EMPTY_BROKER,
     name,
@@ -62,7 +70,7 @@ function tokenBrokerPreset(name: string, host: string): BrokerConfig {
   };
 }
 
-const BROKER_PRESETS: { value: string; label: string; broker: BrokerConfig }[] =
+const BROKER_PRESETS: { value: string; label: string; broker: BrokerDraft }[] =
   [
     {
       value: "letsmesh-us",
@@ -91,56 +99,105 @@ const BROKER_PRESETS: { value: string; label: string; broker: BrokerConfig }[] =
     },
   ];
 
-export function MqttPage() {
-  const { config, loading, error, saving, save, reload } = useConfig();
+function brokerToDraft(b: Broker): BrokerDraft {
+  return {
+    name: b.name,
+    enabled: b.enabled,
+    dedup: b.dedup,
+    transport: b.transport,
+    host: b.host,
+    port: b.port,
+    packetTopic: b.packetTopic ?? "",
+    statusTopic: b.statusTopic ?? "",
+    disallowedPacketTypes: b.disallowedPacketTypes,
+    retainStatus: b.retainStatus,
+    tlsEnabled: b.tlsEnabled,
+    tlsInsecure: b.tlsInsecure,
+    authType: b.authType,
+    username: b.username,
+    path: b.path,
+    audience: b.audience,
+  };
+}
 
+export function MqttPage() {
+  const {
+    item: mqtt,
+    loading: mqttLoading,
+    error: mqttError,
+    reload: reloadMqtt,
+  } = useApiObject<MqttSettings>("/api/config/mqtt", "Failed to load MQTT settings");
+  const {
+    items: brokers,
+    loading: brokersLoading,
+    error: brokersError,
+    reload: reloadBrokers,
+  } = useApiList<Broker>("/api/config/mqtt/brokers", "Failed to load brokers");
+  const { items: companions } = useApiList<ConfigCompanion>(
+    "/api/config/companions",
+    "Failed to load companions",
+  );
+
+  const [savingFeed, setSavingFeed] = useState(false);
   const [enabled, setEnabled] = useState(true);
-  const [node, setNode] = useState("");
+  const [nodeId, setNodeId] = useState("");
   const [iataCode, setIataCode] = useState("");
   const [owner, setOwner] = useState("");
   const [email, setEmail] = useState("");
   const [statusInterval, setStatusInterval] = useState("300");
-  const [brokers, setBrokers] = useState<BrokerConfig[]>([]);
-  const [editingBroker, setEditingBroker] = useState<number | "new" | null>(
-    null,
-  );
+  const [editing, setEditing] = useState<Broker | "new" | null>(null);
   const [confirming, setConfirming] = useState<number | null>(null);
 
   useEffect(() => {
-    if (!config) return;
-    const m = config.mqtt;
-    setEnabled(m?.enabled !== false);
-    setNode(m?.node ?? config.companions[0]?.name ?? "");
-    setIataCode(m?.iataCode ?? "");
-    setOwner(m?.owner ?? "");
-    setEmail(m?.email ?? "");
-    setStatusInterval(String(m?.statusInterval ?? 300));
-    setBrokers(m?.brokers ?? []);
-  }, [config]);
+    if (!mqtt) return;
+    setEnabled(mqtt.enabled !== false);
+    setNodeId(mqtt.nodeCompanionId != null ? String(mqtt.nodeCompanionId) : "");
+    setIataCode(mqtt.iataCode ?? "");
+    setOwner(mqtt.owner ?? "");
+    setEmail(mqtt.email ?? "");
+    setStatusInterval(String(mqtt.statusInterval ?? 300));
+  }, [mqtt]);
 
-  const buildNext = (nextBrokers: BrokerConfig[]): AppConfig | null => {
-    if (!config) return null;
-    const next = structuredClone(config) as AppConfig;
-    if (nextBrokers.length === 0) {
-      next.mqtt = null;
-      return next;
+  // Default the feed node to the first companion when none is stored yet.
+  useEffect(() => {
+    if (nodeId === "" && companions && companions.length > 0) {
+      setNodeId(String(companions[0].id));
     }
-    next.mqtt = {
-      ...(config.mqtt ?? {}),
-      enabled,
-      node: node || null,
-      iataCode: iataCode || null,
-      owner: owner || null,
-      email: email || null,
-      statusInterval: parseInt(statusInterval, 10) || 300,
-      brokers: nextBrokers,
-    };
-    return next;
+  }, [companions, nodeId]);
+
+  const list = brokers ?? [];
+  const loading = mqttLoading || brokersLoading;
+  const error = mqttError || brokersError;
+
+  const saveFeed = async () => {
+    setSavingFeed(true);
+    try {
+      await configApi.putMqtt({
+        enabled,
+        nodeCompanionId: nodeId === "" ? null : parseInt(nodeId, 10),
+        iataCode: iataCode || null,
+        owner: owner || null,
+        email: email || null,
+        statusInterval: parseInt(statusInterval, 10) || 300,
+      });
+      toast.success("MQTT settings saved");
+      reloadMqtt();
+    } catch (e) {
+      toast.error(e instanceof Error ? e.message : "Failed to save MQTT settings");
+    } finally {
+      setSavingFeed(false);
+    }
   };
 
-  const onSave = async (nextBrokers?: BrokerConfig[]) => {
-    const next = buildNext(nextBrokers ?? brokers);
-    if (next) await save(next);
+  const removeBroker = async (b: Broker) => {
+    setConfirming(null);
+    try {
+      await configApi.deleteBroker(b.id);
+      toast.success(`Broker "${b.name}" removed`);
+      reloadBrokers();
+    } catch (e) {
+      toast.error(e instanceof Error ? e.message : "Failed to remove broker");
+    }
   };
 
   return (
@@ -149,20 +206,20 @@ export function MqttPage() {
         eyebrow="system"
         title="MQTT"
         meta={
-          config && (
+          brokers && (
             <span className="font-mono text-sm text-muted-foreground tabular-nums">
-              {brokers.length} broker{brokers.length === 1 ? "" : "s"}
+              {list.length} broker{list.length === 1 ? "" : "s"}
             </span>
           )
         }
         actions={
           <Button
             size="sm"
-            onClick={() => onSave()}
-            disabled={saving || loading || !config}
+            onClick={saveFeed}
+            disabled={savingFeed || loading || !mqtt}
             className="rounded-none font-mono text-[11px] uppercase tracking-[0.12em]"
           >
-            {saving ? (
+            {savingFeed ? (
               <Loader2 className="size-3.5 animate-spin" />
             ) : (
               <Save className="size-3.5" />
@@ -172,11 +229,19 @@ export function MqttPage() {
         }
       />
 
-      {error && <LoadErrorAlert message={error} onRetry={reload} />}
+      {error && (
+        <LoadErrorAlert
+          message={error}
+          onRetry={() => {
+            reloadMqtt();
+            reloadBrokers();
+          }}
+        />
+      )}
 
       {loading ? (
         <Skeleton className="h-64 w-full rounded-none" />
-      ) : config ? (
+      ) : mqtt ? (
         <>
           <section className="panel">
             <SectionTitle eyebrow="observer" title="Feed" />
@@ -190,12 +255,12 @@ export function MqttPage() {
               <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
                 <SelectField
                   label="Node"
-                  value={node}
-                  options={config.companions.map((c) => ({
-                    value: c.name,
+                  value={nodeId}
+                  options={(companions ?? []).map((c) => ({
+                    value: String(c.id),
                     label: c.name,
                   }))}
-                  onChange={setNode}
+                  onChange={setNodeId}
                   hint="one node feeds MQTT — its identity signs the feed"
                 />
                 <TextField
@@ -232,7 +297,7 @@ export function MqttPage() {
                 <Button
                   variant="outline"
                   size="sm"
-                  onClick={() => setEditingBroker("new")}
+                  onClick={() => setEditing("new")}
                   className="rounded-none font-mono text-[10px] uppercase tracking-[0.12em]"
                 >
                   <Plus className="size-3" />
@@ -240,7 +305,7 @@ export function MqttPage() {
                 </Button>
               }
             />
-            {brokers.length === 0 ? (
+            {list.length === 0 ? (
               <div className="px-6 py-16 text-center space-y-3">
                 <CircleDashed className="size-8 mx-auto text-muted-foreground/40" />
                 <p className="font-mono text-xs uppercase tracking-[0.12em] text-muted-foreground">
@@ -249,8 +314,8 @@ export function MqttPage() {
               </div>
             ) : (
               <div className="divide-y divide-border">
-                {brokers.map((b, i) => (
-                  <div key={i} className="flex items-center gap-4 px-4 py-3">
+                {list.map((b) => (
+                  <div key={b.id} className="flex items-center gap-4 px-4 py-3">
                     <div
                       className={
                         b.enabled
@@ -282,7 +347,7 @@ export function MqttPage() {
                       <Button
                         variant="ghost"
                         size="icon-xs"
-                        onClick={() => setEditingBroker(i)}
+                        onClick={() => setEditing(b)}
                         aria-label="Edit broker"
                         className="text-muted-foreground/60 hover:text-foreground"
                       >
@@ -290,17 +355,10 @@ export function MqttPage() {
                       </Button>
                       <InlineConfirm
                         iconOnly
-                        confirming={confirming === i}
-                        onAskRemove={() => setConfirming(i)}
+                        confirming={confirming === b.id}
+                        onAskRemove={() => setConfirming(b.id)}
                         onCancel={() => setConfirming(null)}
-                        onConfirm={() => {
-                          setConfirming(null);
-                          const nextBrokers = brokers.filter(
-                            (_, j) => j !== i,
-                          );
-                          setBrokers(nextBrokers);
-                          void onSave(nextBrokers);
-                        }}
+                        onConfirm={() => removeBroker(b)}
                         ariaLabel="Remove broker"
                       />
                     </div>
@@ -312,22 +370,13 @@ export function MqttPage() {
         </>
       ) : null}
 
-      {editingBroker !== null && (
+      {editing !== null && (
         <BrokerEditor
-          broker={
-            editingBroker === "new" ? EMPTY_BROKER : brokers[editingBroker]
-          }
-          isNew={editingBroker === "new"}
-          saving={saving}
-          onClose={() => setEditingBroker(null)}
-          onSave={async (b) => {
-            const nextBrokers =
-              editingBroker === "new"
-                ? [...brokers, b]
-                : brokers.map((x, i) => (i === editingBroker ? b : x));
-            setBrokers(nextBrokers);
-            await onSave(nextBrokers);
-            setEditingBroker(null);
+          broker={editing === "new" ? null : editing}
+          onClose={() => setEditing(null)}
+          onSaved={() => {
+            setEditing(null);
+            reloadBrokers();
           }}
         />
       )}
@@ -337,25 +386,28 @@ export function MqttPage() {
 
 function BrokerEditor({
   broker,
-  isNew,
-  saving,
   onClose,
-  onSave,
+  onSaved,
 }: {
-  broker: BrokerConfig;
-  isNew: boolean;
-  saving: boolean;
+  broker: Broker | null;
   onClose: () => void;
-  onSave: (b: BrokerConfig) => Promise<void>;
+  onSaved: () => void;
 }) {
-  const [b, setB] = useState<BrokerConfig>({ ...broker });
-  const set = <K extends keyof BrokerConfig>(k: K, v: BrokerConfig[K]) =>
+  const [b, setB] = useState<BrokerDraft>(
+    broker ? brokerToDraft(broker) : { ...EMPTY_BROKER },
+  );
+  const set = <K extends keyof BrokerDraft>(k: K, v: BrokerDraft[K]) =>
     setB((prev) => ({ ...prev, [k]: v }));
 
   const [disallowed, setDisallowed] = useState(
-    (broker.disallowedPacketTypes ?? []).join(", "),
+    (broker?.disallowedPacketTypes ?? []).join(", "),
   );
+  const [password, setPassword] = useState("");
   const [preset, setPreset] = useState("custom");
+  const [saving, setSaving] = useState(false);
+
+  const isNew = broker == null;
+  const passwordSet = broker?.passwordSet ?? false;
 
   const applyPreset = (value: string) => {
     setPreset(value);
@@ -372,10 +424,24 @@ function BrokerEditor({
       .split(",")
       .map((s) => s.trim())
       .filter(Boolean);
-    await onSave({
+    const input: BrokerInput = {
       ...b,
+      packetTopic: b.packetTopic || null,
+      statusTopic: b.statusTopic || null,
       disallowedPacketTypes: types.length > 0 ? types : null,
-    });
+    };
+    // Only send a password when one was typed; blank keeps the stored secret.
+    if (password !== "") input.password = password;
+    setSaving(true);
+    try {
+      await configApi.saveBroker(input, broker?.id);
+      toast.success(isNew ? `Broker "${b.name}" added` : "Broker saved");
+      onSaved();
+    } catch (e) {
+      toast.error(e instanceof Error ? e.message : "Failed to save broker");
+    } finally {
+      setSaving(false);
+    }
   };
 
   return (
@@ -383,7 +449,7 @@ function BrokerEditor({
       <DialogContent className="rounded-none sm:max-w-xl max-h-[85vh] overflow-y-auto">
         <DialogHeader>
           <DialogTitle className="font-mono text-sm uppercase tracking-widest">
-            {broker.name ? `Edit broker — ${broker.name}` : "Add broker"}
+            {broker ? `Edit broker — ${broker.name}` : "Add broker"}
           </DialogTitle>
         </DialogHeader>
 
@@ -478,8 +544,10 @@ function BrokerEditor({
               <TextField
                 label="Password"
                 type="password"
-                value={b.password}
-                onChange={(v) => set("password", v)}
+                value={password}
+                onChange={setPassword}
+                placeholder={passwordSet ? "•••••• saved" : ""}
+                hint={passwordSet ? "leave blank to keep the stored password" : undefined}
               />
             </div>
           )}

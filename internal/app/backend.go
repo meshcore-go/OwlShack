@@ -2,7 +2,6 @@ package app
 
 import (
 	"encoding/hex"
-	"encoding/json"
 	"fmt"
 	"log/slog"
 	"time"
@@ -21,13 +20,12 @@ const repeaterReqTimeout = 10 * time.Second
 // reload/reconnect, so it never has to mutate its companion set.
 type backend struct {
 	companions []*companion.Companion
-	cfg        *config.Config
 	db         *store.Store
 	reload     func() error
 }
 
-func newBackend(companions []*companion.Companion, cfg *config.Config, db *store.Store, reload func() error) *backend {
-	return &backend{companions: companions, cfg: cfg, db: db, reload: reload}
+func newBackend(companions []*companion.Companion, db *store.Store, reload func() error) *backend {
+	return &backend{companions: companions, db: db, reload: reload}
 }
 
 func (b *backend) find(name string) (*companion.Companion, bool) {
@@ -191,51 +189,6 @@ func (b *backend) PersistChannels() error {
 	}
 
 	slog.Info("config persisted with channel changes")
-	return nil
-}
-
-func (b *backend) Config() any {
-	current, err := loadConfigFromDB(b.db)
-	if err != nil {
-		return b.cfg
-	}
-	return current
-}
-
-func (b *backend) UpdateConfig(input map[string]any) error {
-	raw, err := json.Marshal(input)
-	if err != nil {
-		return fmt.Errorf("invalid config data: %w", err)
-	}
-
-	newCfg, err := config.UnmarshalConfigJson(raw)
-	if err != nil {
-		return fmt.Errorf("config validation failed: %w", err)
-	}
-
-	// Never let a PUT that omits a key silently rotate a running identity.
-	if prev, perr := loadConfigFromDB(b.db); perr == nil {
-		inheritCompanionKeys(newCfg, prev)
-	}
-	if err := newCfg.EnsureCompanionKeys(); err != nil {
-		return err
-	}
-
-	if err := newCfg.Validate(); err != nil {
-		return err
-	}
-
-	if err := saveConfig(b.db, newCfg); err != nil {
-		return err
-	}
-
-	if b.reload != nil {
-		if err := b.reload(); err != nil {
-			return fmt.Errorf("config saved but reload failed: %w", err)
-		}
-	}
-
-	slog.Info("config updated via API")
 	return nil
 }
 

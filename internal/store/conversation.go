@@ -30,7 +30,7 @@ type ContactInfo struct {
 	Name      string
 }
 
-func (r *ConversationRepo) List(companionID string, channelNames []string, contacts []ContactInfo) ([]Conversation, error) {
+func (r *ConversationRepo) List(companionID int64, channelNames []string, contacts []ContactInfo) ([]Conversation, error) {
 	convos := make([]Conversation, 0)
 
 	for _, ch := range channelNames {
@@ -52,7 +52,7 @@ func (r *ConversationRepo) List(companionID string, channelNames []string, conta
 	return convos, nil
 }
 
-func (r *ConversationRepo) channelConversation(companionID, channel string) (*Conversation, error) {
+func (r *ConversationRepo) channelConversation(companionID int64, channel string) (*Conversation, error) {
 	conv := &Conversation{
 		ID:   "channel:" + channel,
 		Type: "channel",
@@ -102,7 +102,7 @@ func (r *ConversationRepo) channelConversation(companionID, channel string) (*Co
 	return conv, nil
 }
 
-func (r *ConversationRepo) contactConversation(companionID string, ct ContactInfo) (*Conversation, error) {
+func (r *ConversationRepo) contactConversation(companionID int64, ct ContactInfo) (*Conversation, error) {
 	channelKey := "dm:" + ct.PubKeyHex
 	conv := &Conversation{
 		ID:   "contact:" + ct.PubKeyHex,
@@ -153,7 +153,7 @@ func (r *ConversationRepo) contactConversation(companionID string, ct ContactInf
 	return conv, nil
 }
 
-func (r *ConversationRepo) MarkRead(companionID, conversationID string, lastReadID int64) error {
+func (r *ConversationRepo) MarkRead(companionID int64, conversationID string, lastReadID int64) error {
 	_, err := r.db.Exec(`
 		INSERT INTO conversation_reads (companion_id, conversation_id, last_read_id)
 		VALUES (?, ?, ?)

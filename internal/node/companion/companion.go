@@ -546,7 +546,7 @@ func (c *Companion) handleRoomPush(pkt *meshcore.Packet, roomPubKey []byte, room
 
 	// Dedup re-pushed posts: the server's backlog holds at most 32, so 50
 	// recent rows cover the resync window.
-	recent, err := c.store.Messages.List(c.cfg.Name, channelKey, 50, 0)
+	recent, err := c.store.Messages.List(c.cfg.ID, channelKey, 50, 0)
 	if err == nil {
 		for _, m := range recent {
 			if m.Direction == "rx" && m.Timestamp.Unix() == int64(postTs) && m.Text == text {
@@ -562,7 +562,7 @@ func (c *Companion) handleRoomPush(pkt *meshcore.Packet, roomPubKey []byte, room
 	}
 
 	msg := &store.Message{
-		CompanionID: c.cfg.Name,
+		CompanionID: c.cfg.ID,
 		Channel:     channelKey,
 		ChannelHash: 0,
 		Sender:      authorName,
@@ -618,7 +618,7 @@ func (c *Companion) handleDMPathReturn(pkt *meshcore.Packet) {
 		return
 	}
 
-	contacts, err := c.store.Contacts.List(c.cfg.Name)
+	contacts, err := c.store.Contacts.List(c.cfg.ID)
 	if err != nil {
 		return
 	}
@@ -792,7 +792,7 @@ func (c *Companion) registerPacketHandlers() {
 		pathHashSize := int(pkt.PathHashSize())
 
 		msg := &store.Message{
-			CompanionID:  c.cfg.Name,
+			CompanionID:  c.cfg.ID,
 			Channel:      ch.Name,
 			ChannelHash:  ch.Hash,
 			Sender:       payload.Sender,
@@ -807,7 +807,7 @@ func (c *Companion) registerPacketHandlers() {
 		}
 
 		convoID := "channel:" + ch.Name
-		if blocked, err := c.store.BlockedSenders.IsBlocked(c.cfg.Name, convoID, payload.Sender); err == nil && blocked {
+		if blocked, err := c.store.BlockedSenders.IsBlocked(c.cfg.ID, convoID, payload.Sender); err == nil && blocked {
 			c.log.Debug("blocked sender filtered", "sender", payload.Sender, "channel", ch.Name)
 			return
 		}
@@ -884,7 +884,7 @@ func (c *Companion) registerPacketHandlers() {
 			return
 		}
 
-		contacts, err := c.store.Contacts.List(c.cfg.Name)
+		contacts, err := c.store.Contacts.List(c.cfg.ID)
 		if err != nil {
 			c.log.Error("failed to list contacts for DM decryption", "error", err)
 			return
@@ -961,7 +961,7 @@ func (c *Companion) registerPacketHandlers() {
 		channelKey := "dm:" + senderPubKeyHex
 
 		msg := &store.Message{
-			CompanionID: c.cfg.Name,
+			CompanionID: c.cfg.ID,
 			Channel:     channelKey,
 			ChannelHash: 0,
 			Sender:      senderName,
@@ -1063,6 +1063,13 @@ func (c *Companion) registerPacketHandlers() {
 
 func (c *Companion) Name() string {
 	return c.cfg.Name
+}
+
+// ID returns the companion's surrogate primary key, the stable key its history
+// (messages, contacts, conversations, blocks) is stored under — so a rename
+// (which only changes Name) keeps that history attached.
+func (c *Companion) ID() int64 {
+	return c.cfg.ID
 }
 
 // LatLon returns the companion's configured position (nil if unset).
@@ -1221,7 +1228,7 @@ func (c *Companion) sendGroupReply(ch *meshcore.ChannelEntry, text string, hashS
 	}
 
 	msg := &store.Message{
-		CompanionID: c.cfg.Name,
+		CompanionID: c.cfg.ID,
 		Channel:     ch.Name,
 		ChannelHash: ch.Hash,
 		Sender:      c.cfg.Name,
@@ -1283,7 +1290,7 @@ func (c *Companion) SendContactMessage(pubkeyHex, text string) error {
 	statusSending := "sending"
 
 	msg := &store.Message{
-		CompanionID: c.cfg.Name,
+		CompanionID: c.cfg.ID,
 		Channel:     channelKey,
 		ChannelHash: 0,
 		Sender:      c.cfg.Name,

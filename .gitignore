@@ -178,6 +178,8 @@ meshcore.db
 meshcore.db-shm
 meshcore.db-wal
 meshcore.db-journal
+# Pre-migration DB backups (hold live secrets — never commit)
+meshcore.db.*.bak
 
 # Node identity private keys (ed25519 seeds — NEVER commit)
 *.key

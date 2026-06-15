@@ -78,6 +78,10 @@ type Config struct {
 	// Logging
 	LogLevel *string `json:"logLevel" yaml:"logLevel" toml:"logLevel"`
 
+	// ConnectionType selects the radio backend. "kiss" today; extensible
+	// (e.g. "sx1262_hat") later. Empty defaults to "kiss".
+	ConnectionType *string `json:"connectionType,omitempty" yaml:"connectionType,omitempty" toml:"connectionType,omitempty"`
+
 	// Connection Settings (KISS modem)
 	Connection *string `json:"connection" yaml:"connection" toml:"connection"` // serial://<path> or tcp://<host:port>
 	BaudRate   *int    `json:"baudRate" yaml:"baudRate" toml:"baudRate"`       // Default 115200 if using serial
@@ -186,6 +190,17 @@ func (c *Config) ApplyDefaults() {
 	// null; the frontend (and its TS contract) treats companions as an array.
 	if c.Companions == nil {
 		c.Companions = []CompanionConfig{}
+	}
+	if c.ConnectionType == nil || *c.ConnectionType == "" {
+		kiss := "kiss"
+		c.ConnectionType = &kiss
+	}
+	// nil and false both mean "setup not finished" (only true matters); pin it to
+	// false so the value is representable in the relational schema and consistent
+	// across GET/DB/runtime.
+	if c.SetupComplete == nil {
+		f := false
+		c.SetupComplete = &f
 	}
 	if c.Connection == nil {
 		c.Connection = defaults.Connection

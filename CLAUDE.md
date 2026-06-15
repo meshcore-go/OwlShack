@@ -193,10 +193,17 @@ hooks/
                    url=null to defer. Use this instead of hand-rolling
                    loading/error/useEffect fetch state on a page.
   use-mobile.ts    shadcn-shipped breakpoint hook
-  useConfig.ts     config types + GET /api/config + full-document PUT save()
-                   (see "Config management" section — always clone & mutate)
+  useApiObject.ts  single-object sibling of useApiList — { item, setItem,
+                   loading, error, reload }; for the single-row config
+                   resources (settings, mqtt). Pass url=null to defer.
 
 lib/
+  configApi.ts     typed client for the per-resource config REST
+                   (/api/config/*): redacted read DTOs (Settings, MqttSettings,
+                   Broker, ConfigCompanion, ConfigChannel, Trigger) + write
+                   fns (configApi.putSettings/saveBroker/saveCompanion/
+                   saveTrigger/…). Secrets never reach the browser — omit a
+                   secret field on write to keep it. (see "Config management")
   utils.ts         cn() (clsx + tailwind-merge)
   format.ts        timeAgo, formatDateTime, formatShortTime, truncate, truncateMid,
                    formatUptime, formatSecsAgo, formatBattery
@@ -275,8 +282,24 @@ GET|DELETE|PUT /api/companions/{name}/repeaters/{pubkey}/path
 POST /api/companions/{name}/rooms/{pubkey}/login             { password, syncSince? }
 GET|DELETE /api/companions/{name}/rooms/{pubkey}/session
 
-GET  /api/config                                              (full config JSON, fresh from disk)
-PUT  /api/config                                              (full-document replace → validate → write → SIGHUP reload)
+# Per-resource config REST. Reads are scoped + secret-redacted (privateKeySet /
+# passwordSet booleans, never the raw secret). Writes validate the whole
+# assembled config before persisting (by surrogate id) and reload. There is NO
+# whole-document /api/config endpoint — it was removed (it leaked secrets);
+# unmatched /api/* paths 404.
+GET  /api/config/settings                                    (radio/connection/log + setupComplete)
+PUT  /api/config/settings
+GET  /api/config/mqtt                                        (feed settings; node by companion id)
+PUT  /api/config/mqtt
+GET  /api/config/mqtt/brokers
+POST /api/config/mqtt/brokers          PUT|DELETE /api/config/mqtt/brokers/{id}
+GET  /api/config/companions                                  (id, name, pubkey, privateKeySet, …)
+POST /api/config/companions            PUT|DELETE /api/config/companions/{id}
+GET  /api/config/companions/{id}/channels
+GET  /api/config/channels                                    (all channels; for trigger name resolution)
+POST /api/config/companions/{id}/channels    PUT|DELETE /api/config/channels/{id}
+GET  /api/config/triggers[?companionId=N]
+POST /api/config/triggers              PUT|DELETE /api/config/triggers/{id}
 
 GET  /api/nodes/monitored
 GET  /api/nodes/{pubkey}/metrics
@@ -293,37 +316,61 @@ WS   /api/ws
 ## Config management (web UI)
 
 The sidebar has **Bots** (Comms) and **MQTT** / **Radio** (System) plus
-add/edit/delete on the Companions page. All of them edit the config through
-one seam: `hooks/useConfig.ts` GETs `/api/config`, the page mutates a
-`structuredClone`, and PUTs the **whole document** back —
-`backend.UpdateConfig` validates, stores it, and SIGHUPs the supervisor.
-Reloads are diff-based (`reloadCompanions` in `internal/app/app.go`): only
-companions whose *effective* block changed (JSON-compared after the mqtt
-injection) are restarted — unchanged ones keep running, sessions intact, no
-re-advert; log-level changes apply with zero restarts. A radio/connection
-change still restarts everything (modem reconnect); `listenAddr` needs a
-process restart.
+add/edit/delete on the Companions page. Each edits **one resource** through
+the per-resource config REST (`/api/config/*`): pages fetch only the slice
+they need (`hooks/useApiObject` for single-row settings/mqtt, `hooks/useApiList`
+for the lists) and write through `lib/configApi.ts`. There is **no
+whole-document fetch or PUT** — the old `GET/PUT /api/config` (and
+`hooks/useConfig.ts`) were removed because the GET shipped every secret to the
+browser. Read DTOs are **secret-redacted** (`privateKeySet` / `passwordSet`
+booleans); a write **omits** a secret field to keep the stored value, sends it
+to set, sends `""` to clear.
 
-- **The database is the source of truth** (`app_config` single-row table,
-  JSON). Config files are one-time imports (`internal/app/config.go`
-  `resolveConfig`): an explicit `-config path` flag imports and **overwrites**
-  the stored config; otherwise the DB wins; a first run imports a
-  default-named file from the cwd or bootstraps a default config with one
-  generated companion. SIGHUP reloads from the DB. Export/import endpoints
-  are future work — `GET /api/config` is a de-facto JSON export today.
+Server-side, every write goes through `backend.configMutate`
+(`internal/app/config_rest.go`): inside one `WriteSync` it loads the current
+row snapshot (`configRows`), applies the change in memory, **assembles +
+`Validate()`s the whole config BEFORE persisting** (by surrogate id), then
+reloads. So an invalid edit is rejected before it touches the DB, and a
+rename/key-rotation keeps the row's id. Reloads are diff-based
+(`reloadCompanions` in `internal/app/app.go`): only companions whose
+*effective* block changed are restarted — unchanged ones keep running,
+sessions intact, no re-advert; log-level changes apply with zero restarts. A
+radio/connection change still restarts everything (modem reconnect);
+`listenAddr` needs a process restart.
 
+- **Config is stored relationally** (`migrateV5` tables: `settings`,
+  `mqtt_settings`, `mqtt_brokers`, `companions`, `companion_channels`,
+  `triggers`, `trigger_channels` — all with surrogate INTEGER ids so name /
+  pubkey / private_key are mutable columns nothing references). The
+  assemble/disassemble seam between these rows and the in-memory
+  `*config.Config` the runtime consumes lives in `internal/app/config_tables.go`
+  (`loadConfigRows` → `assembleFromRows`; `writeConfigToTables` disassembles).
+  The legacy `app_config` JSON blob is **dormant** — read once at migration
+  (`initConfigTables`) then never again.
+- **The database is the source of truth.** Config files are one-time imports
+  (`internal/app/config.go` `resolveConfig`): an explicit `-config path` flag
+  imports and **overwrites** the stored config; otherwise the DB wins; a first
+  run imports a default-named file from the cwd or bootstraps a quiet default
+  (zero companions — the first-run wizard creates one). SIGHUP reloads from
+  the DB.
 - **Validation is the crash guard.** A `startCompanions` failure after reload
   **exits the process**, so `Config.Validate()` must reject anything that
   would fail companion construction: trigger type/template/regex/cron,
-  channel privateKey hex, duplicate companion names (the store keys
-  messages/contacts by name), mqtt node references, broker fields.
+  channel privateKey hex, duplicate companion names (the API routes and the
+  runtime registry still key by name, so names must be unique even though
+  storage keys by id), mqtt node references, broker fields.
+  `configMutate` runs this on the assembled config before persisting.
   `TriggerConfig.Validate` parse-checks templates with stubbed trigger funcs
   (`formatPathBytes`) — extend the stubs if the templater gains functions.
 - **MQTT is top-level, one node.** `Config.Mqtt` (`mqtt.node` selects the
-  feeding companion, empty = first; `enabled` nil = on). Legacy per-companion
-  `[companion.mqtt]` blocks are hoisted by `ApplyDefaults` on load — first
-  one wins. At runtime `startCompanions` copies the block into the selected
-  companion's config; `CompanionConfig.Mqtt` is otherwise deprecated.
+  feeding companion, empty = first; `enabled` nil = on). Stored as
+  `mqtt_settings.node_companion_id` (a real FK, ON DELETE SET NULL) and
+  resolved to the companion **name** in `assembleFromRows` — so renaming the
+  feed node no longer breaks the reference. The MqttPage node selector is by
+  companion id. Legacy per-companion `[companion.mqtt]` blocks are hoisted by
+  `ApplyDefaults` on load — first one wins. At runtime `startCompanions` copies
+  the block into the selected companion's config; `CompanionConfig.Mqtt` is
+  otherwise deprecated.
 - **Broker topics are templates.** `broker.packetTopic` / `broker.statusTopic`
   take placeholders `{iata} {pubkey} {name}` (meshcoretomqtt's `{IATA}` /
   `{PUBLIC_KEY}` uppercase forms also resolve); empty = the old hardcoded
@@ -341,18 +388,26 @@ process restart.
   form), which makes encoding/json demand a string — `ChannelList`'s
   `UnmarshalJSON` therefore decodes objects into a tag-equivalent anonymous
   struct. Don't "simplify" it back to unmarshalling `ChannelRef` directly;
-  that breaks the GET→PUT round-trip with a 422.
-- **Companion identity lives inline**: `companion.privateKey` (64-hex ed25519
-  seed). Empty keys are generated by `EnsureCompanionKeys` whenever a config
-  is persisted, and `UpdateConfig` inherits missing keys from the stored
-  config **by companion name** (`inheritCompanionKeys`) so a PUT that omits
-  keys can never silently rotate a running identity. Legacy `keyFile` entries
-  are read and inlined at file import (`MigrateKeyFiles`); the old key files
-  on disk become unused. Note: GET /api/config therefore returns private
-  keys. Renaming a companion orphans its DB history (keyed by name) — the
-  editor warns — and breaks key inheritance for that PUT (the spread of the
-  existing object preserves the key client-side, so this only matters for
-  hand-crafted PUTs).
+  that breaks JSON config-file import and the legacy-blob migration. (The API
+  no longer round-trips `ChannelRef` — triggers reference channels by id via
+  `trigger_channels`.)
+- **Companion identity** is the `companions.private_key` column (64-hex
+  ed25519 seed; `pubkey` is a derived, cached column). On create with a blank
+  key, `SaveCompanion` generates one (`config.GenerateSeedHex`); on update it
+  inherits the stored key from the row snapshot when the write omits it, so an
+  edit can never silently rotate a running identity (no more
+  `inheritCompanionKeys` — each resource owns its secret-keep logic). Keys are
+  never sent to the browser (`privateKeySet` boolean only). Legacy `keyFile`
+  entries are read and inlined at file import (`MigrateKeyFiles`). **Renaming a
+  companion is fully safe**: every per-companion table — config references
+  (mqtt node id, trigger channels) *and* history (messages, contacts,
+  conversation reads, blocked senders) — keys on the surrogate
+  `companions.id`, not the name. `migrateV6` re-keyed the history tables from
+  the old name-TEXT `companion_id` to an INTEGER FK (`ON DELETE CASCADE`), and
+  the runtime threads the id via `CompanionConfig.ID` / `Companion.ID()`. The
+  API keeps `{name}` in its URLs and resolves it to the id per request
+  (`CompanionRepo.IDByName`, `Server.companionID`). `node_state.companion_id`
+  is the lone exception: it stays a name (node-keyed, self-heals each poll).
 
 ## Node monitoring
 

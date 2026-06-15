@@ -141,7 +141,7 @@ func Run(ctx context.Context, importPath string, verbosity int) error {
 		return fmt.Errorf("companion startup: %w", err)
 	}
 	compReg.set(companions)
-	srv.SetBackend(newBackend(companions, cfg, db, reload))
+	srv.SetBackend(newBackend(companions, db, reload))
 
 	for {
 		select {
@@ -194,7 +194,7 @@ func Run(ctx context.Context, importPath string, verbosity int) error {
 			}
 			cfg = newCfg
 			compReg.set(companions)
-			srv.SetBackend(newBackend(companions, cfg, db, reload))
+			srv.SetBackend(newBackend(companions, db, reload))
 			slog.Info("config reloaded", "started", stats.started, "stopped", stats.stopped, "kept", stats.kept, "reloaded", stats.reloaded)
 
 		case <-reconnectCh:
@@ -215,7 +215,7 @@ func Run(ctx context.Context, importPath string, verbosity int) error {
 				return fmt.Errorf("companion restart after reconnect: %w", err)
 			}
 			compReg.set(companions)
-			srv.SetBackend(newBackend(companions, cfg, db, reload))
+			srv.SetBackend(newBackend(companions, db, reload))
 			slog.Info("modem reconnected")
 		}
 	}

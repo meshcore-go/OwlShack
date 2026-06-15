@@ -1,6 +1,13 @@
 package config
 
 type CompanionConfig struct {
+	// ID is the companion's surrogate primary key from the relational store. It
+	// is internal runtime plumbing (history is keyed by it), never serialized to
+	// config files or the API. 0 means "not yet persisted" (e.g. a config parsed
+	// from a file before import); the runtime config always carries real ids
+	// because it is assembled from the rows (assembleFromRows).
+	ID int64 `json:"-" yaml:"-" toml:"-"`
+
 	Name string `json:"name" yaml:"name" toml:"name"`
 
 	// PrivateKey is the companion's identity as a hex ed25519 seed (64 hex

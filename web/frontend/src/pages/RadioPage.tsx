@@ -1,5 +1,6 @@
 import { useEffect, useState } from "react";
 import { AlertTriangle, Loader2, Save } from "lucide-react";
+import { toast } from "sonner";
 import { PageHeader } from "@/components/PageHeader";
 import { LoadErrorAlert } from "@/components/LoadErrorAlert";
 import { SectionTitle } from "@/components/SectionTitle";
@@ -7,13 +8,18 @@ import { SelectField, TextField } from "@/components/ConfigFields";
 import { RadioPresetSelect } from "@/components/RadioPresetSelect";
 import { Button } from "@/components/ui/button";
 import { Skeleton } from "@/components/ui/skeleton";
-import { useConfig } from "@/hooks/useConfig";
+import { useApiObject } from "@/hooks/useApiObject";
+import { configApi, type Settings } from "@/lib/configApi";
 
 const BANDWIDTHS = [7.8, 10.4, 15.6, 20.8, 31.25, 41.7, 62.5, 125, 250, 500];
 const LOG_LEVELS = ["trace", "debug", "info", "warn", "error"];
 
 export function RadioPage() {
-  const { config, loading, error, saving, save, reload } = useConfig();
+  const { item: settings, loading, error, reload } = useApiObject<Settings>(
+    "/api/config/settings",
+    "Failed to load settings",
+  );
+  const [saving, setSaving] = useState(false);
 
   const [connection, setConnection] = useState("");
   const [baudRate, setBaudRate] = useState("115200");
@@ -26,33 +32,44 @@ export function RadioPage() {
   const [logLevel, setLogLevel] = useState("info");
 
   useEffect(() => {
-    if (!config) return;
-    setConnection(config.connection ?? "");
-    setBaudRate(String(config.baudRate ?? 115200));
-    setFreq(config.freq != null ? String(config.freq) : "");
-    setBw(config.bw != null ? String(config.bw) : "");
-    setSf(config.sf != null ? String(config.sf) : "");
-    setCr(config.cr != null ? String(config.cr) : "");
-    setTx(config.tx != null ? String(config.tx) : "");
-    setListenAddr(config.listenAddr ?? "");
-    setLogLevel(config.logLevel ?? "info");
-  }, [config]);
+    if (!settings) return;
+    setConnection(settings.connection ?? "");
+    setBaudRate(String(settings.baudRate ?? 115200));
+    setFreq(settings.freq != null ? String(settings.freq) : "");
+    setBw(settings.bw != null ? String(settings.bw) : "");
+    setSf(settings.sf != null ? String(settings.sf) : "");
+    setCr(settings.cr != null ? String(settings.cr) : "");
+    setTx(settings.tx != null ? String(settings.tx) : "");
+    setListenAddr(settings.listenAddr ?? "");
+    setLogLevel(settings.logLevel ?? "info");
+  }, [settings]);
 
   const onSave = async () => {
-    if (!config) return;
-    const next = {
-      ...config,
-      connection,
-      baudRate: parseInt(baudRate, 10) || 115200,
-      freq: parseFloat(freq) || null,
-      bw: parseFloat(bw) || null,
-      sf: parseInt(sf, 10) || null,
-      cr: parseInt(cr, 10) || null,
-      tx: tx === "" ? null : parseInt(tx, 10),
-      listenAddr: listenAddr || null,
-      logLevel: logLevel || null,
-    };
-    await save(next);
+    if (!settings) return;
+    setSaving(true);
+    try {
+      await configApi.putSettings({
+        // Round-trip the connection type so a radio save never resets it (it is
+        // not editable here yet, but will gain values like sx1262_hat).
+        connectionType: settings.connectionType,
+        connection,
+        baudRate: parseInt(baudRate, 10) || 115200,
+        freq: parseFloat(freq) || null,
+        bw: parseFloat(bw) || null,
+        sf: parseInt(sf, 10) || null,
+        cr: parseInt(cr, 10) || null,
+        tx: tx === "" ? null : parseInt(tx, 10),
+        listenAddr: listenAddr || null,
+        logLevel: logLevel || null,
+        // setupComplete omitted on purpose: the server keeps the stored value.
+      });
+      toast.success("Radio settings saved");
+      reload();
+    } catch (e) {
+      toast.error(e instanceof Error ? e.message : "Failed to save settings");
+    } finally {
+      setSaving(false);
+    }
   };
 
   return (
@@ -64,7 +81,7 @@ export function RadioPage() {
           <Button
             size="sm"
             onClick={onSave}
-            disabled={saving || loading || !config}
+            disabled={saving || loading || !settings}
             className="rounded-none font-mono text-[11px] uppercase tracking-[0.12em]"
           >
             {saving ? (
@@ -90,7 +107,7 @@ export function RadioPage() {
 
       {loading ? (
         <Skeleton className="h-64 w-full rounded-none" />
-      ) : config ? (
+      ) : settings ? (
         <>
           <section className="panel">
             <SectionTitle eyebrow="kiss modem" title="Connection" />

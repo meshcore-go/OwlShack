@@ -6,14 +6,14 @@ type BlockedSenderRepo struct {
 	db *sql.DB
 }
 
-func (r *BlockedSenderRepo) Block(companionID, conversationID, sender string) error {
+func (r *BlockedSenderRepo) Block(companionID int64, conversationID, sender string) error {
 	_, err := r.db.Exec(`
 		INSERT OR IGNORE INTO blocked_senders (companion_id, conversation_id, sender)
 		VALUES (?, ?, ?)`, companionID, conversationID, sender)
 	return err
 }
 
-func (r *BlockedSenderRepo) Unblock(companionID, conversationID, sender string) error {
+func (r *BlockedSenderRepo) Unblock(companionID int64, conversationID, sender string) error {
 	_, err := r.db.Exec(`
 		DELETE FROM blocked_senders
 		WHERE companion_id = ? AND conversation_id = ? AND sender = ?`,
@@ -21,7 +21,7 @@ func (r *BlockedSenderRepo) Unblock(companionID, conversationID, sender string) 
 	return err
 }
 
-func (r *BlockedSenderRepo) IsBlocked(companionID, conversationID, sender string) (bool, error) {
+func (r *BlockedSenderRepo) IsBlocked(companionID int64, conversationID, sender string) (bool, error) {
 	var count int
 	err := r.db.QueryRow(`
 		SELECT COUNT(*) FROM blocked_senders
@@ -30,7 +30,7 @@ func (r *BlockedSenderRepo) IsBlocked(companionID, conversationID, sender string
 	return count > 0, err
 }
 
-func (r *BlockedSenderRepo) List(companionID, conversationID string) ([]string, error) {
+func (r *BlockedSenderRepo) List(companionID int64, conversationID string) ([]string, error) {
 	rows, err := r.db.Query(`
 		SELECT sender FROM blocked_senders
 		WHERE companion_id = ? AND conversation_id = ?

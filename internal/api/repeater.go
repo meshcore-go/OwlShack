@@ -66,8 +66,10 @@ func (s *Server) handleRoomLogin(w http.ResponseWriter, r *http.Request) {
 		if *body.SyncSince > 0 {
 			syncSince = uint32(*body.SyncSince)
 		}
-	} else if latest, err := s.store.Messages.LatestRx(name, "dm:"+pubkey); err == nil && latest != nil {
-		syncSince = uint32(latest.Timestamp.Unix())
+	} else if cid, err := s.store.Companions.IDByName(name); err == nil {
+		if latest, lerr := s.store.Messages.LatestRx(cid, "dm:"+pubkey); lerr == nil && latest != nil {
+			syncSince = uint32(latest.Timestamp.Unix())
+		}
 	}
 
 	result, err := ops.RoomLogin(pubkey, body.Password, syncSince)

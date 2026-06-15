@@ -69,8 +69,12 @@ func (s *Server) handleGetMessagePath(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusBadRequest, "channel is required")
 		return
 	}
+	cid, ok := s.companionID(w, name)
+	if !ok {
+		return
+	}
 
-	msgs, err := s.store.Messages.List(name, channel, 1000, 0)
+	msgs, err := s.store.Messages.List(cid, channel, 1000, 0)
 	if err != nil {
 		writeError(w, http.StatusInternalServerError, "failed to fetch messages")
 		return
@@ -162,10 +166,14 @@ func (s *Server) handleBlockSender(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusBadRequest, "sender is required")
 		return
 	}
+	cid, ok := s.companionID(w, name)
+	if !ok {
+		return
+	}
 
 	var blockErr error
 	s.store.WriteSync(func() {
-		blockErr = s.store.BlockedSenders.Block(name, convoID, body.Sender)
+		blockErr = s.store.BlockedSenders.Block(cid, convoID, body.Sender)
 	})
 	if blockErr != nil {
 		writeError(w, http.StatusInternalServerError, "failed to block sender")
@@ -179,10 +187,14 @@ func (s *Server) handleUnblockSender(w http.ResponseWriter, r *http.Request) {
 	name := r.PathValue("name")
 	convoID := r.PathValue("conversationId")
 	sender := r.PathValue("sender")
+	cid, ok := s.companionID(w, name)
+	if !ok {
+		return
+	}
 
 	var unblockErr error
 	s.store.WriteSync(func() {
-		unblockErr = s.store.BlockedSenders.Unblock(name, convoID, sender)
+		unblockErr = s.store.BlockedSenders.Unblock(cid, convoID, sender)
 	})
 	if unblockErr != nil {
 		writeError(w, http.StatusInternalServerError, "failed to unblock sender")
@@ -195,8 +207,12 @@ func (s *Server) handleUnblockSender(w http.ResponseWriter, r *http.Request) {
 func (s *Server) handleListBlockedSenders(w http.ResponseWriter, r *http.Request) {
 	name := r.PathValue("name")
 	convoID := r.PathValue("conversationId")
+	cid, ok := s.companionID(w, name)
+	if !ok {
+		return
+	}
 
-	senders, err := s.store.BlockedSenders.List(name, convoID)
+	senders, err := s.store.BlockedSenders.List(cid, convoID)
 	if err != nil {
 		writeError(w, http.StatusInternalServerError, "failed to list blocked senders")
 		return
@@ -213,8 +229,8 @@ func (s *Server) handleDeleteConversationMessages(w http.ResponseWriter, r *http
 	name := r.PathValue("name")
 	convoID := r.PathValue("conversationId")
 
-	if !s.companionExists(name) {
-		writeError(w, http.StatusNotFound, "companion not found")
+	cid, ok := s.companionID(w, name)
+	if !ok {
 		return
 	}
 
@@ -230,7 +246,7 @@ func (s *Server) handleDeleteConversationMessages(w http.ResponseWriter, r *http
 
 	var delErr error
 	s.store.WriteSync(func() {
-		delErr = s.store.Messages.DeleteByChannel(name, channel)
+		delErr = s.store.Messages.DeleteByChannel(cid, channel)
 	})
 	if delErr != nil {
 		writeError(w, http.StatusInternalServerError, "failed to delete messages")
@@ -244,8 +260,8 @@ func (s *Server) handleListParticipants(w http.ResponseWriter, r *http.Request) 
 	name := r.PathValue("name")
 	convoID := r.PathValue("conversationId")
 
-	if !s.companionExists(name) {
-		writeError(w, http.StatusNotFound, "companion not found")
+	cid, ok := s.companionID(w, name)
+	if !ok {
 		return
 	}
 
@@ -259,7 +275,7 @@ func (s *Server) handleListParticipants(w http.ResponseWriter, r *http.Request) 
 		return
 	}
 
-	senders, err := s.store.Messages.DistinctSenders(name, channel)
+	senders, err := s.store.Messages.DistinctSenders(cid, channel)
 	if err != nil {
 		writeError(w, http.StatusInternalServerError, "failed to list participants")
 		return

@@ -103,8 +103,8 @@ func (s *Server) handleListChannels(w http.ResponseWriter, r *http.Request) {
 
 func (s *Server) handleListMessages(w http.ResponseWriter, r *http.Request) {
 	name := r.PathValue("name")
-	if !s.companionExists(name) {
-		writeError(w, http.StatusNotFound, "companion not found")
+	cid, ok := s.companionID(w, name)
+	if !ok {
 		return
 	}
 
@@ -117,21 +117,21 @@ func (s *Server) handleListMessages(w http.ResponseWriter, r *http.Request) {
 	var err error
 
 	if channel != "" && afterID > 0 {
-		msgs, e := s.store.Messages.ListAfter(name, channel, afterID, limit)
+		msgs, e := s.store.Messages.ListAfter(cid, channel, afterID, limit)
 		err = e
 		messages = make([]messageJSON, 0, len(msgs))
 		for _, m := range msgs {
 			messages = append(messages, toMessageJSON(m))
 		}
 	} else if channel != "" {
-		msgs, e := s.store.Messages.List(name, channel, limit, offset)
+		msgs, e := s.store.Messages.List(cid, channel, limit, offset)
 		err = e
 		messages = make([]messageJSON, 0, len(msgs))
 		for _, m := range msgs {
 			messages = append(messages, toMessageJSON(m))
 		}
 	} else {
-		msgs, e := s.store.Messages.ListAll(name, limit, offset)
+		msgs, e := s.store.Messages.ListAll(cid, limit, offset)
 		err = e
 		messages = make([]messageJSON, 0, len(msgs))
 		for _, m := range msgs {
@@ -234,6 +234,10 @@ func (s *Server) handleRetryMessage(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusBadRequest, "invalid message ID")
 		return
 	}
+	cid, ok := s.companionID(w, name)
+	if !ok {
+		return
+	}
 
 	msg, err := s.store.Messages.GetByID(messageID)
 	if err != nil {
@@ -241,7 +245,7 @@ func (s *Server) handleRetryMessage(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	if msg.CompanionID != name {
+	if msg.CompanionID != cid {
 		writeError(w, http.StatusNotFound, "message not found")
 		return
 	}

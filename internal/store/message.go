@@ -9,7 +9,7 @@ const DefaultMaxMessages = 5000
 
 type Message struct {
 	ID           int64
-	CompanionID  string
+	CompanionID  int64
 	Channel      string
 	ChannelHash  byte
 	Sender       string
@@ -77,7 +77,7 @@ func (r *MessageRepo) IncrementRepeatCount(id int64) (int, error) {
 	return count, err
 }
 
-func (r *MessageRepo) List(companionID, channel string, limit, offset int) ([]Message, error) {
+func (r *MessageRepo) List(companionID int64, channel string, limit, offset int) ([]Message, error) {
 	if limit <= 0 {
 		limit = 100
 	}
@@ -111,7 +111,7 @@ func (r *MessageRepo) List(companionID, channel string, limit, offset int) ([]Me
 	return messages, rows.Err()
 }
 
-func (r *MessageRepo) ListAfter(companionID, channel string, afterID int64, limit int) ([]Message, error) {
+func (r *MessageRepo) ListAfter(companionID int64, channel string, afterID int64, limit int) ([]Message, error) {
 	if limit <= 0 {
 		limit = 200
 	}
@@ -143,7 +143,7 @@ func (r *MessageRepo) ListAfter(companionID, channel string, afterID int64, limi
 	return messages, rows.Err()
 }
 
-func (r *MessageRepo) ListAll(companionID string, limit, offset int) ([]Message, error) {
+func (r *MessageRepo) ListAll(companionID int64, limit, offset int) ([]Message, error) {
 	if limit <= 0 {
 		limit = 100
 	}
@@ -176,7 +176,7 @@ func (r *MessageRepo) ListAll(companionID string, limit, offset int) ([]Message,
 }
 
 // LatestRx returns the most recently inserted rx message for a channel, or nil.
-func (r *MessageRepo) LatestRx(companionID, channel string) (*Message, error) {
+func (r *MessageRepo) LatestRx(companionID int64, channel string) (*Message, error) {
 	var m Message
 	err := r.db.QueryRow(`
 		SELECT id, companion_id, channel, channel_hash, sender, text, direction, timestamp, snr, rssi, confirmed, path_hashes, path_hash_size, hops, status
@@ -202,12 +202,12 @@ func (r *MessageRepo) Delete(id int64) error {
 	return err
 }
 
-func (r *MessageRepo) DeleteByChannel(companionID, channel string) error {
+func (r *MessageRepo) DeleteByChannel(companionID int64, channel string) error {
 	_, err := r.db.Exec(`DELETE FROM messages WHERE companion_id = ? AND channel = ?`, companionID, channel)
 	return err
 }
 
-func (r *MessageRepo) DistinctSenders(companionID, channel string) ([]string, error) {
+func (r *MessageRepo) DistinctSenders(companionID int64, channel string) ([]string, error) {
 	rows, err := r.db.Query(`
 		SELECT DISTINCT sender FROM messages
 		WHERE companion_id = ? AND channel = ? AND direction = 'rx' AND sender != ''

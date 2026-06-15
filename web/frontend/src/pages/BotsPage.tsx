@@ -10,6 +10,7 @@ import {
   Save,
   Trash2,
 } from "lucide-react";
+import { toast } from "sonner";
 import { PageHeader } from "@/components/PageHeader";
 import { LoadErrorAlert } from "@/components/LoadErrorAlert";
 import { SectionTitle } from "@/components/SectionTitle";
@@ -32,19 +33,13 @@ import {
   DialogHeader,
   DialogTitle,
 } from "@/components/ui/dialog";
+import { useApiList } from "@/hooks/useApiList";
 import {
-  useConfig,
-  type AppConfig,
-  type ChannelRef,
-  type TriggerConfig,
-} from "@/hooks/useConfig";
-
-interface BotRow {
-  companion: string;
-  compIdx: number;
-  trigIdx: number;
-  trigger: TriggerConfig;
-}
+  configApi,
+  type ConfigChannel,
+  type ConfigCompanion,
+  type Trigger,
+} from "@/lib/configApi";
 
 const TYPE_OPTS = [
   { value: "group", label: "Group message (match & reply)" },
@@ -121,32 +116,52 @@ function RegexHelp() {
 }
 
 export function BotsPage() {
-  const { config, loading, error, saving, save, reload } = useConfig();
-  const [editing, setEditing] = useState<BotRow | "new" | null>(null);
-  const [confirming, setConfirming] = useState<string | null>(null);
+  const {
+    items: triggers,
+    loading,
+    error,
+    reload,
+  } = useApiList<Trigger>("/api/config/triggers", "Failed to load bots");
+  // companions + channels only seed the editor's selectors; a trigger write
+  // never changes them, so they load once on mount and aren't refetched.
+  const { items: companions } = useApiList<ConfigCompanion>(
+    "/api/config/companions",
+    "Failed to load companions",
+  );
+  const { items: channels } = useApiList<ConfigChannel>(
+    "/api/config/channels",
+    "Failed to load channels",
+  );
 
-  const rows = useMemo<BotRow[]>(() => {
-    if (!config) return [];
-    return config.companions.flatMap((comp, compIdx) =>
-      (comp.triggers ?? []).map((trigger, trigIdx) => ({
-        companion: comp.name,
-        compIdx,
-        trigIdx,
-        trigger,
-      })),
-    );
-  }, [config]);
+  const [editing, setEditing] = useState<Trigger | "new" | null>(null);
+  const [confirming, setConfirming] = useState<number | null>(null);
 
-  const removeBot = async (row: BotRow) => {
-    if (!config) return;
-    const next = structuredClone(config) as AppConfig;
-    const triggers = next.companions[row.compIdx]?.triggers;
-    if (!triggers) return;
-    triggers.splice(row.trigIdx, 1);
-    if (triggers.length === 0) next.companions[row.compIdx].triggers = null;
+  const companionName = useMemo(() => {
+    const m = new Map<number, string>();
+    for (const c of companions ?? []) m.set(c.id, c.name);
+    return m;
+  }, [companions]);
+
+  const channelName = useMemo(() => {
+    const m = new Map<number, string>();
+    for (const ch of channels ?? []) m.set(ch.id, ch.name);
+    return m;
+  }, [channels]);
+
+  const ready = companions != null && channels != null;
+
+  const removeBot = async (t: Trigger) => {
     setConfirming(null);
-    await save(next);
+    try {
+      await configApi.deleteTrigger(t.id);
+      toast.success("Bot removed");
+      reload();
+    } catch (e) {
+      toast.error(e instanceof Error ? e.message : "Failed to remove bot");
+    }
   };
+
+  const list = triggers ?? [];
 
   return (
     <div className="space-y-8">
@@ -154,9 +169,9 @@ export function BotsPage() {
         eyebrow="comms"
         title="Bots"
         meta={
-          config && (
+          triggers && (
             <span className="font-mono text-sm text-muted-foreground tabular-nums">
-              {rows.length} configured
+              {list.length} configured
             </span>
           )
         }
@@ -164,7 +179,7 @@ export function BotsPage() {
           <Button
             size="sm"
             onClick={() => setEditing("new")}
-            disabled={loading || !config}
+            disabled={loading || !ready}
             className="rounded-none font-mono text-[11px] uppercase tracking-[0.12em]"
           >
             <Plus className="size-3.5" />
@@ -177,10 +192,10 @@ export function BotsPage() {
 
       {loading ? (
         <Skeleton className="h-48 w-full rounded-none" />
-      ) : config ? (
+      ) : triggers ? (
         <section className="panel overflow-hidden">
           <SectionTitle eyebrow="triggers" title="Configured bots" />
-          {rows.length === 0 ? (
+          {list.length === 0 ? (
             <div className="px-6 py-16 text-center space-y-3">
               <CircleDashed className="size-8 mx-auto text-muted-foreground/40" />
               <p className="font-mono text-xs uppercase tracking-[0.12em] text-muted-foreground">
@@ -189,11 +204,12 @@ export function BotsPage() {
             </div>
           ) : (
             <div className="divide-y divide-border">
-              {rows.map((row) => {
-                const key = `${row.compIdx}:${row.trigIdx}`;
-                const t = row.trigger;
+              {list.map((t) => {
+                const chNames = (t.channelIds ?? [])
+                  .map((id) => channelName.get(id))
+                  .filter((n): n is string => !!n);
                 return (
-                  <div key={key} className="flex items-start gap-4 px-4 py-3">
+                  <div key={t.id} className="flex items-start gap-4 px-4 py-3">
                     <div className="size-9 grid place-items-center rounded-sm border border-primary/30 bg-primary/10 text-primary shrink-0">
                       <Bot className="size-4" strokeWidth={1.6} />
                     </div>
@@ -203,16 +219,16 @@ export function BotsPage() {
                           {t.type}
                         </span>
                         <span className="font-mono text-xs text-muted-foreground truncate">
-                          {row.companion}
+                          {companionName.get(t.companionId) ?? `#${t.companionId}`}
                         </span>
                         {t.type === "cron" && t.schedule && (
                           <code className="font-mono text-xs text-info">
                             {t.schedule}
                           </code>
                         )}
-                        {(t.channels ?? []).length > 0 && (
+                        {chNames.length > 0 && (
                           <span className="font-mono text-xs text-muted-foreground/70 truncate">
-                            {(t.channels ?? []).map((c) => c.name).join(", ")}
+                            {chNames.join(", ")}
                           </span>
                         )}
                       </div>
@@ -229,7 +245,7 @@ export function BotsPage() {
                       <Button
                         variant="ghost"
                         size="icon-xs"
-                        onClick={() => setEditing(row)}
+                        onClick={() => setEditing(t)}
                         aria-label="Edit bot"
                         className="text-muted-foreground/60 hover:text-foreground"
                       >
@@ -237,10 +253,10 @@ export function BotsPage() {
                       </Button>
                       <InlineConfirm
                         iconOnly
-                        confirming={confirming === key}
-                        onAskRemove={() => setConfirming(key)}
+                        confirming={confirming === t.id}
+                        onAskRemove={() => setConfirming(t.id)}
                         onCancel={() => setConfirming(null)}
-                        onConfirm={() => removeBot(row)}
+                        onConfirm={() => removeBot(t)}
                         ariaLabel="Remove bot"
                       />
                     </div>
@@ -252,14 +268,15 @@ export function BotsPage() {
         </section>
       ) : null}
 
-      {editing && config && (
+      {editing !== null && ready && (
         <BotEditor
-          config={config}
-          row={editing === "new" ? null : editing}
-          saving={saving}
+          trigger={editing === "new" ? null : editing}
+          companions={companions}
+          channels={channels}
           onClose={() => setEditing(null)}
-          onSave={async (next) => {
-            if (await save(next)) setEditing(null);
+          onSaved={() => {
+            setEditing(null);
+            reload();
           }}
         />
       )}
@@ -268,117 +285,105 @@ export function BotsPage() {
 }
 
 function BotEditor({
-  config,
-  row,
-  saving,
+  trigger,
+  companions,
+  channels,
   onClose,
-  onSave,
+  onSaved,
 }: {
-  config: AppConfig;
-  row: BotRow | null;
-  saving: boolean;
+  trigger: Trigger | null;
+  companions: ConfigCompanion[];
+  channels: ConfigChannel[];
   onClose: () => void;
-  onSave: (next: AppConfig) => Promise<void>;
+  onSaved: () => void;
 }) {
-  const t = row?.trigger;
-  const [companion, setCompanion] = useState(
-    row?.companion ?? config.companions[0]?.name ?? "",
+  const channelById = useMemo(() => {
+    const m = new Map<number, ConfigChannel>();
+    for (const ch of channels) m.set(ch.id, ch);
+    return m;
+  }, [channels]);
+
+  const [companionId, setCompanionId] = useState(
+    trigger?.companionId ?? companions[0]?.id ?? 0,
   );
-  const [type, setType] = useState(t?.type === "channel" ? "group" : (t?.type ?? "group"));
-  const [template, setTemplate] = useState(t?.template ?? "");
-  const [channels, setChannels] = useState<string[]>(
-    (t?.channels ?? []).map((c) => c.name),
+  const [type, setType] = useState(
+    trigger?.type === "channel" ? "group" : (trigger?.type ?? "group"),
   );
-  const [match, setMatch] = useState<string[]>(t?.match ?? []);
-  const [schedule, setSchedule] = useState(t?.schedule ?? "");
+  const [template, setTemplate] = useState(trigger?.template ?? "");
+  // Channels are tracked by name (unique per companion) so the picker stays
+  // name-based; they are resolved back to channel ids on submit.
+  const [selectedChannels, setSelectedChannels] = useState<string[]>(
+    (trigger?.channelIds ?? [])
+      .map((id) => channelById.get(id)?.name)
+      .filter((n): n is string => !!n),
+  );
+  const [match, setMatch] = useState<string[]>(trigger?.match ?? []);
+  const [schedule, setSchedule] = useState(trigger?.schedule ?? "");
   const [maxRetries, setMaxRetries] = useState(
-    t?.maxRetries != null ? String(t.maxRetries) : "3",
+    trigger?.maxRetries != null ? String(trigger.maxRetries) : "3",
   );
   const [retryTimeout, setRetryTimeout] = useState(
-    t?.retryTimeout != null ? String(t.retryTimeout) : "5",
+    trigger?.retryTimeout != null ? String(trigger.retryTimeout) : "5",
   );
   const [pathHashSize, setPathHashSize] = useState(
-    t?.pathHashSize != null ? String(t.pathHashSize) : "default",
+    trigger?.pathHashSize != null ? String(trigger.pathHashSize) : "default",
   );
+  const [saving, setSaving] = useState(false);
 
-  // Channels the trigger can listen on: the companion's own channels (Public +
-  // its configured channels). Dedup is case-sensitive — channel names map to
-  // distinct keys per case, so "#Foo" and "#foo" are different channels.
-  const channelOptions = useMemo(() => {
-    const comp = config.companions.find((c) => c.name === companion);
-    const names: string[] = [];
-    const seen = new Set<string>();
-    const push = (n: string) => {
-      const k = n.trim();
-      if (!k || seen.has(k)) return;
-      seen.add(k);
-      names.push(k);
-    };
-    push("Public");
-    (comp?.channels ?? []).forEach((c) => push(c.name));
-    (comp?.triggers ?? []).forEach((tr) =>
-      (tr.channels ?? []).forEach((c) => push(c.name)),
-    );
-    return names;
-  }, [config, companion]);
+  // A trigger can only target channels its companion already has (Public plus
+  // any added on the Channels page). Names are unique within a companion.
+  const companionChannels = useMemo(
+    () => channels.filter((ch) => ch.companionId === companionId),
+    [channels, companionId],
+  );
+  const channelOptions = companionChannels.map((ch) => ch.name);
+  const nameToId = useMemo(() => {
+    const m = new Map<string, number>();
+    for (const ch of companionChannels) m.set(ch.name, ch.id);
+    return m;
+  }, [companionChannels]);
+
+  // Switching companion invalidates the picked channels (different rows).
+  const changeCompanion = (idStr: string) => {
+    setCompanionId(parseInt(idStr, 10));
+    setSelectedChannels([]);
+  };
 
   const submit = async () => {
-    const next = structuredClone(config) as AppConfig;
-    const compIdx = next.companions.findIndex((c) => c.name === companion);
-    if (compIdx < 0) return;
-
-    // Reuse original ChannelRefs by name so a configured privateKey survives
-    // a round-trip through the picker (which works on names only).
-    const origByName = new Map<string, ChannelRef>(
-      (t?.channels ?? []).map((c) => [c.name, c]),
-    );
-    const channelRefs = channels
-      .map((s) => s.trim())
-      .filter(Boolean)
-      .map((name) => origByName.get(name) ?? { name });
-
+    const channelIds = selectedChannels
+      .map((n) => nameToId.get(n))
+      .filter((x): x is number => x != null);
     const patterns = match.map((s) => s.trim()).filter(Boolean);
 
-    const built: TriggerConfig = {
-      ...(t ?? {}),
-      type,
-      template,
-      channels: channelRefs.length > 0 ? channelRefs : null,
-      match: type === "group" && patterns.length > 0 ? patterns : null,
-      schedule: type === "cron" ? schedule : undefined,
-      maxRetries: parseInt(maxRetries, 10) || 3,
-      retryTimeout: parseInt(retryTimeout, 10) || 5,
-      pathHashSize:
-        pathHashSize === "default" ? null : parseInt(pathHashSize, 10),
-    };
-
-    if (row) {
-      const sameCompanion = row.compIdx === compIdx;
-      if (sameCompanion) {
-        (next.companions[compIdx].triggers ?? [])[row.trigIdx] = built;
-      } else {
-        // Moved to another companion: remove from the old, append to the new.
-        const old = next.companions[row.compIdx].triggers ?? [];
-        old.splice(row.trigIdx, 1);
-        if (old.length === 0) next.companions[row.compIdx].triggers = null;
-        next.companions[compIdx].triggers = [
-          ...(next.companions[compIdx].triggers ?? []),
-          built,
-        ];
-      }
-    } else {
-      next.companions[compIdx].triggers = [
-        ...(next.companions[compIdx].triggers ?? []),
-        built,
-      ];
+    setSaving(true);
+    try {
+      await configApi.saveTrigger(
+        {
+          companionId,
+          type,
+          template,
+          channelIds,
+          match: type === "group" && patterns.length > 0 ? patterns : null,
+          schedule: type === "cron" ? schedule : null,
+          maxRetries: parseInt(maxRetries, 10) || 3,
+          retryTimeout: parseInt(retryTimeout, 10) || 5,
+          pathHashSize:
+            pathHashSize === "default" ? null : parseInt(pathHashSize, 10),
+        },
+        trigger?.id,
+      );
+      toast.success(trigger ? "Bot saved" : "Bot added");
+      onSaved();
+    } catch (e) {
+      toast.error(e instanceof Error ? e.message : "Failed to save bot");
+    } finally {
+      setSaving(false);
     }
-
-    await onSave(next);
   };
 
   const valid =
     template.trim() !== "" &&
-    channels.length > 0 &&
+    selectedChannels.length > 0 &&
     (type !== "cron" || schedule.trim() !== "");
 
   return (
@@ -386,7 +391,7 @@ function BotEditor({
       <DialogContent className="rounded-none sm:max-w-xl">
         <DialogHeader>
           <DialogTitle className="font-mono text-sm uppercase tracking-widest">
-            {row ? "Edit bot" : "Add bot"}
+            {trigger ? "Edit bot" : "Add bot"}
           </DialogTitle>
         </DialogHeader>
 
@@ -394,12 +399,12 @@ function BotEditor({
           <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
             <SelectField
               label="Companion"
-              value={companion}
-              options={config.companions.map((c) => ({
-                value: c.name,
+              value={String(companionId)}
+              options={companions.map((c) => ({
+                value: String(c.id),
                 label: c.name,
               }))}
-              onChange={setCompanion}
+              onChange={changeCompanion}
             />
             <SelectField
               label="Type"
@@ -421,9 +426,9 @@ function BotEditor({
 
           <ChannelMultiSelect
             label="Channels"
-            selected={channels}
+            selected={selectedChannels}
             options={channelOptions}
-            onChange={setChannels}
+            onChange={setSelectedChannels}
             hint={
               type === "cron"
                 ? "broadcast targets — pick from the companion's channels"

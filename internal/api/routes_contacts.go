@@ -48,12 +48,12 @@ func validPeerType(t string) bool {
 
 func (s *Server) handleListContacts(w http.ResponseWriter, r *http.Request) {
 	name := r.PathValue("name")
-	if !s.companionExists(name) {
-		writeError(w, http.StatusNotFound, "companion not found")
+	cid, ok := s.companionID(w, name)
+	if !ok {
 		return
 	}
 
-	contacts, err := s.store.Contacts.List(name)
+	contacts, err := s.store.Contacts.List(cid)
 	if err != nil {
 		writeError(w, http.StatusInternalServerError, "failed to list contacts")
 		return
@@ -69,8 +69,8 @@ func (s *Server) handleListContacts(w http.ResponseWriter, r *http.Request) {
 
 func (s *Server) handleGetContact(w http.ResponseWriter, r *http.Request) {
 	name := r.PathValue("name")
-	if !s.companionExists(name) {
-		writeError(w, http.StatusNotFound, "companion not found")
+	cid, ok := s.companionID(w, name)
+	if !ok {
 		return
 	}
 
@@ -80,7 +80,7 @@ func (s *Server) handleGetContact(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	c, err := s.store.Contacts.Get(name, pubkey)
+	c, err := s.store.Contacts.Get(cid, pubkey)
 	if errors.Is(err, sql.ErrNoRows) {
 		writeError(w, http.StatusNotFound, "contact not found")
 		return
@@ -95,8 +95,8 @@ func (s *Server) handleGetContact(w http.ResponseWriter, r *http.Request) {
 
 func (s *Server) handleAddContact(w http.ResponseWriter, r *http.Request) {
 	name := r.PathValue("name")
-	if !s.companionExists(name) {
-		writeError(w, http.StatusNotFound, "companion not found")
+	cid, ok := s.companionID(w, name)
+	if !ok {
 		return
 	}
 
@@ -157,7 +157,7 @@ func (s *Server) handleAddContact(w http.ResponseWriter, r *http.Request) {
 			// Non-fatal for known peers: the contact is still added, just nameless.
 			_ = s.store.Peers.Upsert(seedPeer)
 		}
-		addErr = s.store.Contacts.Add(name, pubkey)
+		addErr = s.store.Contacts.Add(cid, pubkey)
 	})
 	if addErr != nil {
 		writeError(w, http.StatusInternalServerError, "failed to add contact")
@@ -171,8 +171,8 @@ func (s *Server) handleDeleteContact(w http.ResponseWriter, r *http.Request) {
 	name := r.PathValue("name")
 	pubkeyHex := r.PathValue("pubkey")
 
-	if !s.companionExists(name) {
-		writeError(w, http.StatusNotFound, "companion not found")
+	cid, ok := s.companionID(w, name)
+	if !ok {
 		return
 	}
 
@@ -184,7 +184,7 @@ func (s *Server) handleDeleteContact(w http.ResponseWriter, r *http.Request) {
 
 	var delErr error
 	s.store.WriteSync(func() {
-		delErr = s.store.Contacts.Delete(name, pubkey)
+		delErr = s.store.Contacts.Delete(cid, pubkey)
 	})
 	if delErr != nil {
 		writeError(w, http.StatusInternalServerError, "failed to delete contact")
@@ -198,8 +198,8 @@ func (s *Server) handleUpdateContactMetadata(w http.ResponseWriter, r *http.Requ
 	name := r.PathValue("name")
 	pubkeyHex := r.PathValue("pubkey")
 
-	if !s.companionExists(name) {
-		writeError(w, http.StatusNotFound, "companion not found")
+	cid, ok := s.companionID(w, name)
+	if !ok {
 		return
 	}
 
@@ -217,7 +217,7 @@ func (s *Server) handleUpdateContactMetadata(w http.ResponseWriter, r *http.Requ
 
 	var updateErr error
 	s.store.WriteSync(func() {
-		updateErr = s.store.Contacts.UpdateMetadata(name, pubkey, meta)
+		updateErr = s.store.Contacts.UpdateMetadata(cid, pubkey, meta)
 	})
 	if updateErr != nil {
 		writeError(w, http.StatusInternalServerError, "failed to update contact metadata")
@@ -227,17 +227,15 @@ func (s *Server) handleUpdateContactMetadata(w http.ResponseWriter, r *http.Requ
 	w.WriteHeader(http.StatusNoContent)
 }
 
-func (s *Server) companionExists(name string) bool {
-	provider := s.companionProvider()
-
-	if provider == nil {
-		return false
+// companionID resolves a companion's surrogate id from its current name (the
+// API keeps name in URLs; per-companion history is keyed by id so a rename
+// keeps it). Writes a 404 and returns ok=false when no companion has that name.
+func (s *Server) companionID(w http.ResponseWriter, name string) (int64, bool) {
+	id, err := s.store.Companions.IDByName(name)
+	if err != nil {
+		writeError(w, http.StatusNotFound, "companion not found")
+		return 0, false
 	}
-
-	for _, c := range provider() {
-		if c.Name == name {
-			return true
-		}
-	}
-	return false
+	return id, true
 }
+
