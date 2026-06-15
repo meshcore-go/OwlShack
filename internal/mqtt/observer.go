@@ -57,6 +57,7 @@ type brokerClient struct {
 	dedup      *meshcore.DedupCache // nil when dedup disabled for this broker
 
 	publishCh  chan publishJob
+	stop       chan struct{} // closed by Observer.Stop to halt the worker + senders
 	workerDone chan struct{}
 	dropped    atomic.Uint64
 }
@@ -179,6 +180,7 @@ func (o *Observer) Start(ctx context.Context) error {
 			statusTopicStr: statusTopic,
 			disallowed:     disallowed,
 			publishCh:      make(chan publishJob, publishQueueDepth),
+			stop:           make(chan struct{}),
 			workerDone:     make(chan struct{}),
 		}
 		if bcfg.Dedup {
@@ -208,12 +210,20 @@ func (o *Observer) Stop() {
 	}
 	o.mu.Unlock()
 
+	// Detach from the radio mux so no new packets are dispatched to onData.
+	// A deliver already in-flight (the mux snapshots its radio list before
+	// delivering) is still handled safely: enqueuePublish never sends on a
+	// closed channel because publishCh is closed by no one.
+	if o.radio != nil {
+		o.radio.Close()
+	}
+
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()
 
 	for _, bc := range o.brokers {
 		o.publishStatus(ctx, bc, "offline")
-		close(bc.publishCh)
+		close(bc.stop)
 		select {
 		case <-bc.workerDone:
 		case <-time.After(publishWaitTimeout):
@@ -229,19 +239,37 @@ func (o *Observer) Stop() {
 // drops the job, logs once, and moves on.
 func (o *Observer) publishWorker(bc *brokerClient) {
 	defer close(bc.workerDone)
-	for job := range bc.publishCh {
-		client := bc.currentClient()
-		if client == nil {
-			continue
+	for {
+		select {
+		case <-bc.stop:
+			// Drain whatever is already buffered (e.g. the offline status
+			// enqueued during Stop) on a best-effort basis, then exit.
+			for {
+				select {
+				case job := <-bc.publishCh:
+					o.doPublish(bc, job)
+				default:
+					return
+				}
+			}
+		case job := <-bc.publishCh:
+			o.doPublish(bc, job)
 		}
-		token := client.Publish(job.topic, job.qos, job.retain, job.payload)
-		if !token.WaitTimeout(publishWaitTimeout) {
-			o.log.Warn("publish timed out", "broker", bc.cfg.Name, "topic", job.topic)
-			continue
-		}
-		if err := token.Error(); err != nil {
-			o.log.Error("publish error", "broker", bc.cfg.Name, "error", err)
-		}
+	}
+}
+
+func (o *Observer) doPublish(bc *brokerClient, job publishJob) {
+	client := bc.currentClient()
+	if client == nil {
+		return
+	}
+	token := client.Publish(job.topic, job.qos, job.retain, job.payload)
+	if !token.WaitTimeout(publishWaitTimeout) {
+		o.log.Warn("publish timed out", "broker", bc.cfg.Name, "topic", job.topic)
+		return
+	}
+	if err := token.Error(); err != nil {
+		o.log.Error("publish error", "broker", bc.cfg.Name, "error", err)
 	}
 }
 
@@ -251,6 +279,10 @@ func (o *Observer) publishWorker(bc *brokerClient) {
 func (o *Observer) enqueuePublish(bc *brokerClient, job publishJob) {
 	select {
 	case bc.publishCh <- job:
+	case <-bc.stop:
+		// Observer is shutting down; drop silently. publishCh is never closed,
+		// so this send can never panic even if a radio deliver is still
+		// in-flight after Stop detaches the radio.
 	default:
 		dropped := bc.dropped.Add(1)
 		if dropped == 1 || dropped%100 == 0 {
