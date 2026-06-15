@@ -118,7 +118,7 @@ function ThemeToggle() {
       variant="ghost"
       size="sm"
       onClick={() => setTheme(isDark ? "light" : "dark")}
-      className="w-full justify-start gap-2 text-xs uppercase tracking-[0.1em] font-mono text-muted-foreground hover:text-foreground"
+      className="w-full justify-start gap-2 text-xs uppercase tracking-widest font-mono text-muted-foreground hover:text-foreground"
     >
       {isDark ? (
         <Sun className="size-3.5" />
@@ -246,7 +246,7 @@ export function AppShell({ children }: { children: React.ReactNode }) {
       </Sidebar>
 
       <SidebarInset className="bg-background overflow-hidden flex flex-col">
-        <header className="shrink-0 z-30 h-14 flex items-center gap-3 border-b border-border bg-background/80 backdrop-blur supports-[backdrop-filter]:bg-background/60 px-4">
+        <header className="shrink-0 z-30 h-14 flex items-center gap-3 border-b border-border bg-background/80 backdrop-blur supports-backdrop-filter:bg-background/60 px-4">
           <SidebarTrigger className="size-8" />
           <Separator orientation="vertical" className="h-5" />
           <div className="flex items-center gap-2 font-mono text-[11px] uppercase tracking-[0.14em] text-muted-foreground min-w-0 overflow-hidden">

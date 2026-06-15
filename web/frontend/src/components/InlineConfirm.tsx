@@ -30,7 +30,7 @@ export function InlineConfirm({
           variant="destructive"
           size="xs"
           onClick={onConfirm}
-          className="font-mono uppercase tracking-[0.1em]"
+          className="font-mono uppercase tracking-widest"
         >
           <Check className="size-3" /> yes
         </Button>
@@ -38,7 +38,7 @@ export function InlineConfirm({
           variant="ghost"
           size="xs"
           onClick={onCancel}
-          className="font-mono uppercase tracking-[0.1em]"
+          className="font-mono uppercase tracking-widest"
         >
           <X className="size-3" /> no
         </Button>

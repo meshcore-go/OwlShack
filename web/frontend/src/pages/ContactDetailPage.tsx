@@ -126,7 +126,7 @@ export function ContactDetailPage() {
               asChild
               variant="default"
               size="sm"
-              className="font-mono text-xs uppercase tracking-[0.1em]"
+              className="font-mono text-xs uppercase tracking-widest"
             >
               <Link
                 to={`/companions/${encodeURIComponent(companion)}?channel=${encodeURIComponent(`dm:${contactPubkey}`)}`}
@@ -141,7 +141,7 @@ export function ContactDetailPage() {
 
       {error && (
         <Alert variant="destructive">
-          <AlertTitle className="font-mono uppercase tracking-[0.1em]">
+          <AlertTitle className="font-mono uppercase tracking-widest">
             Error
           </AlertTitle>
           <AlertDescription>{error}</AlertDescription>
@@ -234,7 +234,7 @@ function PanelHeader({ eyebrow, title }: { eyebrow: string; title: string }) {
   return (
     <div className="px-4 py-3 border-b border-border space-y-0.5">
       <span className="label-overline block">{eyebrow}</span>
-      <h2 className="font-mono text-sm uppercase tracking-[0.1em]">{title}</h2>
+      <h2 className="font-mono text-sm uppercase tracking-widest">{title}</h2>
     </div>
   );
 }

@@ -11,7 +11,7 @@ export function SectionTitle({
     <div className="flex items-center justify-between px-4 py-3 border-b border-border">
       <div className="space-y-0.5">
         {eyebrow && <span className="label-overline block">{eyebrow}</span>}
-        <h2 className="font-mono text-sm uppercase tracking-[0.1em]">
+        <h2 className="font-mono text-sm uppercase tracking-widest">
           {title}
         </h2>
       </div>

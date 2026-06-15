@@ -179,7 +179,7 @@ export function PacketsPage() {
               variant="ghost"
               size="sm"
               onClick={reload}
-              className="h-7 gap-1.5 text-xs uppercase tracking-[0.1em] font-mono"
+              className="h-7 gap-1.5 text-xs uppercase tracking-widest font-mono"
             >
               <RefreshCw className="size-3" /> reload
             </Button>
@@ -196,7 +196,7 @@ export function PacketsPage() {
           <div className="flex items-center justify-between px-4 py-3 border-b border-border">
             <div className="space-y-0.5">
               <span className="label-overline block">Live · last 200</span>
-              <h2 className="font-mono text-sm uppercase tracking-[0.1em]">
+              <h2 className="font-mono text-sm uppercase tracking-widest">
                 Packet stream
               </h2>
             </div>
@@ -463,7 +463,7 @@ function PacketDetail({
       <div className="flex items-start justify-between px-5 py-4 border-b border-border shrink-0">
         <div className="space-y-1 min-w-0">
           <span className="label-overline block">Packet · detail</span>
-          <SheetTitle className="font-mono text-sm uppercase tracking-[0.1em]">
+          <SheetTitle className="font-mono text-sm uppercase tracking-widest">
             {payloadLabel(p.payloadType)}
           </SheetTitle>
           <SheetDescription className="font-mono text-xs text-muted-foreground break-all">
@@ -483,7 +483,7 @@ function PacketDetail({
       <div className="flex-1 overflow-y-auto">
         <div className="px-5 py-4 border-b border-border space-y-2">
           <span className="label-overline block">Summary</span>
-          <p className="text-sm leading-relaxed break-words">
+          <p className="text-sm leading-relaxed wrap-break-word">
             {p.summary || (
               <span className="text-muted-foreground/60 italic">
                 no summary available

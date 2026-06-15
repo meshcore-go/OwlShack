@@ -184,7 +184,7 @@ function EmptyState() {
   return (
     <div className="panel py-16 flex flex-col items-center gap-3 text-center">
       <CircleDashed className="size-7 text-muted-foreground/40" />
-      <p className="font-mono text-sm uppercase tracking-[0.1em] text-muted-foreground">
+      <p className="font-mono text-sm uppercase tracking-widest text-muted-foreground">
         No nodes monitored yet
       </p>
       <p className="text-sm text-muted-foreground/60 max-w-md">
@@ -269,13 +269,13 @@ function NodeCard({
       {errored ? (
         <div className="px-3 py-6 flex items-start gap-2 text-signal-weak">
           <AlertTriangle className="size-4 shrink-0 mt-0.5" />
-          <span className="font-mono text-xs break-words">{node.lastError}</span>
+          <span className="font-mono text-xs wrap-break-word">{node.lastError}</span>
         </div>
       ) : (
         <NodeStatGrid metrics={node.metrics || {}} history={history} />
       )}
 
-      <footer className="flex items-center justify-between px-3 py-2 border-t border-border font-mono text-[10px] uppercase tracking-[0.1em] text-muted-foreground">
+      <footer className="flex items-center justify-between px-3 py-2 border-t border-border font-mono text-[10px] uppercase tracking-widest text-muted-foreground">
         <span className={cn(stale && "text-warning")}>
           {pending
             ? "waiting for first poll"

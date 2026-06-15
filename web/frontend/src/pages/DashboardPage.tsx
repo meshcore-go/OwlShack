@@ -347,7 +347,7 @@ function StatCell({
     <div
       className={cn(
         "bg-card relative px-5 py-5 flex flex-col gap-2 group",
-        accent && "bg-gradient-to-br from-primary/5 via-card to-card",
+        accent && "bg-linear-to-br from-primary/5 via-card to-card",
       )}
     >
       <div className="flex items-center justify-between">

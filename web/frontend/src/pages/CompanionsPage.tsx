@@ -118,7 +118,7 @@ export function CompanionsPage() {
           <div className="flex items-center justify-between px-4 py-3 border-b border-border">
             <div className="space-y-0.5">
               <span className="label-overline block">Roster</span>
-              <h2 className="font-mono text-sm uppercase tracking-[0.1em]">
+              <h2 className="font-mono text-sm uppercase tracking-widest">
                 Configured nodes
               </h2>
             </div>
@@ -127,7 +127,7 @@ export function CompanionsPage() {
           {companions.length === 0 ? (
             <div className="px-6 py-16 text-center">
               <MessagesSquare className="size-8 mx-auto mb-3 text-muted-foreground/40" />
-              <p className="font-mono text-sm uppercase tracking-[0.1em] text-muted-foreground">
+              <p className="font-mono text-sm uppercase tracking-widest text-muted-foreground">
                 No companions configured
               </p>
               <p className="mt-2 text-xs text-muted-foreground/70">
@@ -279,7 +279,7 @@ function CompanionEditor({
     <Dialog open onOpenChange={(o) => !o && onClose()}>
       <DialogContent className="rounded-none sm:max-w-lg">
         <DialogHeader>
-          <DialogTitle className="font-mono text-sm uppercase tracking-[0.1em]">
+          <DialogTitle className="font-mono text-sm uppercase tracking-widest">
             {existing ? `Edit companion — ${existing.name}` : "Add companion"}
           </DialogTitle>
         </DialogHeader>

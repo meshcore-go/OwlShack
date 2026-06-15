@@ -210,7 +210,7 @@ export function RepeatersListPage() {
               variant="default"
               size="sm"
               onClick={() => setAddOpen(true)}
-              className="font-mono text-xs uppercase tracking-[0.1em]"
+              className="font-mono text-xs uppercase tracking-widest"
             >
               <Plus className="size-3.5" />
               Add repeater
@@ -229,7 +229,7 @@ export function RepeatersListPage() {
           <div className="flex items-center justify-between px-4 py-3 border-b border-border">
             <div className="space-y-0.5">
               <span className="label-overline block">Roster</span>
-              <h2 className="font-mono text-sm uppercase tracking-[0.1em]">
+              <h2 className="font-mono text-sm uppercase tracking-widest">
                 Managed repeaters
               </h2>
             </div>
@@ -241,7 +241,7 @@ export function RepeatersListPage() {
           {repeaters.length === 0 ? (
             <div className="px-6 py-16 text-center">
               <Radio className="size-8 mx-auto mb-3 text-muted-foreground/40" />
-              <p className="font-mono text-sm uppercase tracking-[0.1em] text-muted-foreground">
+              <p className="font-mono text-sm uppercase tracking-widest text-muted-foreground">
                 No repeaters yet
               </p>
               <p className="mt-2 text-xs text-muted-foreground/70">
@@ -252,7 +252,7 @@ export function RepeatersListPage() {
                 variant="default"
                 size="sm"
                 onClick={() => setAddOpen(true)}
-                className="mt-4 font-mono text-xs uppercase tracking-[0.1em]"
+                className="mt-4 font-mono text-xs uppercase tracking-widest"
               >
                 <Plus className="size-3.5" />
                 Add repeater
@@ -518,7 +518,7 @@ function AddRepeaterDialog({
                       size="xs"
                       disabled={submitting}
                       onClick={() => handlePeerAdd(p.pubkey)}
-                      className="font-mono uppercase tracking-[0.1em] text-primary hover:text-primary"
+                      className="font-mono uppercase tracking-widest text-primary hover:text-primary"
                     >
                       <Plus className="size-3" /> add
                     </Button>
@@ -554,7 +554,7 @@ function AddRepeaterDialog({
                 size="sm"
                 onClick={handleManualSubmit}
                 disabled={!manualValid || manualAlreadyAdded || submitting}
-                className="font-mono uppercase tracking-[0.1em]"
+                className="font-mono uppercase tracking-widest"
               >
                 <Plus className="size-3" /> add
               </Button>

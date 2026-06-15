@@ -75,7 +75,7 @@ export function TelemetryPanel({
       </div>
       {err && (
         <Alert variant="destructive">
-          <AlertTitle className="font-mono uppercase tracking-[0.1em]">
+          <AlertTitle className="font-mono uppercase tracking-widest">
             Error
           </AlertTitle>
           <AlertDescription>{err}</AlertDescription>
@@ -150,13 +150,13 @@ function TelemetryTile({ reading }: { reading: TelemetryReading }) {
             lat={coord.lat}
             lon={coord.lon}
             raw={display}
-            className="font-mono text-sm font-semibold tabular-nums break-words"
+            className="font-mono text-sm font-semibold tabular-nums wrap-break-word"
           />
         ) : (
           <span
             className={cn(
               "font-mono font-semibold tabular-nums leading-none",
-              compact ? "text-sm break-words" : "text-lg break-all",
+              compact ? "text-sm wrap-break-word" : "text-lg break-all",
             )}
           >
             {display}

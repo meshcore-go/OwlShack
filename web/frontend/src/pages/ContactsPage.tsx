@@ -97,7 +97,7 @@ export function ContactsPage() {
               variant="default"
               size="sm"
               onClick={() => setDialogOpen(true)}
-              className="font-mono text-xs uppercase tracking-[0.1em]"
+              className="font-mono text-xs uppercase tracking-widest"
             >
               <UserPlus className="size-3.5" />
               Add contact
@@ -116,7 +116,7 @@ export function ContactsPage() {
           <div className="flex items-center justify-between px-4 py-3 border-b border-border">
             <div className="space-y-0.5">
               <span className="label-overline block">Roster</span>
-              <h2 className="font-mono text-sm uppercase tracking-[0.1em]">
+              <h2 className="font-mono text-sm uppercase tracking-widest">
                 Allowed peers
               </h2>
             </div>
@@ -128,7 +128,7 @@ export function ContactsPage() {
           {contactsSorted.length === 0 ? (
             <div className="px-6 py-16 text-center">
               <CircleDashed className="size-8 mx-auto mb-3 text-muted-foreground/40" />
-              <p className="font-mono text-sm uppercase tracking-[0.1em] text-muted-foreground">
+              <p className="font-mono text-sm uppercase tracking-widest text-muted-foreground">
                 No contacts yet
               </p>
               <p className="mt-2 text-xs text-muted-foreground/70">
@@ -138,7 +138,7 @@ export function ContactsPage() {
                 variant="default"
                 size="sm"
                 onClick={() => setDialogOpen(true)}
-                className="mt-4 font-mono text-xs uppercase tracking-[0.1em]"
+                className="mt-4 font-mono text-xs uppercase tracking-widest"
               >
                 <UserPlus className="size-3.5" />
                 Add contact

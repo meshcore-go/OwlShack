@@ -10,7 +10,7 @@ export function LoadErrorAlert({
 }) {
   return (
     <Alert variant="destructive">
-      <AlertTitle className="font-mono uppercase tracking-[0.1em]">
+      <AlertTitle className="font-mono uppercase tracking-widest">
         Error
       </AlertTitle>
       <AlertDescription>
@@ -19,7 +19,7 @@ export function LoadErrorAlert({
           variant="ghost"
           size="sm"
           onClick={onRetry}
-          className="ml-2 h-7 text-xs uppercase tracking-[0.1em]"
+          className="ml-2 h-7 text-xs uppercase tracking-widest"
         >
           retry
         </Button>

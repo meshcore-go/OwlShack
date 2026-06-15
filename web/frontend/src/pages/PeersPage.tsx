@@ -171,7 +171,7 @@ export function PeersPage() {
         <div className="flex flex-col gap-3 px-4 py-3 border-b border-border sm:flex-row sm:items-center sm:justify-between">
           <div className="space-y-0.5">
             <span className="label-overline block">Roster</span>
-            <h2 className="font-mono text-sm uppercase tracking-[0.1em]">
+            <h2 className="font-mono text-sm uppercase tracking-widest">
               Discovered peers
             </h2>
           </div>

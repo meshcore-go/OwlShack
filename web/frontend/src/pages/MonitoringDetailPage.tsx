@@ -250,7 +250,7 @@ export function MonitoringDetailPage() {
           ))}
         </div>
       ) : available.length === 0 ? (
-        <div className="panel py-16 text-center font-mono text-xs uppercase tracking-[0.1em] text-muted-foreground/60">
+        <div className="panel py-16 text-center font-mono text-xs uppercase tracking-widest text-muted-foreground/60">
           No history recorded yet — first poll pending.
         </div>
       ) : (
@@ -335,7 +335,7 @@ function RangeSelector({
           type="button"
           onClick={() => onChange(r)}
           className={cn(
-            "px-2.5 py-1 font-mono text-[10px] uppercase tracking-[0.1em] bg-card transition-colors",
+            "px-2.5 py-1 font-mono text-[10px] uppercase tracking-widest bg-card transition-colors",
             range.key === r.key
               ? "text-primary bg-primary/10"
               : "text-muted-foreground hover:text-foreground",

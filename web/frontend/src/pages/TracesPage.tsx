@@ -668,7 +668,7 @@ export function TracesPage() {
                         !pathHexValid ||
                         (mode === "manual" && !computedPathHex)
                       }
-                      className="rounded-none font-mono uppercase tracking-[0.1em] gap-2"
+                      className="rounded-none font-mono uppercase tracking-widest gap-2"
                     >
                       <Send className="size-3.5" />
                       {isWaiting ? "waiting…" : "send trace"}

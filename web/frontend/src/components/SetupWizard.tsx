@@ -253,7 +253,7 @@ export function SetupWizard({
             </div>
             <div className="flex flex-col leading-tight">
               <span className="label-overline">OwlShack · first-run setup</span>
-              <DialogTitle className="font-mono text-sm uppercase tracking-[0.1em]">
+              <DialogTitle className="font-mono text-sm uppercase tracking-widest">
                 Get on the air
               </DialogTitle>
             </div>

@@ -182,7 +182,7 @@ export function MonitoringSettings({
       <div className="flex items-center justify-between px-4 py-3 border-b border-border">
         <div className="space-y-0.5">
           <span className="label-overline block">Monitoring</span>
-          <h2 className="font-mono text-sm uppercase tracking-[0.1em]">
+          <h2 className="font-mono text-sm uppercase tracking-widest">
             Analytics &amp; history
           </h2>
         </div>

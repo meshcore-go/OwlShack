@@ -200,7 +200,7 @@ export function AddContactDialog({
               variant="ghost"
               size="sm"
               onClick={() => onOpenChange(false)}
-              className="font-mono uppercase tracking-[0.1em]"
+              className="font-mono uppercase tracking-widest"
             >
               Cancel
             </Button>
@@ -208,7 +208,7 @@ export function AddContactDialog({
               size="sm"
               onClick={submit}
               disabled={!canSubmit}
-              className="font-mono uppercase tracking-[0.1em]"
+              className="font-mono uppercase tracking-widest"
             >
               {submitting ? "Adding…" : "Add contact"}
             </Button>

@@ -266,7 +266,7 @@ export function MqttPage() {
                           {b.name}
                         </span>
                         {!b.enabled && (
-                          <span className="font-mono text-[10px] uppercase tracking-[0.1em] text-muted-foreground/60">
+                          <span className="font-mono text-[10px] uppercase tracking-widest text-muted-foreground/60">
                             disabled
                           </span>
                         )}
@@ -382,7 +382,7 @@ function BrokerEditor({
     <Dialog open onOpenChange={(o) => !o && onClose()}>
       <DialogContent className="rounded-none sm:max-w-xl max-h-[85vh] overflow-y-auto">
         <DialogHeader>
-          <DialogTitle className="font-mono text-sm uppercase tracking-[0.1em]">
+          <DialogTitle className="font-mono text-sm uppercase tracking-widest">
             {broker.name ? `Edit broker — ${broker.name}` : "Add broker"}
           </DialogTitle>
         </DialogHeader>

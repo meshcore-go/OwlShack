@@ -229,7 +229,7 @@ function PeerDetailBody({
             <Button
               size="sm"
               onClick={onAdd}
-              className="font-mono text-xs uppercase tracking-[0.1em]"
+              className="font-mono text-xs uppercase tracking-widest"
             >
               <UserPlus className="size-3.5" /> Add
             </Button>
@@ -238,7 +238,7 @@ function PeerDetailBody({
                 <Button
                   size="sm"
                   variant="outline"
-                  className="rounded-none font-mono text-xs uppercase tracking-[0.1em]"
+                  className="rounded-none font-mono text-xs uppercase tracking-widest"
                 >
                   <Share2 className="size-3.5" /> Share
                 </Button>
@@ -328,7 +328,7 @@ function PeerDetailBody({
           <DetailRow icon={<Route className="size-4" />} label="Advert Path">
             <div className="space-y-2">
               <div className="flex items-center justify-between">
-                <span className="font-mono text-[10px] uppercase tracking-[0.1em] text-muted-foreground">
+                <span className="font-mono text-[10px] uppercase tracking-widest text-muted-foreground">
                   Hops away
                 </span>
                 <span className="font-mono text-xs tabular-nums">
@@ -348,7 +348,7 @@ function PeerDetailBody({
                 </div>
               )}
               <div className="flex items-center justify-between">
-                <span className="font-mono text-[10px] uppercase tracking-[0.1em] text-muted-foreground">
+                <span className="font-mono text-[10px] uppercase tracking-widest text-muted-foreground">
                   Hash size
                 </span>
                 <span className="font-mono text-xs tabular-nums text-muted-foreground">
@@ -540,7 +540,7 @@ function AddPeerContactDialog({
               variant="ghost"
               size="sm"
               onClick={() => onOpenChange(false)}
-              className="font-mono uppercase tracking-[0.1em]"
+              className="font-mono uppercase tracking-widest"
             >
               Cancel
             </Button>
@@ -548,7 +548,7 @@ function AddPeerContactDialog({
               size="sm"
               onClick={submit}
               disabled={!companion || submitting}
-              className="font-mono uppercase tracking-[0.1em]"
+              className="font-mono uppercase tracking-widest"
             >
               <UserPlus className="size-3.5" />
               {submitting ? "Adding…" : "Add"}
@@ -754,7 +754,7 @@ function ShareInMessageDialog({
               variant="ghost"
               size="sm"
               onClick={() => onOpenChange(false)}
-              className="font-mono uppercase tracking-[0.1em]"
+              className="font-mono uppercase tracking-widest"
             >
               Cancel
             </Button>
@@ -762,7 +762,7 @@ function ShareInMessageDialog({
               size="sm"
               onClick={go}
               disabled={!companion || !channel}
-              className="font-mono uppercase tracking-[0.1em]"
+              className="font-mono uppercase tracking-widest"
             >
               <MessageSquarePlus className="size-3.5" /> Open in composer
             </Button>

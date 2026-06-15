@@ -454,7 +454,7 @@ export function RepeaterDetailPage() {
   if (error) {
     return (
       <Alert variant="destructive">
-        <AlertTitle className="font-mono uppercase tracking-[0.1em]">
+        <AlertTitle className="font-mono uppercase tracking-widest">
           Error
         </AlertTitle>
         <AlertDescription>{error}</AlertDescription>
@@ -557,7 +557,7 @@ export function RepeaterDetailPage() {
             <span className="font-mono text-base font-semibold uppercase tracking-[0.06em]">
               {peerName}
             </span>
-            <span className="font-mono text-[10px] uppercase tracking-[0.1em] px-1.5 py-0.5 border border-border text-muted-foreground">
+            <span className="font-mono text-[10px] uppercase tracking-widest px-1.5 py-0.5 border border-border text-muted-foreground">
               {peerType}
             </span>
           </div>
@@ -742,14 +742,14 @@ export function RepeaterDetailPage() {
               className="rounded-none font-mono text-xs border-border"
             />
             <div className="flex items-center gap-2">
-              <span className="font-mono text-[10px] uppercase tracking-[0.1em] text-muted-foreground">
+              <span className="font-mono text-[10px] uppercase tracking-widest text-muted-foreground">
                 Bytes per hop
               </span>
               <Select
                 value={String(pathHashSizeInput)}
                 onValueChange={(v) => setPathHashSizeInput(Number(v))}
               >
-                <SelectTrigger className="rounded-none font-mono text-[10px] uppercase tracking-[0.1em] h-7 w-20 border-border bg-background">
+                <SelectTrigger className="rounded-none font-mono text-[10px] uppercase tracking-widest h-7 w-20 border-border bg-background">
                   <SelectValue />
                 </SelectTrigger>
                 <SelectContent className="rounded-sm">
@@ -823,7 +823,7 @@ function RepeaterTab({
     <TabsTrigger
       value={value}
       className={cn(
-        "rounded-none flex-none px-4 py-2.5 font-mono text-[11px] uppercase tracking-[0.1em] gap-1.5 border-b-2 border-transparent hover:bg-muted/30",
+        "rounded-none flex-none px-4 py-2.5 font-mono text-[11px] uppercase tracking-widest gap-1.5 border-b-2 border-transparent hover:bg-muted/30",
         "data-[state=active]:bg-primary/10 data-[state=active]:text-primary data-[state=active]:border-b-2 data-[state=active]:border-primary",
       )}
     >
@@ -962,7 +962,7 @@ function StatusTab({
       </div>
       {err && (
         <Alert variant="destructive">
-          <AlertTitle className="font-mono uppercase tracking-[0.1em]">
+          <AlertTitle className="font-mono uppercase tracking-widest">
             Error
           </AlertTitle>
           <AlertDescription>{err}</AlertDescription>
@@ -1058,7 +1058,7 @@ function StatTile({
     <div
       className={cn(
         "bg-card relative px-4 py-3 flex flex-col gap-1.5 group",
-        accent && "bg-gradient-to-br from-primary/5 via-card to-card",
+        accent && "bg-linear-to-br from-primary/5 via-card to-card",
       )}
     >
       <div className="flex items-center justify-between">
@@ -1398,7 +1398,7 @@ function TerminalTab({
         </Button>
       </div>
       <pre
-        className="bg-background border border-border text-xs font-mono p-3 min-h-[18rem] max-h-[28rem] overflow-y-auto whitespace-pre-wrap break-words"
+        className="bg-background border border-border text-xs font-mono p-3 min-h-72 max-h-112 overflow-y-auto whitespace-pre-wrap wrap-break-word"
       >
         {history.length === 0 ? (
           <span className="text-muted-foreground/50">
@@ -1652,7 +1652,7 @@ function NeighborsTab({
       </div>
       {err && (
         <Alert variant="destructive">
-          <AlertTitle className="font-mono uppercase tracking-[0.1em]">
+          <AlertTitle className="font-mono uppercase tracking-widest">
             Error
           </AlertTitle>
           <AlertDescription>{err}</AlertDescription>
@@ -1684,7 +1684,7 @@ function NeighborsTab({
                     )}
                   </span>
                   {n.type && (
-                    <span className="font-mono text-[10px] uppercase tracking-[0.1em] px-1.5 py-0.5 border border-border text-muted-foreground">
+                    <span className="font-mono text-[10px] uppercase tracking-widest px-1.5 py-0.5 border border-border text-muted-foreground">
                       {n.type}
                     </span>
                   )}
@@ -1785,7 +1785,7 @@ function OwnerTab({
       </div>
       {err && (
         <Alert variant="destructive">
-          <AlertTitle className="font-mono uppercase tracking-[0.1em]">
+          <AlertTitle className="font-mono uppercase tracking-widest">
             Error
           </AlertTitle>
           <AlertDescription>{err}</AlertDescription>
@@ -1834,11 +1834,11 @@ function OwnerRow({
           not set
         </span>
       ) : multiline ? (
-        <pre className="font-mono text-sm whitespace-pre-wrap break-words">
+        <pre className="font-mono text-sm whitespace-pre-wrap wrap-break-word">
           {value}
         </pre>
       ) : (
-        <span className="font-mono text-sm break-words">{value}</span>
+        <span className="font-mono text-sm wrap-break-word">{value}</span>
       )}
     </div>
   );
@@ -2029,7 +2029,7 @@ function AccessTab({
       </div>
       {err && (
         <Alert variant="destructive">
-          <AlertTitle className="font-mono uppercase tracking-[0.1em]">
+          <AlertTitle className="font-mono uppercase tracking-widest">
             Error
           </AlertTitle>
           <AlertDescription>{err}</AlertDescription>
@@ -2094,7 +2094,7 @@ function AccessTab({
                       }
                       disabled={isBusy}
                     >
-                      <SelectTrigger className="rounded-none font-mono text-[10px] uppercase tracking-[0.1em] h-7 w-32 border-border bg-background">
+                      <SelectTrigger className="rounded-none font-mono text-[10px] uppercase tracking-widest h-7 w-32 border-border bg-background">
                         <SelectValue />
                       </SelectTrigger>
                       <SelectContent className="rounded-none font-mono text-xs">
@@ -2124,7 +2124,7 @@ function AccessTab({
                         size="xs"
                         onClick={() => remove(fullPubkey)}
                         disabled={isBusy || !peer}
-                        className="font-mono uppercase tracking-[0.1em]"
+                        className="font-mono uppercase tracking-widest"
                       >
                         yes
                       </Button>
@@ -2132,7 +2132,7 @@ function AccessTab({
                         variant="ghost"
                         size="xs"
                         onClick={() => setConfirmRemove(null)}
-                        className="font-mono uppercase tracking-[0.1em]"
+                        className="font-mono uppercase tracking-widest"
                       >
                         no
                       </Button>
@@ -2320,7 +2320,7 @@ function AddAccessDialog({
                       size="xs"
                       disabled={submitting}
                       onClick={() => submitWith(p.pubkey)}
-                      className="font-mono uppercase tracking-[0.1em] text-primary hover:text-primary"
+                      className="font-mono uppercase tracking-widest text-primary hover:text-primary"
                     >
                       <Plus className="size-3" /> add
                     </Button>
@@ -2356,7 +2356,7 @@ function AddAccessDialog({
                 size="sm"
                 onClick={() => submitWith(manualKey.trim())}
                 disabled={!manualValid || manualAlreadyAdded || submitting}
-                className="font-mono uppercase tracking-[0.1em]"
+                className="font-mono uppercase tracking-widest"
               >
                 <Plus className="size-3" /> add
               </Button>
@@ -3113,7 +3113,7 @@ function SettingsSection({
             {eyebrow && (
               <span className="label-overline block">{eyebrow}</span>
             )}
-            <span className="font-mono text-sm uppercase tracking-[0.1em]">
+            <span className="font-mono text-sm uppercase tracking-widest">
               {title}
             </span>
           </div>
