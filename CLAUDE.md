@@ -40,7 +40,7 @@ Capabilities visible in the UI:
 | Mesh proto | `github.com/meshcore-go/meshcore-go` (lockstep local dev via untracked `go.work` pointing at `../meshcore-go`; `go.mod` pins the published release that CI builds against) |
 | Map | Leaflet + CARTO tiles (dark/light auto-switch via `<html class="dark">`) |
 | Toasts | `sonner` |
-| Config | Stored in SQLite (`app_config` table); config files are one-time imports (see `config.toml.example`) |
+| Config | Stored in SQLite (relational config tables); config files are one-time imports |
 
 > **Important**: The frontend is React, not Preact. Migrating off Preact was the first large change in the recent UI rewrite — DaisyUI, PicoCSS, preact-router, `@preact/preset-vite`, lucide-preact have been removed and must NOT be reintroduced.
 
@@ -354,6 +354,18 @@ radio/connection change still restarts everything (modem reconnect);
   run imports a default-named file from the cwd or bootstraps a quiet default
   (zero companions — the first-run wizard creates one). SIGHUP reloads from
   the DB.
+- **Legacy config-file format is import-compatible.** The pre-relational ("main"
+  deployment) format used `nodeType`, `[[bot]]`/`[[bot.trigger]]`, and
+  `[[observer]]`/`[observer.broker]`; `migrateLegacyFormat` (in
+  `internal/config/legacy.go`, run first in `ApplyDefaults`) folds those into
+  `connectionType` / `[[companion]]` / a single top-level `[mqtt]` so an
+  existing deployed config imports without dropping the bot or MQTT feed. A
+  bot and an observer **sharing a name are the same node**: the observer is
+  matched to that companion (else a companion is created), its `keyFile` seed
+  becomes the companion's identity (via the `KeyFile`→`PrivateKey`
+  `MigrateKeyFiles` path) and its `[advert]` its position. Legacy broker
+  `ws`/`wss` transports normalize to `websockets` (`wss` implies TLS); the
+  canonical schema and `BrokerConfig.Validate` only know `tcp`/`websockets`.
 - **Validation is the crash guard.** A `startCompanions` failure after reload
   **exits the process**, so `Config.Validate()` must reject anything that
   would fail companion construction: trigger type/template/regex/cron,

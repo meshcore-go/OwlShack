@@ -112,7 +112,7 @@ sudo usermod -a -G dialout $USER
 ./meshcore-bot -vvv
 ```
 
-On first run with no stored config, OwlShack bootstraps a default configuration (with one generated companion) and starts. If a `config.toml` (or `.yaml` / `.json`) is present in the working directory, it is imported automatically instead. To import an explicit file and overwrite the stored config:
+On first run with no stored config, OwlShack starts quietly with no companion — it observes the mesh but advertises nothing — and the web console presents a first-run setup wizard that walks you through radio settings and creating your first companion. If a `config.toml` (or `.yaml` / `.json`) is present in the working directory, it is imported automatically instead (and the wizard is skipped). To import an explicit file and overwrite the stored config:
 
 ```bash
 ./meshcore-bot -config myconfig.toml
@@ -145,11 +145,13 @@ docker run -d \
 
 ## Configuration
 
-**The database is the source of truth.** Config is stored in `meshcore.db` (a single-row `app_config` table). A config file is read only to seed or overwrite that stored config:
+**The database is the source of truth.** Config is stored relationally in `meshcore.db`. A config file is read only to seed or overwrite that stored config:
 
-- First run with an empty database imports a `config.toml` / `.yaml` / `.json` from the working directory, or bootstraps a default.
+- First run with an empty database imports a `config.toml` / `.yaml` / `.json` from the working directory, or bootstraps a quiet default (no companions) and shows the first-run wizard.
 - `-config <path>` imports the given file and overwrites the stored config.
 - After that, the web UI is the way to change settings, and `SIGHUP` reloads from the database.
+
+Config files from older releases import automatically: the legacy `nodeType` key, `[[bot]]` blocks, and `[[observer]]` MQTT sections are mapped onto the current `connectionType` / `[[companion]]` / `[mqtt]` layout.
 
 A minimal import file:
 

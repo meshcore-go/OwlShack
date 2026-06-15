@@ -9,10 +9,6 @@ import (
 	"github.com/robfig/cron/v3"
 )
 
-type BotConfig struct {
-	Triggers []TriggerConfig `json:"triggers" yaml:"triggers" toml:"trigger"`
-}
-
 type TriggerConfig struct {
 	Type     string `json:"type" yaml:"type" toml:"type"` // group, private, dm, cron, cap, etc
 	Template string `json:"template" yaml:"template" toml:"template"`

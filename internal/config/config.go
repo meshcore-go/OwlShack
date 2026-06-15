@@ -107,6 +107,13 @@ type Config struct {
 
 	// Companions
 	Companions []CompanionConfig `json:"companions" yaml:"companions" toml:"companion"`
+
+	// Legacy import aliases from the pre-relational "main" deployment format
+	// (nodeType / [[bot]] / [[observer]]). migrateLegacyFormat folds these into
+	// ConnectionType / Companions / Mqtt and clears them — see legacy.go.
+	NodeType  *string          `json:"nodeType,omitempty" yaml:"nodeType,omitempty" toml:"nodeType,omitempty"`
+	Bots      []BotConfig      `json:"bots,omitempty" yaml:"bots,omitempty" toml:"bot,omitempty"`
+	Observers []legacyObserver `json:"observers,omitempty" yaml:"observers,omitempty" toml:"observer,omitempty"`
 }
 
 func DefaultConfig() Config {
@@ -185,6 +192,11 @@ func ensurePublicChannel(comp *CompanionConfig) {
 }
 
 func (c *Config) ApplyDefaults() {
+	// Fold pre-relational legacy keys (nodeType / [[bot]] / [[observer]]) into the
+	// current fields first, so the folded companions/mqtt go through the normal
+	// normalization below (Public channel, key generation, topicPrefix migration).
+	c.migrateLegacyFormat()
+
 	defaults := DefaultConfig()
 	// Normalise to a non-nil slice so JSON serialises companions as [] not
 	// null; the frontend (and its TS contract) treats companions as an array.

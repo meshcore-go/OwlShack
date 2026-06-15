@@ -166,8 +166,8 @@ dist
 # Compiled binary (`go build -o meshcore-bot .`)
 /meshcore-bot
 
-# Runtime config — holds repeater passwords / secrets.
-# Commit config.toml.example as the template instead.
+# Runtime config — holds repeater passwords / secrets. The bot stores config in
+# meshcore.db; a config file is only a one-time import (default-named or -config).
 config.json
 config.yaml
 config.yml
