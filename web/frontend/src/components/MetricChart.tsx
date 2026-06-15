@@ -117,10 +117,15 @@ export function MetricChart({
         padding: "4px 8px",
       }}
       labelFormatter={(ts) => new Date((ts as number) * 1000).toLocaleString()}
-      formatter={(value: number) => [
-        isCounter ? `+${formatMetric(metric, value)}` : formatMetric(metric, value),
-        isCounter ? `${metricLabel(metric)} · Δ` : metricLabel(metric),
-      ]}
+      formatter={(value) => {
+        // recharts v3 types the value as ValueType | undefined; our series is
+        // always numeric, so coerce before formatting.
+        const v = Number(value);
+        return [
+          isCounter ? `+${formatMetric(metric, v)}` : formatMetric(metric, v),
+          isCounter ? `${metricLabel(metric)} · Δ` : metricLabel(metric),
+        ];
+      }}
     />,
   ], [spanSecs, hero, isCounter, metric]);
 
