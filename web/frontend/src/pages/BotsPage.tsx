@@ -301,18 +301,18 @@ function BotEditor({
     t?.pathHashSize != null ? String(t.pathHashSize) : "default",
   );
 
-  // Channel suggestions for the selected companion: Public + its standalone
-  // channels + any channel its existing triggers reference. Free-typed names
-  // are still allowed (the picker creates them on the fly).
+  // Channels the trigger can listen on: the companion's own channels (Public +
+  // its configured channels). Dedup is case-sensitive — channel names map to
+  // distinct keys per case, so "#Foo" and "#foo" are different channels.
   const channelOptions = useMemo(() => {
     const comp = config.companions.find((c) => c.name === companion);
     const names: string[] = [];
     const seen = new Set<string>();
     const push = (n: string) => {
-      const k = n.trim().toLowerCase();
+      const k = n.trim();
       if (!k || seen.has(k)) return;
       seen.add(k);
-      names.push(n.trim());
+      names.push(k);
     };
     push("Public");
     (comp?.channels ?? []).forEach((c) => push(c.name));

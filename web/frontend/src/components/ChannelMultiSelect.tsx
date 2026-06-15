@@ -29,15 +29,17 @@ export function ChannelMultiSelect({
 }) {
   const [open, setOpen] = useState(false);
 
-  const has = (name: string) =>
-    selected.some((c) => c.toLowerCase() === name.toLowerCase());
+  // Channel names are case-sensitive (a hashtag channel's key is derived from
+  // the exact name), so compare exactly — "#Foo" and "#foo" are different
+  // channels and must not be merged.
+  const has = (name: string) => selected.some((c) => c === name);
 
   const add = (name: string) => {
     if (has(name)) return;
     onChange([...selected, name]);
   };
   const remove = (name: string) =>
-    onChange(selected.filter((c) => c.toLowerCase() !== name.toLowerCase()));
+    onChange(selected.filter((c) => c !== name));
 
   const available = options.filter((o) => !has(o));
 

@@ -23,7 +23,6 @@ type ChannelTrigger struct {
 
 	mu       sync.Mutex
 	callback Callback
-	cancel   context.CancelFunc
 }
 
 func NewChannelTrigger(botName string, cfg config.TriggerConfig, n *node.Node, channels []*meshcore.ChannelEntry, log *slog.Logger) (*ChannelTrigger, error) {
@@ -57,35 +56,38 @@ func NewChannelTrigger(botName string, cfg config.TriggerConfig, n *node.Node, c
 	}, nil
 }
 
-func (t *ChannelTrigger) Start(ctx context.Context, callback Callback) error {
-	ctx, cancel := context.WithCancel(ctx)
+// Start stores the callback. Group-text packets are delivered via the
+// companion's single persistent GrpTxt handler (which calls HandleGroupText),
+// not a per-trigger node.OnPacket registration — that lets triggers be swapped
+// at runtime without leaking node packet handlers (node.OnPacket cannot
+// deregister).
+func (t *ChannelTrigger) Start(_ context.Context, callback Callback) error {
 	t.mu.Lock()
 	t.callback = callback
-	t.cancel = cancel
 	t.mu.Unlock()
-
-	t.node.OnPacket(meshcore.PayloadTypeGrpTxt, func(pkt *meshcore.Packet) {
-		select {
-		case <-ctx.Done():
-			return
-		default:
-		}
-		t.handlePacket(pkt)
-	})
-
 	return nil
 }
 
+// Stop clears the callback so HandleGroupText becomes a no-op even if the
+// companion's dispatcher still holds a reference to this (now removed) trigger.
 func (t *ChannelTrigger) Stop() error {
 	t.mu.Lock()
-	if t.cancel != nil {
-		t.cancel()
-	}
+	t.callback = nil
 	t.mu.Unlock()
 	return nil
 }
 
-func (t *ChannelTrigger) handlePacket(pkt *meshcore.Packet) {
+// HandleGroupText is invoked by the companion's persistent GrpTxt handler for
+// every received group message. It decrypts, applies this trigger's channel
+// and pattern filters, and fires the callback on a match.
+func (t *ChannelTrigger) HandleGroupText(pkt *meshcore.Packet) {
+	t.mu.Lock()
+	cb := t.callback
+	t.mu.Unlock()
+	if cb == nil {
+		return // stopped or not yet started
+	}
+
 	msg, ch, err := t.node.DecryptGroupText(pkt)
 	if err != nil {
 		t.log.Log(context.Background(), logging.LevelTrace, "group decrypt failed", "error", err)
@@ -95,6 +97,15 @@ func (t *ChannelTrigger) handlePacket(pkt *meshcore.Packet) {
 	t.log.Log(context.Background(), logging.LevelTrace, "group message received",
 		"channel", ch.Name, "sender", msg.Sender,
 		"text", msg.Text, "snr", pkt.SNR, "rssi", pkt.RSSI)
+
+	// Never react to our own companion's traffic — a manual channel send or a
+	// bot reply is heard back over the air, and matching it would let a bot
+	// trigger on itself (and loop). Mirrors the rx persistence handler's skip.
+	if msg.Sender == t.botName {
+		t.log.Log(context.Background(), logging.LevelTrace, "own message, skipping trigger",
+			"channel", ch.Name)
+		return
+	}
 
 	if t.channels != nil && !t.channels[ch.Name] {
 		t.log.Log(context.Background(), logging.LevelTrace, "channel not matched, skipping",
@@ -110,13 +121,6 @@ func (t *ChannelTrigger) handlePacket(pkt *meshcore.Packet) {
 	}
 
 	t.log.Log(context.Background(), logging.LevelTrace, "trigger matched", "captures", captures)
-
-	t.mu.Lock()
-	cb := t.callback
-	t.mu.Unlock()
-	if cb == nil {
-		return
-	}
 
 	cb(Event{
 		Type:    "channel",

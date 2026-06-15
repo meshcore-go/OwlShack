@@ -224,7 +224,7 @@ function ChannelRow({
       </div>
 
       <div className="min-w-0 flex-1">
-        <span className="font-mono text-sm font-medium uppercase tracking-[0.06em] truncate block">
+        <span className="font-mono text-sm font-medium tracking-[0.06em] truncate block">
           {name}
         </span>
         <span className="text-mono-xs text-muted-foreground">channel</span>
@@ -271,9 +271,9 @@ function AddChannelDialog({
 
   const trimmedName = channelName.trim();
   const trimmedKey = privateKey.trim();
-  const nameTaken = existing.some(
-    (c) => c.name.toLowerCase() === trimmedName.toLowerCase(),
-  );
+  // Channel names are case-sensitive (the key derives from the exact name), so
+  // "#Foo" and "#foo" are distinct channels — match exactly, like the backend.
+  const nameTaken = existing.some((c) => c.name === trimmedName);
   const nameValid = trimmedName.length > 0 && !nameTaken;
   const keyValid = mode === "public" || HEX32.test(trimmedKey);
 

@@ -3,6 +3,7 @@ package config
 import (
 	"encoding/json"
 	"fmt"
+	"strings"
 
 	"github.com/pelletier/go-toml/v2"
 	"gopkg.in/yaml.v3"
@@ -127,6 +128,42 @@ func DefaultConfig() Config {
 // PublicChannelName is the well-known public channel every companion joins.
 const PublicChannelName = "Public"
 
+// ensureTriggerChannels guarantees every channel a trigger references also
+// exists in the companion's channel list. Channels are owned at the companion
+// level; triggers only reference them by name. This keeps the model consistent
+// and migrates older configs where a trigger named a channel the companion's
+// channel list didn't include. A referenced channel's private key (if any) is
+// carried over so encrypted channels keep working.
+func ensureTriggerChannels(comp *CompanionConfig) {
+	if comp.Triggers == nil {
+		return
+	}
+	// Channel names are case-sensitive: a hashtag channel's key is SHA256 of the
+	// exact "#name", so "#Foo" and "#foo" are different channels on the air
+	// (matches the firmware and meshcore-go, which never case-fold names).
+	have := map[string]bool{}
+	if comp.Channels != nil {
+		for _, ch := range *comp.Channels {
+			have[ch.Name] = true
+		}
+	}
+	for _, t := range *comp.Triggers {
+		if t.Channels == nil {
+			continue
+		}
+		for _, ref := range *t.Channels {
+			if strings.TrimSpace(ref.Name) == "" || have[ref.Name] {
+				continue
+			}
+			have[ref.Name] = true
+			if comp.Channels == nil {
+				comp.Channels = &ChannelList{}
+			}
+			*comp.Channels = append(*comp.Channels, ChannelRef{Name: ref.Name, PrivateKey: ref.PrivateKey})
+		}
+	}
+}
+
 // ensurePublicChannel guarantees a companion is a member of the public channel.
 // Every companion must be in Public; this normalises configs from the wizard,
 // the add-companion form, imports, and hand-crafted PUTs alike.
@@ -176,6 +213,7 @@ func (c *Config) ApplyDefaults() {
 	// the first one wins and its companion becomes the selected node.
 	for i := range c.Companions {
 		comp := &c.Companions[i]
+		ensureTriggerChannels(comp)
 		ensurePublicChannel(comp)
 		if comp.Mqtt == nil {
 			continue

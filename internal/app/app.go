@@ -195,7 +195,7 @@ func Run(ctx context.Context, importPath string, verbosity int) error {
 			cfg = newCfg
 			compReg.set(companions)
 			srv.SetBackend(newBackend(companions, cfg, db, reload))
-			slog.Info("config reloaded", "started", stats.started, "stopped", stats.stopped, "kept", stats.kept)
+			slog.Info("config reloaded", "started", stats.started, "stopped", stats.stopped, "kept", stats.kept, "reloaded", stats.reloaded)
 
 		case <-reconnectCh:
 			slog.Warn("modem read loop exited, reconnecting...")
@@ -227,7 +227,7 @@ func startCompanions(ctx context.Context, cfg *config.Config, ms *modem.State, m
 }
 
 type reloadStats struct {
-	started, stopped, kept int
+	started, stopped, kept, reloaded int
 }
 
 // reloadCompanions reconciles the running companion set with newCfg: running
@@ -238,46 +238,93 @@ type reloadStats struct {
 // instances — including reused ones — are stopped, since the caller exits the
 // process.
 func reloadCompanions(ctx context.Context, oldCfg, newCfg *config.Config, running []*companion.Companion, ms *modem.State, mux *node.RadioMux, db *store.Store, hub *api.Hub, echoTracker *echo.Tracker) ([]*companion.Companion, reloadStats, error) {
-	keep := unchangedCompanions(oldCfg, newCfg)
+	oldBlocks := make(map[string]config.CompanionConfig)
+	if oldCfg != nil {
+		for _, b := range effectiveCompanionConfigs(oldCfg) {
+			oldBlocks[b.Name] = b
+		}
+	}
+
+	runningByName := make(map[string]*companion.Companion, len(running))
+	for _, c := range running {
+		runningByName[c.Name()] = c
+	}
+
+	// Classify each desired companion against the running set: keep as-is,
+	// reload triggers in place, or (re)create fresh.
+	type plan struct {
+		block      config.CompanionConfig
+		reuse      *companion.Companion // nil = build fresh
+		reloadTrig bool
+	}
+	newBlocks := effectiveCompanionConfigs(newCfg)
+	plans := make([]plan, 0, len(newBlocks))
+	for _, nb := range newBlocks {
+		inst, isRunning := runningByName[nb.Name]
+		ob, hadOld := oldBlocks[nb.Name]
+		switch {
+		case isRunning && hadOld && blocksEqual(ob, nb):
+			plans = append(plans, plan{block: nb, reuse: inst})
+		case isRunning && hadOld && triggersOnlyChange(ob, nb):
+			plans = append(plans, plan{block: nb, reuse: inst, reloadTrig: true})
+		default:
+			plans = append(plans, plan{block: nb}) // fresh build (new or full restart)
+		}
+	}
+
+	// Instances we're keeping (reused as-is or trigger-reloaded in place);
+	// every other running instance is stopped. Derived from plans so there's a
+	// single source of truth.
+	keep := make(map[*companion.Companion]bool)
+	for _, p := range plans {
+		if p.reuse != nil {
+			keep[p.reuse] = true
+		}
+	}
 
 	var stats reloadStats
-	reusable := make(map[string]*companion.Companion, len(running))
 	for _, c := range running {
-		if keep[c.Name()] {
-			reusable[c.Name()] = c
-			continue
+		if !keep[c] {
+			c.Stop()
+			stats.stopped++
 		}
-		c.Stop()
-		stats.stopped++
 	}
 
 	var companions, fresh []*companion.Companion
 	stopAll := func() {
 		stopCompanions(fresh)
-		for _, c := range reusable {
+		for c := range keep {
 			c.Stop()
 		}
 	}
 
-	for _, compCfg := range effectiveCompanionConfigs(newCfg) {
-		if inst, ok := reusable[compCfg.Name]; ok {
-			companions = append(companions, inst)
-			stats.kept++
+	for _, p := range plans {
+		if p.reuse != nil {
+			if p.reloadTrig {
+				if err := p.reuse.ReloadTriggers(p.block); err != nil {
+					stopAll()
+					return nil, stats, fmt.Errorf("reloading triggers for %q: %w", p.block.Name, err)
+				}
+				stats.reloaded++
+			} else {
+				stats.kept++
+			}
+			companions = append(companions, p.reuse)
 			continue
 		}
-		c, err := companion.NewCompanion(compCfg, mux, db, hub, echoTracker, ms.Stats, ms.RecvErrors)
+		c, err := companion.NewCompanion(p.block, mux, db, hub, echoTracker, ms.Stats, ms.RecvErrors)
 		if err != nil {
 			stopAll()
-			return nil, stats, fmt.Errorf("creating companion %q: %w", compCfg.Name, err)
+			return nil, stats, fmt.Errorf("creating companion %q: %w", p.block.Name, err)
 		}
 		if err := c.Start(ctx); err != nil {
 			stopAll()
-			return nil, stats, fmt.Errorf("starting companion %q: %w", compCfg.Name, err)
+			return nil, stats, fmt.Errorf("starting companion %q: %w", p.block.Name, err)
 		}
 		companions = append(companions, c)
 		fresh = append(fresh, c)
 		stats.started++
-		slog.Info("started companion", "companion", compCfg.Name)
+		slog.Info("started companion", "companion", p.block.Name)
 	}
 
 	hydratePeerTables(db, fresh)
@@ -309,31 +356,23 @@ func effectiveCompanionConfigs(cfg *config.Config) []config.CompanionConfig {
 	return blocks
 }
 
-// unchangedCompanions returns the names whose effective companion block is
-// JSON-identical between the two configs. Marshal errors mark a block as
-// changed, erring towards a restart.
-func unchangedCompanions(old, new_ *config.Config) map[string]bool {
-	keep := make(map[string]bool)
-	if old == nil {
-		return keep
-	}
+// blocksEqual reports whether two effective companion blocks are JSON-identical
+// (so the running instance can be reused untouched). Marshal errors report
+// "not equal", erring towards a restart.
+func blocksEqual(a, b config.CompanionConfig) bool {
+	aj, err1 := json.Marshal(a)
+	bj, err2 := json.Marshal(b)
+	return err1 == nil && err2 == nil && bytes.Equal(aj, bj)
+}
 
-	oldJSON := make(map[string][]byte, len(old.Companions))
-	for _, b := range effectiveCompanionConfigs(old) {
-		if j, err := json.Marshal(b); err == nil {
-			oldJSON[b.Name] = j
-		}
-	}
-	for _, b := range effectiveCompanionConfigs(new_) {
-		prev, ok := oldJSON[b.Name]
-		if !ok {
-			continue
-		}
-		if j, err := json.Marshal(b); err == nil && bytes.Equal(prev, j) {
-			keep[b.Name] = true
-		}
-	}
-	return keep
+// triggersOnlyChange reports whether two effective companion blocks differ
+// solely in their Triggers field — the case ReloadTriggers can apply in place
+// without a full restart (no re-advert, sessions survive). Everything else
+// (identity, radio, position, mqtt, channels) must match exactly.
+func triggersOnlyChange(a, b config.CompanionConfig) bool {
+	a.Triggers = nil
+	b.Triggers = nil
+	return blocksEqual(a, b)
 }
 
 func stopCompanions(companions []*companion.Companion) {

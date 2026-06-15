@@ -438,6 +438,9 @@ function RenameDialog({
             value={newName}
             onChange={(e) => setNewName(e.target.value)}
             placeholder="Channel name"
+            autoCapitalize="off"
+            autoCorrect="off"
+            spellCheck={false}
             className="rounded-none border-border font-mono text-sm"
             onKeyDown={(e) => e.key === "Enter" && save()}
           />

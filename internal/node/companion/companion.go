@@ -33,6 +33,13 @@ type triggerEntry struct {
 	channels []*meshcore.ChannelEntry
 }
 
+// groupTextHandler is implemented by triggers that react to group-text packets
+// (channel triggers). The companion's single GrpTxt dispatcher fans messages
+// out to these; non-implementers (e.g. cron triggers) are skipped.
+type groupTextHandler interface {
+	HandleGroupText(*meshcore.Packet)
+}
+
 type Companion struct {
 	cfg config.CompanionConfig
 
@@ -61,11 +68,11 @@ type Companion struct {
 	// MQTT Brokers - Out only
 	obs *mqtt.Observer
 
-	// Channel index tracking for standalone channels
-	triggerChannelCount int
-
 	mu     sync.Mutex
 	cancel context.CancelFunc
+	// runCtx is the context the triggers/observer were started with. Kept so
+	// ReloadTriggers can start freshly-built triggers without a full restart.
+	runCtx context.Context
 }
 
 func NewCompanion(cfg config.CompanionConfig, mux *node.RadioMux, st *store.Store, hub *api.Hub, echoTracker *echo.Tracker, stats modem.StatsProvider, recvErrors *atomic.Uint64, nodeOpts ...node.Option) (*Companion, error) {
@@ -107,53 +114,25 @@ func NewCompanion(cfg config.CompanionConfig, mux *node.RadioMux, st *store.Stor
 		repeaters:   repeater.NewClient(n, st, log),
 	}
 
-	// Register/Create Triggers
-	triggerChCount := 0
-	if cfg.Triggers != nil {
-		for _, trigCfg := range *cfg.Triggers {
-			// Apply Trigger defaults
-			if trigCfg.MaxRetries == nil {
-				retries := 3
-				trigCfg.MaxRetries = &retries
-			}
-			if trigCfg.RetryTimeout == nil {
-				retry := int64(5)
-				trigCfg.RetryTimeout = &retry
-			}
-
-			var channels []*meshcore.ChannelEntry
-			if trigCfg.Channels != nil {
-				for channelIdx, chRef := range *trigCfg.Channels {
-					ch, err := channelFromRef(chRef)
-					if err != nil {
-						return nil, fmt.Errorf("invalid channel %q: %w", chRef.Name, err)
-					}
-					channels = append(channels, ch)
-					n.SetChannel(channelIdx, ch)
-					if channelIdx+1 > triggerChCount {
-						triggerChCount = channelIdx + 1
-					}
-				}
-			}
-
-			entry, err := companion.buildTrigger(trigCfg, channels)
-			if err != nil {
-				return nil, fmt.Errorf("companion: %q trigger %q: %w", name, trigCfg.Type, err)
-			}
-
-			companion.triggers = append(companion.triggers, *entry)
-		}
-	}
-	companion.triggerChannelCount = triggerChCount
-
+	// Register the companion's channels — the single source of truth for which
+	// channels this node listens on. Triggers reference these by name; they do
+	// not register channels themselves (ApplyDefaults guarantees every channel a
+	// trigger names is also in the companion's channel list).
 	if cfg.Channels != nil {
 		for i, chRef := range *cfg.Channels {
 			ch, err := channelFromRef(chRef)
 			if err != nil {
-				return nil, fmt.Errorf("standalone channel %q: %w", chRef.Name, err)
+				return nil, fmt.Errorf("channel %q: %w", chRef.Name, err)
 			}
-			n.SetChannel(triggerChCount+i, ch)
+			n.SetChannel(i, ch)
 		}
+	}
+
+	// Build triggers. A channel trigger keeps a name filter (the channels it
+	// reacts to); decryption uses the companion channels registered above.
+	companion.triggers, err = companion.buildTriggers(cfg)
+	if err != nil {
+		return nil, err
 	}
 
 	// Register MQTT
@@ -176,6 +155,7 @@ func (c *Companion) Start(ctx context.Context) error {
 	ctx, cancel := context.WithCancel(ctx)
 	c.mu.Lock()
 	c.cancel = cancel
+	c.runCtx = ctx
 	c.mu.Unlock()
 
 	// Start triggers
@@ -224,6 +204,101 @@ func (c *Companion) Stop() error {
 	return nil
 }
 
+// ReloadTriggers swaps the companion's trigger set in place, without tearing
+// down the node, identity, MQTT observer, advert loop, or repeater/room
+// sessions. Use it when only a companion's triggers changed: the result is the
+// same as a restart for trigger purposes, but with no re-advert and no session
+// loss. The new set is built and validated first, so an invalid trigger aborts
+// the reload with the old set still running.
+func (c *Companion) ReloadTriggers(newCfg config.CompanionConfig) error {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+
+	ctx := c.runCtx
+	if ctx == nil {
+		return fmt.Errorf("companion %q not started", c.cfg.Name)
+	}
+
+	// Build + validate the new trigger set up front; bail before touching the
+	// live triggers if anything is invalid. Channels are companion-owned and
+	// unchanged here (a config change that also alters channels is not a
+	// triggers-only change, so it takes the full-restart path instead).
+	newEntries, err := c.buildTriggers(newCfg)
+	if err != nil {
+		return err
+	}
+
+	// Stop the old triggers (cron loops exit; channel triggers go no-op), then
+	// swap in and start the new set. The persistent group-text handler picks up
+	// the new set; node channels are untouched.
+	for _, e := range c.triggers {
+		e.trigger.Stop()
+	}
+	c.triggers = newEntries
+	c.cfg.Triggers = newCfg.Triggers
+	for _, e := range c.triggers {
+		if err := e.trigger.Start(ctx, c.makeCallback(ctx, e)); err != nil {
+			return fmt.Errorf("companion %q starting reloaded trigger (%s): %w", c.cfg.Name, e.config.Type, err)
+		}
+	}
+
+	c.log.Info("triggers reloaded", "count", len(c.triggers))
+	return nil
+}
+
+func applyTriggerDefaults(t *config.TriggerConfig) {
+	if t.MaxRetries == nil {
+		retries := 3
+		t.MaxRetries = &retries
+	}
+	if t.RetryTimeout == nil {
+		retry := int64(5)
+		t.RetryTimeout = &retry
+	}
+}
+
+// triggerChannelFilters builds the channel entries a channel trigger reacts to
+// (used only as a name filter). It does NOT register them on the node — message
+// decryption uses the companion's channels, which ApplyDefaults guarantees
+// include every channel a trigger references.
+func triggerChannelFilters(cfg config.TriggerConfig) ([]*meshcore.ChannelEntry, error) {
+	if cfg.Channels == nil {
+		return nil, nil
+	}
+	var channels []*meshcore.ChannelEntry
+	for _, chRef := range *cfg.Channels {
+		ch, err := channelFromRef(chRef)
+		if err != nil {
+			return nil, fmt.Errorf("invalid channel %q: %w", chRef.Name, err)
+		}
+		channels = append(channels, ch)
+	}
+	return channels, nil
+}
+
+// buildTriggers constructs the trigger entries for a companion config block.
+// Channel triggers get a name filter only; channels are not registered on the
+// node (they are companion-owned). Shared by NewCompanion and ReloadTriggers.
+func (c *Companion) buildTriggers(cfg config.CompanionConfig) ([]triggerEntry, error) {
+	if cfg.Triggers == nil {
+		return nil, nil
+	}
+	entries := make([]triggerEntry, 0, len(*cfg.Triggers))
+	for _, trigCfg := range *cfg.Triggers {
+		applyTriggerDefaults(&trigCfg)
+		channels, err := triggerChannelFilters(trigCfg)
+		if err != nil {
+			return nil, fmt.Errorf("companion %q: %w", c.cfg.Name, err)
+		}
+		entry, err := c.buildTrigger(trigCfg, channels)
+		if err != nil {
+			return nil, fmt.Errorf("companion %q trigger %q: %w", c.cfg.Name, trigCfg.Type, err)
+		}
+		entries = append(entries, *entry)
+	}
+	return entries, nil
+}
+
 func (c *Companion) buildTrigger(cfg config.TriggerConfig, channels []*meshcore.ChannelEntry) (*triggerEntry, error) {
 	var t trigger.Trigger
 	var err error
@@ -266,48 +341,14 @@ func (c *Companion) makeCallback(ctx context.Context, entry triggerEntry) trigge
 		case "channel":
 			ch, _ := evt.Data["ChannelEntry"].(*meshcore.ChannelEntry)
 			c.log.Debug("sending group txt", "channel", ch.Name, "pathHashSize", hashSize)
-
-			reply := &meshcore.GroupTextPayload{
-				Timestamp: uint32(time.Now().Unix()),
-				Sender:    c.cfg.Name,
-				Text:      rendered,
-			}
-
-			err := c.node.SendGroupText(
-				ch,
-				reply,
-				hashSize,
-				retryTimeout,
-				*entry.config.MaxRetries,
-				func(gsr node.GroupSendResult) {
-					c.log.Debug("GroupSendResult", "text", rendered, "Confimed", gsr.Confirmed)
-				})
-
-			if err != nil {
+			if err := c.sendGroupReply(ch, rendered, hashSize, retryTimeout, *entry.config.MaxRetries); err != nil {
 				c.log.Error("send error", "error", err)
 			}
 
 		case "cron":
 			for _, ch := range entry.channels {
 				c.log.Debug("sending group txt", "channel", ch.Name, "pathHashSize", hashSize)
-
-				reply := &meshcore.GroupTextPayload{
-					Timestamp: uint32(time.Now().Unix()),
-					Sender:    c.cfg.Name,
-					Text:      rendered,
-				}
-
-				err := c.node.SendGroupText(
-					ch,
-					reply,
-					hashSize,
-					retryTimeout,
-					*entry.config.MaxRetries,
-					func(gsr node.GroupSendResult) {
-						c.log.Debug("GroupSendResult", "text", rendered, "Confimed", gsr.Confirmed)
-					})
-
-				if err != nil {
+				if err := c.sendGroupReply(ch, rendered, hashSize, retryTimeout, *entry.config.MaxRetries); err != nil {
 					c.log.Error("send error", "error", err)
 				}
 			}
@@ -807,6 +848,26 @@ func (c *Companion) registerPacketHandlers() {
 		})
 	})
 
+	// One persistent group-text handler dispatches to the current trigger set.
+	// Triggers register here (instead of each calling node.OnPacket) so
+	// ReloadTriggers can swap them at runtime — node.OnPacket has no
+	// deregistration, so per-trigger handlers would leak on every reload.
+	//
+	// Registered AFTER the rx-persist handler above on purpose: a matched
+	// trigger replies via WriteSync, which must be enqueued to the store writer
+	// *after* the inbound message's WriteAsync. Otherwise the reply gets a lower
+	// id and sorts before the message that triggered it.
+	c.node.OnPacket(meshcore.PayloadTypeGrpTxt, func(pkt *meshcore.Packet) {
+		c.mu.Lock()
+		entries := c.triggers
+		c.mu.Unlock()
+		for _, e := range entries {
+			if h, ok := e.trigger.(groupTextHandler); ok {
+				h.HandleGroupText(pkt)
+			}
+		}
+	})
+
 	c.node.OnPacket(meshcore.PayloadTypeTxtMsg, func(pkt *meshcore.Packet) {
 		if c.repeaters.HandleTextPacket(pkt) {
 			return
@@ -1035,12 +1096,12 @@ func (c *Companion) AddChannel(ref config.ChannelRef) error {
 }
 
 func (c *Companion) RemoveChannel(name string) error {
+	if used := c.channelTriggerUsage(name); used != "" {
+		return fmt.Errorf("channel %q is in use by the %s; remove that trigger usage first", name, used)
+	}
 	for i := range node.DefaultMaxChannels {
 		ch := c.node.Channel(i)
 		if ch != nil && ch.Name == name {
-			if i < c.triggerChannelCount {
-				return fmt.Errorf("channel %q is bound to a trigger and cannot be removed", name)
-			}
 			c.node.RemoveChannel(i)
 			c.log.Info("channel removed", "channel", name, "index", i)
 			return nil
@@ -1050,6 +1111,9 @@ func (c *Companion) RemoveChannel(name string) error {
 }
 
 func (c *Companion) RenameChannel(oldName, newName string) error {
+	if used := c.channelTriggerUsage(oldName); used != "" {
+		return fmt.Errorf("channel %q is in use by the %s; remove that trigger usage first", oldName, used)
+	}
 	for i := range node.DefaultMaxChannels {
 		ch := c.node.Channel(i)
 		if ch != nil && ch.Name == oldName {
@@ -1061,8 +1125,29 @@ func (c *Companion) RenameChannel(oldName, newName string) error {
 	return fmt.Errorf("channel %q not found", oldName)
 }
 
+// channelTriggerUsage returns a human description of the first trigger that
+// references the named channel, or "" if none do. Channels are companion-owned;
+// a channel a trigger uses can't be edited/renamed/removed until that trigger
+// usage is gone. Matching is case-sensitive — channel names map to distinct
+// keys per case (see channelFromRef), matching the rest of the channel code.
+func (c *Companion) channelTriggerUsage(name string) string {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	for _, e := range c.triggers {
+		for _, ch := range e.channels {
+			if ch.Name == name {
+				if e.config.Type == "cron" {
+					return "cron bot"
+				}
+				return "group bot"
+			}
+		}
+	}
+	return ""
+}
+
 func (c *Companion) nextFreeChannelIndex() int {
-	for i := c.triggerChannelCount; i < node.DefaultMaxChannels; i++ {
+	for i := 0; i < node.DefaultMaxChannels; i++ {
 		if c.node.Channel(i) == nil {
 			return i
 		}
@@ -1079,14 +1164,14 @@ func (c *Companion) Repeaters() *repeater.Client {
 	return c.repeaters
 }
 
-// StandaloneChannels returns the companion's channels that are not bound to a
-// trigger (i.e. those beyond the trigger-managed index range), for config
-// persistence. Hashtag/Public channels omit their derived key.
+// StandaloneChannels returns all of the companion's channels for config
+// persistence. Channels are companion-owned (triggers only reference them by
+// name), so this is simply every channel registered on the node. Hashtag/Public
+// channels omit their derived key.
 func (c *Companion) StandaloneChannels() []config.ChannelRef {
 	allChs := c.node.Channels()
 	var refs []config.ChannelRef
-	for i := c.triggerChannelCount; i < len(allChs); i++ {
-		ch := allChs[i]
+	for _, ch := range allChs {
 		if ch == nil {
 			continue
 		}
@@ -1119,7 +1204,16 @@ func (c *Companion) SendChannelMessage(channelName, text string) error {
 	if ch == nil {
 		return fmt.Errorf("channel %q not found", channelName)
 	}
+	return c.sendGroupReply(ch, text, meshcore.PathHashSize, 5*time.Second, 3)
+}
 
+// sendGroupReply persists an outgoing group-text message, broadcasts it to the
+// UI over the "messages" topic, tracks it for tx-echo correlation, and sends it
+// on the mesh. Shared by the chat API (SendChannelMessage) and the trigger
+// reply path so bot replies appear in the Messages page exactly like manual
+// sends — previously triggers called node.SendGroupText directly and their
+// replies were never persisted or broadcast.
+func (c *Companion) sendGroupReply(ch *meshcore.ChannelEntry, text string, hashSize uint8, retryTimeout time.Duration, maxRetries int) error {
 	payload := &meshcore.GroupTextPayload{
 		Timestamp: uint32(time.Now().Unix()),
 		Sender:    c.cfg.Name,
@@ -1161,18 +1255,12 @@ func (c *Companion) SendChannelMessage(channelName, text string) error {
 	c.pendingOutbound.channel = ch.Name
 	c.pendingOutbound.Unlock()
 
-	err := c.node.SendGroupText(
-		ch, payload, meshcore.PathHashSize,
-		5*time.Second, 3,
+	return c.node.SendGroupText(
+		ch, payload, hashSize, retryTimeout, maxRetries,
 		func(gsr node.GroupSendResult) {
-			c.log.Debug("SendChannelMessage result", "channel", channelName, "confirmed", gsr.Confirmed)
+			c.log.Debug("group reply result", "channel", ch.Name, "confirmed", gsr.Confirmed)
 		},
 	)
-	if err != nil {
-		return err
-	}
-
-	return nil
 }
 
 func (c *Companion) SendContactMessage(pubkeyHex, text string) error {
