@@ -88,7 +88,7 @@ export function ChatHeaderMenu({
             <MoreVertical className="size-4" strokeWidth={1.6} />
           </button>
         </DropdownMenuTrigger>
-        <DropdownMenuContent align="end" className="rounded-none border-border min-w-[11rem]">
+        <DropdownMenuContent align="end" className="rounded-none border-border min-w-44">
           <DropdownMenuItem
             onClick={onSearchToggle}
             className="font-mono text-xs uppercase tracking-[0.08em] rounded-none"
@@ -449,7 +449,7 @@ function RenameDialog({
               variant="ghost"
               size="sm"
               onClick={onClose}
-              className="rounded-none font-mono text-[11px] uppercase tracking-[0.1em]"
+              className="rounded-none font-mono text-[11px] uppercase tracking-widest"
             >
               Cancel
             </Button>
@@ -457,7 +457,7 @@ function RenameDialog({
               size="sm"
               onClick={save}
               disabled={saving || !newName.trim() || newName.trim() === conversation.name}
-              className="rounded-none font-mono text-[11px] uppercase tracking-[0.1em]"
+              className="rounded-none font-mono text-[11px] uppercase tracking-widest"
             >
               {saving ? "Saving..." : "Rename"}
             </Button>
@@ -714,7 +714,7 @@ function DeleteHistoryDialog({
             variant="ghost"
             size="sm"
             onClick={onClose}
-            className="rounded-none font-mono text-[11px] uppercase tracking-[0.1em]"
+            className="rounded-none font-mono text-[11px] uppercase tracking-widest"
           >
             Cancel
           </Button>
@@ -723,7 +723,7 @@ function DeleteHistoryDialog({
             size="sm"
             onClick={doDelete}
             disabled={deleting}
-            className="rounded-none font-mono text-[11px] uppercase tracking-[0.1em]"
+            className="rounded-none font-mono text-[11px] uppercase tracking-widest"
           >
             <Trash2 className="size-3" />
             {deleting ? "Deleting..." : "Delete All"}
@@ -836,7 +836,7 @@ function PathInfoDialog({
               size="sm"
               onClick={loadPath}
               disabled={loading}
-              className="rounded-none font-mono text-[11px] uppercase tracking-[0.1em]"
+              className="rounded-none font-mono text-[11px] uppercase tracking-widest"
             >
               <RotateCw className={cn("size-3", loading && "animate-spin")} />
               Refresh
@@ -846,7 +846,7 @@ function PathInfoDialog({
               size="sm"
               onClick={resetPath}
               disabled={resetting || !pathInfo?.hasPath}
-              className="rounded-none font-mono text-[11px] uppercase tracking-[0.1em]"
+              className="rounded-none font-mono text-[11px] uppercase tracking-widest"
             >
               Reset Path
             </Button>
@@ -860,7 +860,7 @@ function PathInfoDialog({
 function StatCell({ label, value }: { label: string; value: string }) {
   return (
     <div className="bg-card p-2.5 space-y-0.5">
-      <span className="font-mono text-[10px] uppercase tracking-[0.1em] text-muted-foreground">
+      <span className="font-mono text-[10px] uppercase tracking-widest text-muted-foreground">
         {label}
       </span>
       <div className="font-mono text-sm font-semibold tabular-nums">{value}</div>

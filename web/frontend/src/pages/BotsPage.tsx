@@ -72,7 +72,7 @@ function RegexHelp() {
       <PopoverTrigger asChild>
         <button
           type="button"
-          className="inline-flex items-center gap-1 font-mono text-[10px] uppercase tracking-[0.1em] text-muted-foreground hover:text-foreground"
+          className="inline-flex items-center gap-1 font-mono text-[10px] uppercase tracking-widest text-muted-foreground hover:text-foreground"
         >
           <HelpCircle className="size-3.5" />
           examples
@@ -80,10 +80,10 @@ function RegexHelp() {
       </PopoverTrigger>
       <PopoverContent
         align="end"
-        className="w-[26rem] max-w-[calc(100vw-2rem)] rounded-none p-0"
+        className="w-104 max-w-[calc(100vw-2rem)] rounded-none p-0"
       >
         <div className="border-b border-border px-3 py-2">
-          <p className="font-mono text-[11px] uppercase tracking-[0.1em] text-foreground">
+          <p className="font-mono text-[11px] uppercase tracking-widest text-foreground">
             Match pattern examples
           </p>
           <p className="mt-1 font-mono text-[10px] leading-relaxed text-muted-foreground/70">
@@ -199,7 +199,7 @@ export function BotsPage() {
                     </div>
                     <div className="min-w-0 flex-1 space-y-1">
                       <div className="flex items-center gap-2 flex-wrap">
-                        <span className="font-mono text-[10px] uppercase tracking-[0.1em] px-1.5 py-0.5 border border-border bg-muted/40">
+                        <span className="font-mono text-[10px] uppercase tracking-widest px-1.5 py-0.5 border border-border bg-muted/40">
                           {t.type}
                         </span>
                         <span className="font-mono text-xs text-muted-foreground truncate">
@@ -385,7 +385,7 @@ function BotEditor({
     <Dialog open onOpenChange={(o) => !o && onClose()}>
       <DialogContent className="rounded-none sm:max-w-xl">
         <DialogHeader>
-          <DialogTitle className="font-mono text-sm uppercase tracking-[0.1em]">
+          <DialogTitle className="font-mono text-sm uppercase tracking-widest">
             {row ? "Edit bot" : "Add bot"}
           </DialogTitle>
         </DialogHeader>

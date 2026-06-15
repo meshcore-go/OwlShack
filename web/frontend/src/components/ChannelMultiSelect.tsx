@@ -73,7 +73,7 @@ export function ChannelMultiSelect({
               <button
                 type="button"
                 disabled={available.length === 0}
-                className="inline-flex items-center gap-1 rounded-sm border border-dashed border-border px-1.5 py-0.5 font-mono text-[10px] uppercase tracking-[0.1em] text-muted-foreground hover:border-primary/40 hover:text-foreground disabled:opacity-40 disabled:hover:border-border disabled:hover:text-muted-foreground"
+                className="inline-flex items-center gap-1 rounded-sm border border-dashed border-border px-1.5 py-0.5 font-mono text-[10px] uppercase tracking-widest text-muted-foreground hover:border-primary/40 hover:text-foreground disabled:opacity-40 disabled:hover:border-border disabled:hover:text-muted-foreground"
               >
                 <Plus className="size-3" />
                 add channel

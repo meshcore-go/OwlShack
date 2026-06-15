@@ -130,7 +130,7 @@ export function ChannelsPage() {
               variant="default"
               size="sm"
               onClick={() => setDialogOpen(true)}
-              className="font-mono text-xs uppercase tracking-[0.1em]"
+              className="font-mono text-xs uppercase tracking-widest"
             >
               <Plus className="size-3.5" />
               Add channel
@@ -149,7 +149,7 @@ export function ChannelsPage() {
           <div className="flex items-center justify-between px-4 py-3 border-b border-border">
             <div className="space-y-0.5">
               <span className="label-overline block">Frequencies</span>
-              <h2 className="font-mono text-sm uppercase tracking-[0.1em]">
+              <h2 className="font-mono text-sm uppercase tracking-widest">
                 Subscribed channels
               </h2>
             </div>
@@ -161,7 +161,7 @@ export function ChannelsPage() {
           {channels.length === 0 ? (
             <div className="px-6 py-16 text-center">
               <Radio className="size-8 mx-auto mb-3 text-muted-foreground/40" />
-              <p className="font-mono text-sm uppercase tracking-[0.1em] text-muted-foreground">
+              <p className="font-mono text-sm uppercase tracking-widest text-muted-foreground">
                 No channels yet
               </p>
               <p className="mt-2 text-xs text-muted-foreground/70">
@@ -171,7 +171,7 @@ export function ChannelsPage() {
                 variant="default"
                 size="sm"
                 onClick={() => setDialogOpen(true)}
-                className="mt-4 font-mono text-xs uppercase tracking-[0.1em]"
+                className="mt-4 font-mono text-xs uppercase tracking-widest"
               >
                 <Plus className="size-3.5" />
                 Add channel
@@ -310,14 +310,14 @@ function AddChannelDialog({
           <TabsList className="rounded-none bg-muted h-9 grid grid-cols-2 w-full">
             <TabsTrigger
               value="public"
-              className="rounded-none font-mono text-[11px] uppercase tracking-[0.1em] gap-1.5"
+              className="rounded-none font-mono text-[11px] uppercase tracking-widest gap-1.5"
             >
               <Hash className="size-3" />
               public
             </TabsTrigger>
             <TabsTrigger
               value="private"
-              className="rounded-none font-mono text-[11px] uppercase tracking-[0.1em] gap-1.5"
+              className="rounded-none font-mono text-[11px] uppercase tracking-widest gap-1.5"
             >
               <Lock className="size-3" />
               private
@@ -378,7 +378,7 @@ function AddChannelDialog({
             variant="ghost"
             size="sm"
             onClick={() => onOpenChange(false)}
-            className="font-mono uppercase tracking-[0.1em]"
+            className="font-mono uppercase tracking-widest"
           >
             cancel
           </Button>
@@ -387,7 +387,7 @@ function AddChannelDialog({
             size="sm"
             disabled={!canSubmit}
             onClick={handleSubmit}
-            className="font-mono uppercase tracking-[0.1em]"
+            className="font-mono uppercase tracking-widest"
           >
             {submitting ? (
               <>

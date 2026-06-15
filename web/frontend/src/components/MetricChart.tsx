@@ -150,7 +150,7 @@ export function MetricChart({
       <div style={{ height }} className="px-1 pb-1">
         {chartData.length === 0 ? (
           <div className="h-full grid place-items-center">
-            <span className="font-mono text-[10px] uppercase tracking-[0.1em] text-muted-foreground/50">
+            <span className="font-mono text-[10px] uppercase tracking-widest text-muted-foreground/50">
               {isCounter && data.length > 0 ? "awaiting samples" : "no data"}
             </span>
           </div>

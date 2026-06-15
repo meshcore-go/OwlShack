@@ -907,7 +907,7 @@ export function CompanionDetailPage() {
   const overLimit = composerLen > charLimit;
 
   return (
-    <div className={cn("h-[calc(100dvh-3.5rem)] -my-6 -mx-4 sm:-mx-6 flex flex-col overflow-hidden", activeChannel && "max-lg:[&>:first-child]:hidden")}>
+    <div className={cn("h-[calc(100dvh-3.5rem)] -my-6 -mx-4 sm:-mx-6 flex flex-col overflow-hidden", activeChannel && "max-lg:*:first:hidden")}>
       <div className="shrink-0 px-4 sm:px-6 pt-6">
         <PageHeader
           title="Messages"
@@ -946,7 +946,7 @@ export function CompanionDetailPage() {
       {listError && (
         <div className="shrink-0 px-4 sm:px-6">
           <Alert variant="destructive">
-            <AlertTitle className="font-mono uppercase tracking-[0.1em]">
+            <AlertTitle className="font-mono uppercase tracking-widest">
               Error
             </AlertTitle>
             <AlertDescription>
@@ -955,7 +955,7 @@ export function CompanionDetailPage() {
                 variant="ghost"
                 size="sm"
                 onClick={loadConversations}
-                className="ml-2 h-7 text-xs uppercase tracking-[0.1em]"
+                className="ml-2 h-7 text-xs uppercase tracking-widest"
               >
                 retry
               </Button>
@@ -983,7 +983,7 @@ export function CompanionDetailPage() {
             >
               <SelectTrigger
                 size="sm"
-                className="font-mono text-[10px] uppercase tracking-[0.1em] h-7 px-2 rounded-none border-border"
+                className="font-mono text-[10px] uppercase tracking-widest h-7 px-2 rounded-none border-border"
               >
                 <SelectValue />
               </SelectTrigger>
@@ -1026,7 +1026,7 @@ export function CompanionDetailPage() {
             {loadingList ? (
               <ListSkeleton />
             ) : filteredConversations.length === 0 ? (
-              <div className="p-6 text-center font-mono text-xs text-muted-foreground/60 uppercase tracking-[0.1em]">
+              <div className="p-6 text-center font-mono text-xs text-muted-foreground/60 uppercase tracking-widest">
                 No threads
               </div>
             ) : (
@@ -1195,7 +1195,7 @@ export function CompanionDetailPage() {
                       roomReadOnly ? "read-only access" : "transmit…"
                     }
                     disabled={roomReadOnly}
-                    className="resize-none rounded-none border-border font-mono text-sm min-h-[2.25rem] max-h-[100px] bg-background"
+                    className="resize-none rounded-none border-border font-mono text-sm min-h-9 max-h-25 bg-background"
                     style={{ height: "auto" }}
                   />
                   <Button
@@ -1477,7 +1477,7 @@ function ConversationRow({
             {convo.lastMessage ? (
               <>
                 {convo.lastMessage.direction === "tx" && (
-                  <span className="text-primary/80 font-mono uppercase tracking-[0.1em] mr-1">
+                  <span className="text-primary/80 font-mono uppercase tracking-widest mr-1">
                     me ›
                   </span>
                 )}
@@ -1498,12 +1498,12 @@ function ConversationRow({
         <div className="flex items-center gap-1.5 pt-0.5">
           {convo.peerType && <PeerTypePill type={convo.peerType} />}
           {convo.isRepeater && (
-            <span className="font-mono text-[9px] uppercase tracking-[0.1em] px-1 py-0.5 border border-warning/40 text-warning bg-warning/5">
+            <span className="font-mono text-[9px] uppercase tracking-widest px-1 py-0.5 border border-warning/40 text-warning bg-warning/5">
               repeater
             </span>
           )}
           {convo.type === "channel" && (
-            <span className="font-mono text-[9px] uppercase tracking-[0.1em] text-muted-foreground/60">
+            <span className="font-mono text-[9px] uppercase tracking-widest text-muted-foreground/60">
               # channel
             </span>
           )}
@@ -1772,7 +1772,7 @@ function MessageBubble({
         onTouchMove={onTouchEnd}
         onClick={onBubbleClick}
         className={cn(
-          "px-3 py-1.5 rounded-sm border text-sm leading-snug whitespace-pre-wrap break-words select-none sm:select-auto",
+          "px-3 py-1.5 rounded-sm border text-sm leading-snug whitespace-pre-wrap wrap-break-word select-none sm:select-auto",
           isTx
             ? "bg-primary/15 border-primary/30 text-foreground"
             : "bg-card border-border",
@@ -1973,7 +1973,7 @@ function ContactCard({
         </div>
       </div>
       {isSelf ? (
-        <div className="mt-2 border border-dashed border-border py-1.5 text-center font-mono text-[10px] uppercase tracking-[0.1em] text-muted-foreground/70">
+        <div className="mt-2 border border-dashed border-border py-1.5 text-center font-mono text-[10px] uppercase tracking-widest text-muted-foreground/70">
           This is you
         </div>
       ) : (
@@ -1983,7 +1983,7 @@ function ContactCard({
             e.stopPropagation();
             onAdd({ pubkey, name: name.trim(), type });
           }}
-          className="mt-2 inline-flex w-full items-center justify-center gap-1.5 border border-primary/40 bg-primary/10 py-1.5 font-mono text-[11px] uppercase tracking-[0.1em] text-primary transition-colors hover:bg-primary/20"
+          className="mt-2 inline-flex w-full items-center justify-center gap-1.5 border border-primary/40 bg-primary/10 py-1.5 font-mono text-[11px] uppercase tracking-widest text-primary transition-colors hover:bg-primary/20"
         >
           <UserPlus className="size-3.5" /> Add Contact
         </button>
@@ -2022,7 +2022,7 @@ function UrlLink({ url }: { url: string }) {
             variant="ghost"
             size="xs"
             onClick={() => setOpen(false)}
-            className="font-mono uppercase tracking-[0.1em]"
+            className="font-mono uppercase tracking-widest"
           >
             Cancel
           </Button>
@@ -2032,7 +2032,7 @@ function UrlLink({ url }: { url: string }) {
               window.open(url, "_blank", "noopener,noreferrer");
               setOpen(false);
             }}
-            className="font-mono uppercase tracking-[0.1em]"
+            className="font-mono uppercase tracking-widest"
           >
             <ExternalLink className="size-3" /> Open
           </Button>
@@ -2070,7 +2070,7 @@ function ContextMenu({
     <div
       role="menu"
       data-context-menu
-      className="fixed z-[60] min-w-[10rem] bg-popover border border-border rounded-sm shadow-md py-1 text-sm"
+      className="fixed z-60 min-w-40 bg-popover border border-border rounded-sm shadow-md py-1 text-sm"
       style={{
         top: Math.min(pos.y, window.innerHeight - 240),
         left: Math.min(pos.x, window.innerWidth - 200),
@@ -2157,7 +2157,7 @@ function PathTimeline({ path }: { path: PathInfo }) {
       <ol className="relative pl-6 border-l border-border">
         {path.path.map((hop, i) => (
           <li key={`${hop.hash}-${i}`} className="relative pb-3">
-            <span className="absolute -left-[1.04rem] top-0.5 size-3.5 grid place-items-center bg-card border border-border font-mono text-[9px] tabular-nums">
+            <span className="absolute left-[-1.04rem] top-0.5 size-3.5 grid place-items-center bg-card border border-border font-mono text-[9px] tabular-nums">
               {i + 1}
             </span>
             <div className="flex items-baseline justify-between gap-2">

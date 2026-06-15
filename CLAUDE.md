@@ -654,7 +654,7 @@ Messages have a `status` column: `NULL` (rx/legacy), `"sending"`, `"delivered"`,
 - Don't add per-component `cursor` classes; rely on the global rule in `index.css`.
 - Don't write `.message` wrapper into WS message handling.
 - Don't change the `loggedIn` derivation in `RepeaterDetailPage.tsx` without coordinated firmware/API changes.
-- Don't blanket-fix the `tracking-[0.1em]` → `tracking-widest` style hints; existing files use bracket notation throughout for consistency.
+- Prefer Tailwind's built-in utilities over arbitrary-value brackets where an exact equivalent exists (`tracking-widest` not `tracking-[0.1em]`, `min-w-44` not `min-w-[11rem]`). A Tailwind v4 codemod normalized the existing files to this; keep new code consistent with it. Reach for bracket notation only when no built-in matches.
 - Don't auto-refresh on tab switch — that spams the mesh radio. Use the fetch-once pattern.
 - Add-contact modal (`AddContactDialog`) is manual-only (Type/Name/Pubkey) — add a *discovered* peer to contacts from the Peers screen (`PeerDetailSheet`), not via a peer-picker in the modal.
 
@@ -673,7 +673,6 @@ Messages have a `status` column: `NULL` (rx/legacy), `"sending"`, `"delivered"`,
 | Map marker icon broken | Default-icon `mergeOptions` at top of `RepeaterDetailPage.tsx`; Vite needs explicit imports of leaflet's marker images. |
 | "Works on Owly 1 but not Owly 2" or vice versa | They have different admin passwords. Settings tab is admin-only; logging in as guest hides Settings. |
 | Bundle warning > 500 kB | Known. Code-splitting routes via `React.lazy` would help; not done yet. |
-| Style hint warnings (`tracking-[0.1em]` etc) | Non-blocking. Don't auto-fix wholesale. |
 
 ---
 
