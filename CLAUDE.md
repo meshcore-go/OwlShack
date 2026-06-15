@@ -51,9 +51,10 @@ Capabilities visible in the UI:
 The Go binary embeds `web/frontend/dist/` via `go:embed` ([`web/embed.go`](./web/embed.go)) and serves the SPA on `:4432`. **Do not run `vite dev`** — there is no API server alongside it and the WS / MeshCore endpoints don't exist outside the Go binary.
 
 ```bash
-# Standard rebuild + restart
-cd /home/dylan/Data/wesley/meshcore-bot/web/frontend && npm run build
-cd /home/dylan/Data/wesley/meshcore-bot && go build -o meshcore-bot .
+# Standard rebuild + restart — ./build.sh compiles the SPA then the embedded,
+# version-stamped Go binary (npm ci + go build, mirrors CI). Always run it for
+# builds going forward.
+cd /home/dylan/Data/wesley/meshcore-bot && ./build.sh
 screen -S meshcore -X quit; sleep 1
 screen -dmS meshcore bash -c './meshcore-bot -vvv 2>&1 | tee /tmp/meshcore-bot2.log'
 
@@ -64,9 +65,7 @@ tail -f /tmp/meshcore-bot2.log
 python3 -c "import sqlite3; c=sqlite3.connect('file:meshcore.db?mode=ro', uri=True); print(c.execute('PRAGMA user_version').fetchone())"
 ```
 
-`npm run build` is `tsc -b && vite build`. Type errors fail the build. Bundle is currently ~770 kB minified — Vite emits a >500 kB warning we don't currently action.
-
-> **Gotcha**: `go build` must run from the project root (`/home/dylan/Data/wesley/meshcore-bot`), not from `web/frontend/`. If you chain commands after `npm run build`, use absolute paths — `cd ..` from `web/frontend` only reaches `web/`, not root.
+`build.sh` runs `npm run build` (`tsc -b && vite build`, type errors fail it) then the Go build; it `cd`s to the repo root itself, so the old "run `go build` from root" cwd gotcha no longer applies. Bundle is ~770 kB minified — Vite emits a >500 kB warning we don't currently action. For frontend-only iteration you can still `cd web/frontend && npm run build`, but use `./build.sh` for any binary you'll run.
 
 There's a Playwright config at [`web/frontend/playwright.config.ts`](./web/frontend/playwright.config.ts) but it's only used for ad-hoc visual checks driven through the Playwright MCP server against the running binary. No CI for the SPA.
 
@@ -338,15 +337,17 @@ sessions intact, no re-advert; log-level changes apply with zero restarts. A
 radio/connection change still restarts everything (modem reconnect);
 `listenAddr` needs a process restart.
 
-- **Config is stored relationally** (`migrateV5` tables: `settings`,
+- **Config is stored relationally** (the config tables: `settings`,
   `mqtt_settings`, `mqtt_brokers`, `companions`, `companion_channels`,
   `triggers`, `trigger_channels` — all with surrogate INTEGER ids so name /
   pubkey / private_key are mutable columns nothing references). The
   assemble/disassemble seam between these rows and the in-memory
   `*config.Config` the runtime consumes lives in `internal/app/config_tables.go`
   (`loadConfigRows` → `assembleFromRows`; `writeConfigToTables` disassembles).
-  The legacy `app_config` JSON blob is **dormant** — read once at migration
-  (`initConfigTables`) then never again.
+  The legacy `app_config` JSON blob table is **dormant**: the baseline schema
+  still creates it, but `initConfigTables` reads it only on a never-initialized
+  DB (no `settings` row) to import a pre-relational blob, and no live DB has one
+  left to import.
 - **The database is the source of truth.** Config files are one-time imports
   (`internal/app/config.go` `resolveConfig`): an explicit `-config path` flag
   imports and **overwrites** the stored config; otherwise the DB wins; a first
@@ -402,9 +403,9 @@ radio/connection change still restarts everything (modem reconnect);
   companion is fully safe**: every per-companion table — config references
   (mqtt node id, trigger channels) *and* history (messages, contacts,
   conversation reads, blocked senders) — keys on the surrogate
-  `companions.id`, not the name. `migrateV6` re-keyed the history tables from
-  the old name-TEXT `companion_id` to an INTEGER FK (`ON DELETE CASCADE`), and
-  the runtime threads the id via `CompanionConfig.ID` / `Companion.ID()`. The
+  `companions.id`, not the name. The history tables carry an INTEGER
+  `companion_id` FK (`ON DELETE CASCADE`) and the runtime threads the id via
+  `CompanionConfig.ID` / `Companion.ID()`. The
   API keeps `{name}` in its URLs and resolves it to the id per request
   (`CompanionRepo.IDByName`, `Server.companionID`). `node_state.companion_id`
   is the lone exception: it stays a name (node-keyed, self-heals each poll).
@@ -704,6 +705,7 @@ Messages have a `status` column: `NULL` (rx/legacy), `"sending"`, `"delivered"`,
 
 ## Conventions / don'ts
 
+- **No CGO.** The binary builds with `CGO_ENABLED=0` for a fully static, C-toolchain-free artifact, so never add a dependency that requires cgo (e.g. `mattn/go-sqlite3` — we use pure-Go `modernc.org/sqlite` precisely for this).
 - Don't reintroduce DaisyUI, PicoCSS, preact-router, `@preact/preset-vite`, lucide-preact.
 - Don't run `vite dev`. Use the build+restart cycle.
 - Don't add per-component `cursor` classes; rely on the global rule in `index.css`.

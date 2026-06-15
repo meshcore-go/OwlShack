@@ -9,7 +9,7 @@ import (
 // MetricsRepo is the persistence layer for node monitoring: the generic
 // time-series table (node_metrics), per-node latest snapshots (node_state),
 // the active-monitor registry (node_monitors), and neighbour SNR topology
-// (node_neighbors). See migrateV2.
+// (node_neighbors). See the node_* tables in migrateV1.
 //
 // Writes are issued by the monitor poller goroutine and HTTP handlers and must
 // be wrapped by the caller in store.WriteAsync/WriteSync — these methods do the

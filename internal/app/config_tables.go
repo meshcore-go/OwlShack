@@ -10,7 +10,7 @@ import (
 	"github.com/meshcore-go/meshcore-bot/internal/store"
 )
 
-// This file is the seam between the relational config tables (migrateV5) and the
+// This file is the seam between the relational config tables and the
 // in-memory *config.Config the runtime consumes. The rest of the app is
 // unchanged: it still gets a *config.Config snapshot (readConfigFromTables) and
 // persists one (writeConfigToTables). Reads assemble; writes disassemble.

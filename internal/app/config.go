@@ -10,7 +10,7 @@ import (
 )
 
 // The database is the source of truth for config; files are one-time imports.
-// Config is stored relationally (internal/store config_* tables + migrateV5);
+// Config is stored relationally (the internal/store config_* tables);
 // the assemble/disassemble seam lives in config_tables.go.
 
 func saveConfig(db *store.Store, cfg *config.Config) error {

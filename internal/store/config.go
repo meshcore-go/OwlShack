@@ -5,9 +5,10 @@ import (
 	"strings"
 )
 
-// This file and its config_* siblings hold the relational config schema (see
-// migrateV5): one row per entity with a surrogate INTEGER id, so names, pubkeys
-// and private keys are all mutable columns that nothing references. Repos are
+// This file and its config_* siblings hold the relational config schema (the
+// config tables in migrateV1): one row per entity with a surrogate INTEGER id,
+// so names, pubkeys and private keys are all mutable columns that nothing
+// references. Repos are
 // dumb persistence — validation and the supervisor reload are orchestrated one
 // layer up (internal/app), after a write.
 
