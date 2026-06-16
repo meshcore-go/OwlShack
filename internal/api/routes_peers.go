@@ -57,6 +57,10 @@ func (s *Server) handleDeletePeer(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusBadRequest, "invalid pubkey hex")
 		return
 	}
+
+	// Contacts are decoupled from discovered_peers (they cache their own
+	// identity), so deleting a peer never affects a saved contact — no guard
+	// needed.
 	var delErr error
 	s.store.WriteSync(func() {
 		delErr = s.store.Peers.Delete(pubkey)
@@ -65,5 +69,56 @@ func (s *Server) handleDeletePeer(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusInternalServerError, delErr.Error())
 		return
 	}
+	s.afterPeerDelete([]string{pubkeyHex}, [][]byte{pubkey})
 	w.WriteHeader(http.StatusNoContent)
+}
+
+func (s *Server) handleBulkDeletePeers(w http.ResponseWriter, r *http.Request) {
+	var body struct {
+		Pubkeys []string `json:"pubkeys"`
+	}
+	if err := readJSON(r, &body); err != nil {
+		writeError(w, http.StatusBadRequest, "invalid request body")
+		return
+	}
+	if len(body.Pubkeys) == 0 {
+		writeError(w, http.StatusBadRequest, "no pubkeys provided")
+		return
+	}
+
+	pubkeys := make([][]byte, 0, len(body.Pubkeys))
+	hexes := make([]string, 0, len(body.Pubkeys))
+	for _, h := range body.Pubkeys {
+		pk, err := hex.DecodeString(h)
+		if err != nil || len(pk) == 0 {
+			writeError(w, http.StatusBadRequest, "invalid pubkey hex: "+h)
+			return
+		}
+		pubkeys = append(pubkeys, pk)
+		hexes = append(hexes, h)
+	}
+
+	var delErr error
+	s.store.WriteSync(func() {
+		delErr = s.store.Peers.DeleteMany(pubkeys)
+	})
+	if delErr != nil {
+		writeError(w, http.StatusInternalServerError, delErr.Error())
+		return
+	}
+	s.afterPeerDelete(hexes, pubkeys)
+	writeJSON(w, http.StatusOK, map[string]int{"deleted": len(pubkeys)})
+}
+
+// afterPeerDelete evicts deleted peers from the in-memory tables and tells all
+// WS clients to drop them, so the Peers/Map/Overview views stay consistent
+// without a manual refresh.
+func (s *Server) afterPeerDelete(hexes []string, pubkeys [][]byte) {
+	if remove := s.peerRemover(); remove != nil {
+		remove(pubkeys)
+	}
+	s.hub.Broadcast("peers", map[string]any{
+		"action":  "delete",
+		"pubkeys": hexes,
+	})
 }

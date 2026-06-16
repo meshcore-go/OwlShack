@@ -89,6 +89,7 @@ import {
   type ContactType,
 } from "@/components/AddContactDialog";
 import { formatClockTime, formatDateTime, formatShortTime, timeAgo, truncateMid } from "@/lib/format";
+import { contactDetailPath } from "@/lib/routes";
 import { cn } from "@/lib/utils";
 
 interface Conversation {
@@ -260,8 +261,9 @@ function parseCoord(s: string): { lat: number; lon: number } | null {
 
 // Trailing sentence punctuation usually isn't part of a URL ("see https://x.")
 // so peel it off and render it as plain text.
+const TRAILING_PUNCT_RE = /[.,;:!?'")\]}]+$/;
 function splitTrailingPunct(url: string): { url: string; trailing: string } {
-  const m = /[.,;:!?'")\]}]+$/.exec(url);
+  const m = TRAILING_PUNCT_RE.exec(url);
   if (!m) return { url, trailing: "" };
   return { url: url.slice(0, m.index), trailing: url.slice(m.index) };
 }
@@ -725,9 +727,7 @@ export function CompanionDetailPage() {
   const openConversation = useCallback(
     (c: Conversation) => {
       if (c.isRepeater && c.pubkey) {
-        navigate(
-          `/companions/${encodeURIComponent(decodedName)}/repeaters/${encodeURIComponent(c.pubkey)}`,
-        );
+        navigate(contactDetailPath(decodedName, c.pubkey, true));
         return;
       }
       setSearchParams({ channel: c.channel });
@@ -1507,7 +1507,9 @@ function ConversationRow({
       type="button"
       onClick={onClick}
       className={cn(
-        "w-full px-3 py-2.5 flex items-start gap-3 text-left transition-colors group",
+        // content-visibility lets the browser skip layout/paint for threads
+        // scrolled off-screen in a long roster.
+        "w-full px-3 py-2.5 flex items-start gap-3 text-left transition-colors group [content-visibility:auto] [contain-intrinsic-size:auto_64px]",
         active
           ? "bg-primary/10 border-l-2 border-primary"
           : "hover:bg-muted/40 border-l-2 border-transparent",

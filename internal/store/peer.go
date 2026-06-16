@@ -72,6 +72,17 @@ func (r *PeerRepo) Delete(pubkey []byte) error {
 	return err
 }
 
+// DeleteMany removes a batch of peers (chunked to stay under SQLite's
+// bound-parameter limit).
+func (r *PeerRepo) DeleteMany(pubkeys [][]byte) error {
+	return eachInChunk(pubkeys, func(placeholders string, args []any) error {
+		_, err := r.db.Exec(
+			"DELETE FROM discovered_peers WHERE pubkey IN ("+placeholders+")", args...,
+		)
+		return err
+	})
+}
+
 func (r *PeerRepo) GetByPubKey(pubkey []byte) (*Peer, error) {
 	var p Peer
 	var feat1, feat2, lastAdvertTS int64

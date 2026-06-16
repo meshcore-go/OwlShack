@@ -22,6 +22,9 @@ import {
   TableRow,
 } from "@/components/ui/table";
 import { PageHeader } from "@/components/PageHeader";
+import { PeerDetailSheet } from "@/components/PeerDetailSheet";
+import { usePeerDetailSheet } from "@/hooks/usePeerDetailSheet";
+import { isPeerDelete } from "@/lib/peerWs";
 import {
   ConnectionPill,
   PEER_TYPE_HEX,
@@ -53,13 +56,28 @@ interface DashboardData {
   companions: Companion[];
 }
 
+const NO_PEERS: Peer[] = [];
+
 export function DashboardPage() {
   const [data, setData] = useState<DashboardData | null>(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
+  const { selectPeer, sheetProps } = usePeerDetailSheet(data?.peers ?? NO_PEERS);
 
   const onWsMessage = useCallback((topic: string, payload: unknown) => {
     if (topic !== "peers" || !payload) return;
+    if (isPeerDelete(payload)) {
+      const gone = new Set(payload.pubkeys.map((k) => k.toLowerCase()));
+      setData((prev) =>
+        prev
+          ? {
+              ...prev,
+              peers: prev.peers.filter((p) => !gone.has(p.pubkey.toLowerCase())),
+            }
+          : prev,
+      );
+      return;
+    }
     const p = payload as Peer;
     setData((prev) => {
       if (!prev) return prev;
@@ -225,7 +243,8 @@ export function DashboardPage() {
                     stats.recentSorted.map((p) => (
                       <TableRow
                         key={p.pubkey}
-                        className="border-border/60 group"
+                        onClick={() => selectPeer(p.pubkey)}
+                        className="border-border/60 group cursor-pointer"
                       >
                         <TableCell className="font-medium">
                           {p.name || (
@@ -326,6 +345,8 @@ export function DashboardPage() {
           </section>
         </>
       )}
+
+      <PeerDetailSheet {...sheetProps} companions={data?.companions ?? []} />
     </div>
   );
 }

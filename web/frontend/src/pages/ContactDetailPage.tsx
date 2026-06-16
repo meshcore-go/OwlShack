@@ -1,13 +1,22 @@
-import { useCallback, useEffect, useState, type ReactNode } from "react";
-import { Link, useParams } from "react-router-dom";
-import { ArrowLeft, Check, Copy, MessageSquare } from "lucide-react";
+import {
+  useCallback,
+  useEffect,
+  useMemo,
+  useState,
+  type ReactNode,
+} from "react";
+import { Link, useNavigate, useParams } from "react-router-dom";
+import { Check, Copy, MapPin, MessageSquare, Pencil } from "lucide-react";
 import { toast } from "sonner";
 import { Alert, AlertDescription, AlertTitle } from "@/components/ui/alert";
 import { Button } from "@/components/ui/button";
+import { Input } from "@/components/ui/input";
 import { Skeleton } from "@/components/ui/skeleton";
+import { BackLink } from "@/components/BackLink";
 import { PeerAvatar } from "@/components/PeerAvatar";
 import { PeerTypePill } from "@/components/StatusIndicator";
 import { TelemetryPanel } from "@/components/TelemetryPanel";
+import { advertPathInfo } from "@/components/PeerDetailSheet";
 import {
   MonitoringSettings,
   type MonitorMetadata,
@@ -18,16 +27,15 @@ interface Contact {
   peerPubkey: string;
   name: string;
   type?: string;
+  lat: number;
+  lon: number;
+  feat1?: number;
+  feat2?: number;
+  outPath?: string;
+  outPathHashSize?: number;
+  lastSeen?: string;
   addedAt: string;
   metadata?: MonitorMetadata;
-}
-
-interface PathInfo {
-  outPath: string;
-  hops: number;
-  hasPath: boolean;
-  directNeighbor: boolean;
-  pathHashSize: number;
 }
 
 export function ContactDetailPage() {
@@ -38,7 +46,6 @@ export function ContactDetailPage() {
   const apiBase = `/api/companions/${encodeURIComponent(companion)}/contacts/${encodeURIComponent(contactPubkey)}`;
 
   const [contact, setContact] = useState<Contact | null>(null);
-  const [path, setPath] = useState<PathInfo | null>(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const [copied, setCopied] = useState(false);
@@ -69,20 +76,6 @@ export function ContactDetailPage() {
     };
   }, [companion, contactPubkey, apiBase]);
 
-  // Path is best-effort context; its absence is not a page error.
-  useEffect(() => {
-    let cancelled = false;
-    fetch(`${apiBase}/path`)
-      .then((r) => (r.ok ? r.json() : null))
-      .then((p: PathInfo | null) => {
-        if (!cancelled) setPath(p);
-      })
-      .catch(() => {});
-    return () => {
-      cancelled = true;
-    };
-  }, [apiBase]);
-
   const copyKey = useCallback(() => {
     navigator.clipboard.writeText(contactPubkey).then(() => {
       setCopied(true);
@@ -92,23 +85,22 @@ export function ContactDetailPage() {
   }, [contactPubkey]);
 
   const displayName = contact?.name || "unknown peer";
-  const routeLabel =
-    !path || !path.hasPath
-      ? "Flood"
-      : path.directNeighbor
-        ? "Direct"
-        : `${path.hops} hop${path.hops === 1 ? "" : "s"}`;
+  // Routing comes from the contact's own stored path now (per companion).
+  const route = useMemo(
+    () => advertPathInfo(contact?.outPath, contact?.outPathHashSize),
+    [contact?.outPath, contact?.outPathHashSize],
+  );
+  const routeLabel = !contact?.outPath
+    ? "Flood"
+    : `${route.hops} hop${route.hops === 1 ? "" : "s"}`;
 
   return (
     <div className="space-y-8">
       <div className="flex flex-col gap-3">
-        <Link
+        <BackLink
           to={`/companions/${encodeURIComponent(companion)}/contacts`}
-          className="inline-flex items-center gap-1.5 font-mono text-[10px] uppercase tracking-[0.14em] text-muted-foreground hover:text-primary transition-colors w-fit"
-        >
-          <ArrowLeft className="size-3" />
-          Contacts
-        </Link>
+          label="Contacts"
+        />
 
         <div className="flex items-start gap-4">
           <PeerAvatar name={displayName} size="lg" />
@@ -181,11 +173,25 @@ export function ContactDetailPage() {
                   {contact.type ?? "—"}
                 </span>
               </InfoRow>
+              <InfoRow label="Last seen">
+                <span className="tabular-nums">
+                  {contact.lastSeen ? timeAgo(contact.lastSeen) : "never"}
+                </span>
+              </InfoRow>
               <InfoRow label="Added">
                 <span className="tabular-nums">{timeAgo(contact.addedAt)}</span>
               </InfoRow>
             </div>
           </section>
+
+          <LocationPanel
+            apiBase={apiBase}
+            lat={contact.lat}
+            lon={contact.lon}
+            onSaved={(lat, lon) =>
+              setContact((c) => (c ? { ...c, lat, lon } : c))
+            }
+          />
 
           <section className="panel overflow-hidden">
             <PanelHeader eyebrow="Routing" title="Path" />
@@ -195,17 +201,15 @@ export function ContactDetailPage() {
                   {routeLabel}
                 </span>
               </InfoRow>
-              {path?.hasPath && !path.directNeighbor && path.outPath && (
+              {route.hops > 0 && contact.outPath && (
                 <InfoRow label="Out path">
                   <code className="font-mono text-xs break-all">
-                    {path.outPath}
+                    {contact.outPath}
                   </code>
                 </InfoRow>
               )}
               <InfoRow label="Path hash size">
-                <span className="tabular-nums">
-                  {path?.pathHashSize ?? 1}-byte
-                </span>
+                <span className="tabular-nums">{route.hashSize}-byte</span>
               </InfoRow>
             </div>
           </section>
@@ -227,6 +231,158 @@ export function ContactDetailPage() {
         </>
       )}
     </div>
+  );
+}
+
+// Location is the contact's own (refreshed from adverts that carry a position,
+// but hand-editable here for peers that don't broadcast GPS). lat/lon are
+// microdegrees, matching discovered_peers.
+function LocationPanel({
+  apiBase,
+  lat,
+  lon,
+  onSaved,
+}: {
+  apiBase: string;
+  lat: number;
+  lon: number;
+  onSaved: (lat: number, lon: number) => void;
+}) {
+  const navigate = useNavigate();
+  const [editing, setEditing] = useState(false);
+  const [saving, setSaving] = useState(false);
+  const [latStr, setLatStr] = useState("");
+  const [lonStr, setLonStr] = useState("");
+
+  const hasLocation = lat !== 0 || lon !== 0;
+  const latDeg = lat / 1e6;
+  const lonDeg = lon / 1e6;
+
+  const startEdit = () => {
+    setLatStr(hasLocation ? latDeg.toFixed(6) : "");
+    setLonStr(hasLocation ? lonDeg.toFixed(6) : "");
+    setEditing(true);
+  };
+
+  const save = async () => {
+    const la = parseFloat(latStr);
+    const lo = parseFloat(lonStr);
+    if (
+      !Number.isFinite(la) ||
+      !Number.isFinite(lo) ||
+      la < -90 ||
+      la > 90 ||
+      lo < -180 ||
+      lo > 180
+    ) {
+      toast.error("Enter a valid lat, lon");
+      return;
+    }
+    const latUd = Math.round(la * 1e6);
+    const lonUd = Math.round(lo * 1e6);
+    setSaving(true);
+    try {
+      const res = await fetch(`${apiBase}/location`, {
+        method: "PUT",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ lat: latUd, lon: lonUd }),
+      });
+      if (!res.ok) throw new Error(`HTTP ${res.status}`);
+      toast.success("Location updated");
+      onSaved(latUd, lonUd);
+      setEditing(false);
+    } catch (e) {
+      toast.error(`Failed: ${e instanceof Error ? e.message : "error"}`);
+    } finally {
+      setSaving(false);
+    }
+  };
+
+  return (
+    <section className="panel overflow-hidden">
+      <div className="flex items-center justify-between border-b border-border px-4 py-3">
+        <div className="space-y-0.5">
+          <span className="label-overline block">Position</span>
+          <h2 className="font-mono text-sm uppercase tracking-widest">
+            Location
+          </h2>
+        </div>
+        {!editing && (
+          <Button
+            variant="ghost"
+            size="xs"
+            onClick={startEdit}
+            className="font-mono text-[10px] uppercase tracking-[0.12em] text-muted-foreground hover:text-primary"
+          >
+            <Pencil className="size-3" /> edit
+          </Button>
+        )}
+      </div>
+      {editing ? (
+        <div className="space-y-3 px-4 py-3">
+          <div className="grid grid-cols-2 gap-2">
+            <Input
+              value={latStr}
+              onChange={(e) => setLatStr(e.target.value)}
+              placeholder="lat"
+              inputMode="decimal"
+              className="font-mono text-xs"
+            />
+            <Input
+              value={lonStr}
+              onChange={(e) => setLonStr(e.target.value)}
+              placeholder="lon"
+              inputMode="decimal"
+              className="font-mono text-xs"
+            />
+          </div>
+          <div className="flex justify-end gap-2">
+            <Button
+              variant="ghost"
+              size="sm"
+              onClick={() => setEditing(false)}
+              className="font-mono uppercase tracking-widest"
+            >
+              Cancel
+            </Button>
+            <Button
+              size="sm"
+              onClick={save}
+              disabled={saving}
+              className="font-mono uppercase tracking-widest"
+            >
+              {saving ? "Saving…" : "Save"}
+            </Button>
+          </div>
+        </div>
+      ) : (
+        <div className="divide-y divide-border">
+          <InfoRow label="Coordinates">
+            {hasLocation ? (
+              <code className="font-mono text-xs tabular-nums">
+                {latDeg.toFixed(6)}, {lonDeg.toFixed(6)}
+              </code>
+            ) : (
+              <span className="text-muted-foreground/60">not set</span>
+            )}
+          </InfoRow>
+          {hasLocation && (
+            <div className="px-4 py-3">
+              <button
+                type="button"
+                onClick={() => navigate(`/map?lat=${latDeg}&lon=${lonDeg}`)}
+                className="flex w-full items-center justify-between border border-border px-3 py-2.5 text-left transition-colors hover:border-primary/40 hover:bg-muted/40"
+              >
+                <span className="flex items-center gap-2 font-mono text-xs uppercase tracking-[0.08em]">
+                  <MapPin className="size-3.5 text-primary" /> View on map
+                </span>
+                <span className="text-muted-foreground/50">›</span>
+              </button>
+            </div>
+          )}
+        </div>
+      )}
+    </section>
   );
 }
 

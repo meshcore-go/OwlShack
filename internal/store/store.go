@@ -155,6 +155,8 @@ func (s *Store) migrate() error {
 
 	migrations := []func(*sql.DB) error{
 		migrateV1,
+		migrateV2,
+		migrateV3,
 	}
 
 	for i := version; i < len(migrations); i++ {
@@ -167,6 +169,62 @@ func (s *Store) migrate() error {
 	}
 
 	return nil
+}
+
+// migrateV2 decouples contacts from discovered_peers. A contact now carries its
+// own name/type (backfilled from the peer table) and no longer FK-cascades to
+// discovered_peers, so deleting a discovered peer never affects a saved
+// contact. SQLite can't drop a column-level FK in place, so the table is
+// rebuilt; nothing references companion_contacts, so the drop/rename is safe.
+func migrateV2(db *sql.DB) error {
+	_, err := db.Exec(`
+		CREATE TABLE companion_contacts_new (
+			companion_id INTEGER  NOT NULL REFERENCES companions(id) ON DELETE CASCADE,
+			peer_pubkey  BLOB     NOT NULL,
+			name         TEXT     NOT NULL DEFAULT '',
+			type         TEXT     NOT NULL DEFAULT '',
+			added_at     DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+			metadata     TEXT     NOT NULL DEFAULT '{}',
+			PRIMARY KEY (companion_id, peer_pubkey)
+		);
+		INSERT INTO companion_contacts_new (companion_id, peer_pubkey, name, type, added_at, metadata)
+			SELECT cc.companion_id, cc.peer_pubkey,
+			       COALESCE(dp.name, ''), COALESCE(dp.type, ''),
+			       cc.added_at, cc.metadata
+			FROM companion_contacts cc
+			LEFT JOIN discovered_peers dp ON dp.pubkey = cc.peer_pubkey;
+		DROP TABLE companion_contacts;
+		ALTER TABLE companion_contacts_new RENAME TO companion_contacts;
+		CREATE INDEX IF NOT EXISTS idx_companion_contacts_companion ON companion_contacts(companion_id);
+	`)
+	return err
+}
+
+// migrateV3 makes a contact a self-contained address-book record: it gains its
+// own location, routing path, feature flags and last-seen (backfilled from
+// discovered_peers), so a contact survives a peer sweep with everything it
+// needs and the path is owned per-companion. Plain ADD COLUMN — no rebuild.
+func migrateV3(db *sql.DB) error {
+	_, err := db.Exec(`
+		ALTER TABLE companion_contacts ADD COLUMN lat                INTEGER NOT NULL DEFAULT 0;
+		ALTER TABLE companion_contacts ADD COLUMN lon                INTEGER NOT NULL DEFAULT 0;
+		ALTER TABLE companion_contacts ADD COLUMN feat1              INTEGER NOT NULL DEFAULT 0;
+		ALTER TABLE companion_contacts ADD COLUMN feat2              INTEGER NOT NULL DEFAULT 0;
+		ALTER TABLE companion_contacts ADD COLUMN out_path           BLOB;
+		ALTER TABLE companion_contacts ADD COLUMN out_path_hash_size INTEGER NOT NULL DEFAULT 0;
+		ALTER TABLE companion_contacts ADD COLUMN last_seen          DATETIME;
+		ALTER TABLE companion_contacts ADD COLUMN last_advert_ts     INTEGER NOT NULL DEFAULT 0;
+		UPDATE companion_contacts SET
+			lat                = COALESCE((SELECT lat                FROM discovered_peers dp WHERE dp.pubkey = companion_contacts.peer_pubkey), 0),
+			lon                = COALESCE((SELECT lon                FROM discovered_peers dp WHERE dp.pubkey = companion_contacts.peer_pubkey), 0),
+			feat1              = COALESCE((SELECT feat1              FROM discovered_peers dp WHERE dp.pubkey = companion_contacts.peer_pubkey), 0),
+			feat2              = COALESCE((SELECT feat2              FROM discovered_peers dp WHERE dp.pubkey = companion_contacts.peer_pubkey), 0),
+			out_path           =          (SELECT out_path           FROM discovered_peers dp WHERE dp.pubkey = companion_contacts.peer_pubkey),
+			out_path_hash_size = COALESCE((SELECT out_path_hash_size FROM discovered_peers dp WHERE dp.pubkey = companion_contacts.peer_pubkey), 0),
+			last_seen          =          (SELECT last_seen          FROM discovered_peers dp WHERE dp.pubkey = companion_contacts.peer_pubkey),
+			last_advert_ts     = COALESCE((SELECT last_advert_ts     FROM discovered_peers dp WHERE dp.pubkey = companion_contacts.peer_pubkey), 0);
+	`)
+	return err
 }
 
 // migrateV1 creates the full baseline schema (the prior incremental migrations

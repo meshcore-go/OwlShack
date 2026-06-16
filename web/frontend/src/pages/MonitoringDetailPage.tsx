@@ -1,7 +1,8 @@
 import { useCallback, useEffect, useMemo, useState } from "react";
 import { Link, useParams } from "react-router-dom";
-import { ArrowLeft, SlidersHorizontal } from "lucide-react";
+import { ExternalLink, SlidersHorizontal } from "lucide-react";
 import { useWebSocket } from "@/hooks/useWebSocket";
+import { BackLink } from "@/components/BackLink";
 import { PageHeader } from "@/components/PageHeader";
 import { ConnectionPill } from "@/components/StatusIndicator";
 import { NodeStatGrid } from "@/components/NodeStatTiles";
@@ -13,6 +14,7 @@ import { Skeleton } from "@/components/ui/skeleton";
 import { cn } from "@/lib/utils";
 import { formatSecsAgo } from "@/lib/format";
 import { metricDef, metricOrderIndex } from "@/lib/metrics";
+import { contactDetailPath } from "@/lib/routes";
 
 interface MonitoredNode {
   pubkey: string;
@@ -173,12 +175,7 @@ export function MonitoringDetailPage() {
 
   return (
     <div className="space-y-4">
-      <Link
-        to="/monitoring"
-        className="inline-flex items-center gap-1.5 font-mono text-[10px] uppercase tracking-[0.12em] text-muted-foreground hover:text-primary transition-colors"
-      >
-        <ArrowLeft className="size-3" /> monitoring
-      </Link>
+      <BackLink to="/monitoring" label="monitoring" />
 
       <PageHeader
         title={name}
@@ -193,18 +190,39 @@ export function MonitoringDetailPage() {
             <ConnectionPill connected={connected} />
             <RangeSelector range={range} onChange={setRange} />
             {node?.companionId && (
-              <Button
-                variant="outline"
-                size="sm"
-                onClick={() => setShowSettings((s) => !s)}
-                className={cn(
-                  "h-auto rounded-none py-1 font-mono text-[10px] uppercase tracking-[0.12em]",
-                  showSettings && "border-primary text-primary",
-                )}
-              >
-                <SlidersHorizontal className="size-3" />
-                <span className="hidden sm:inline">configure</span>
-              </Button>
+              <>
+                <Button
+                  asChild
+                  variant="outline"
+                  size="sm"
+                  className="h-auto rounded-none py-1 font-mono text-[10px] uppercase tracking-[0.12em]"
+                >
+                  <Link
+                    to={contactDetailPath(
+                      node.companionId,
+                      pubkey,
+                      node.kind === "repeater",
+                    )}
+                  >
+                    <ExternalLink className="size-3" />
+                    <span className="hidden sm:inline">
+                      {node.kind === "repeater" ? "repeater" : "contact"}
+                    </span>
+                  </Link>
+                </Button>
+                <Button
+                  variant="outline"
+                  size="sm"
+                  onClick={() => setShowSettings((s) => !s)}
+                  className={cn(
+                    "h-auto rounded-none py-1 font-mono text-[10px] uppercase tracking-[0.12em]",
+                    showSettings && "border-primary text-primary",
+                  )}
+                >
+                  <SlidersHorizontal className="size-3" />
+                  <span className="hidden sm:inline">configure</span>
+                </Button>
+              </>
             )}
           </div>
         }

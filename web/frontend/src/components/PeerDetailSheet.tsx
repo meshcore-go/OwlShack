@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useRef, useState } from "react";
-import { useNavigate } from "react-router-dom";
+import { useLocation, useNavigate } from "react-router-dom";
 import QRCode from "qrcode";
 import {
   Check,
@@ -12,6 +12,7 @@ import {
   Radio,
   Route,
   Share2,
+  User,
   UserPlus,
   X,
 } from "lucide-react";
@@ -46,7 +47,10 @@ import { Button } from "@/components/ui/button";
 import { PeerAvatar } from "@/components/PeerAvatar";
 import { PeerTypePill } from "@/components/StatusIndicator";
 import { SignalStrength } from "@/components/SignalStrength";
+import { InlineConfirm } from "@/components/InlineConfirm";
 import { formatDateTime, timeAgo, truncateMid } from "@/lib/format";
+import { contactDetailPath } from "@/lib/routes";
+import { deletePeer } from "@/lib/peerApi";
 
 export interface PeerLike {
   pubkey: string;
@@ -140,6 +144,7 @@ export function PeerDetailSheet({
           {peer && (
             <PeerDetailBody
               peer={peer}
+              companions={companions}
               onClose={() => onOpenChange(false)}
               onAdd={() => setAddOpen(true)}
               onShareInMessage={() => setShareMsgOpen(true)}
@@ -172,12 +177,14 @@ export function PeerDetailSheet({
 
 function PeerDetailBody({
   peer,
+  companions,
   onClose,
   onAdd,
   onShareInMessage,
   onShowQr,
 }: {
   peer: PeerLike;
+  companions: CompanionRef[];
   onClose: () => void;
   onAdd: () => void;
   onShareInMessage: () => void;
@@ -188,10 +195,42 @@ function PeerDetailBody({
     () => advertPathInfo(peer.outPath, peer.outPathHashSize),
     [peer.outPath, peer.outPathHashSize],
   );
+  // Our own companion identities surface as discovered peers — a node can't be
+  // its own contact, so suppress the Add affordance for them.
+  const isSelf = useMemo(
+    () =>
+      companions.some(
+        (c) => c.pubkey?.toLowerCase() === peer.pubkey.toLowerCase(),
+      ),
+    [companions, peer.pubkey],
+  );
+  // Which companions hold this peer as a contact — shown as cross-links. A
+  // contact caches its own identity, so deleting the peer here leaves it intact.
+  const membership = usePeerMembership(peer, companions);
   const lat = peer.lat / 1e6;
   const lon = peer.lon / 1e6;
   const hasLocation = peer.lat !== 0 || peer.lon !== 0;
   const coords = `${lat.toFixed(6)}, ${lon.toFixed(6)}`;
+  // "View on map" is pointless when the sheet was opened from the map itself.
+  const onMapPage = useLocation().pathname === "/map";
+  const showMapLink = hasLocation && !onMapPage;
+
+  const [confirmDelete, setConfirmDelete] = useState(false);
+  const [deleting, setDeleting] = useState(false);
+  const handleDelete = async () => {
+    setDeleting(true);
+    try {
+      await deletePeer(peer.pubkey);
+      toast.success("Peer deleted");
+      onClose(); // the WS "delete" broadcast drops it from the live lists
+    } catch (e) {
+      toast.error(
+        `Failed to delete: ${e instanceof Error ? e.message : "error"}`,
+      );
+      setDeleting(false);
+      setConfirmDelete(false);
+    }
+  };
 
   return (
     <div className="flex h-full flex-col overflow-hidden">
@@ -226,13 +265,19 @@ function PeerDetailBody({
             </code>
           </div>
           <div className="flex items-center gap-2 pt-1">
-            <Button
-              size="sm"
-              onClick={onAdd}
-              className="font-mono text-xs uppercase tracking-widest"
-            >
-              <UserPlus className="size-3.5" /> Add
-            </Button>
+            {isSelf ? (
+              <span className="inline-flex items-center gap-1.5 border border-primary/40 bg-primary/10 px-2.5 py-1 font-mono text-xs uppercase tracking-widest text-primary">
+                <Radio className="size-3.5" /> Your node
+              </span>
+            ) : (
+              <Button
+                size="sm"
+                onClick={onAdd}
+                className="font-mono text-xs uppercase tracking-widest"
+              >
+                <UserPlus className="size-3.5" /> Add
+              </Button>
+            )}
             <DropdownMenu>
               <DropdownMenuTrigger asChild>
                 <Button
@@ -268,6 +313,12 @@ function PeerDetailBody({
           </div>
         </div>
 
+        {/* Companions this peer is already a contact of */}
+        <CompanionMembership
+          pubkeyHex={peer.pubkey.toLowerCase()}
+          hits={membership}
+        />
+
         {/* Fields */}
         <div className="divide-y divide-border/60">
           <DetailRow icon={<KeyRound className="size-4" />} label="Public Key">
@@ -286,14 +337,16 @@ function PeerDetailBody({
                   {coords}
                 </code>
                 <div className="flex items-center gap-1">
-                  <button
-                    type="button"
-                    onClick={() => navigate(`/map?lat=${lat}&lon=${lon}`)}
-                    className="text-muted-foreground hover:text-primary"
-                    aria-label="View on map"
-                  >
-                    <MapPin className="size-3.5" />
-                  </button>
+                  {showMapLink && (
+                    <button
+                      type="button"
+                      onClick={() => navigate(`/map?lat=${lat}&lon=${lon}`)}
+                      className="text-muted-foreground hover:text-primary"
+                      aria-label="View on map"
+                    >
+                      <MapPin className="size-3.5" />
+                    </button>
+                  )}
                   <CopyButton text={coords} label="Position" />
                 </div>
               </div>
@@ -360,7 +413,7 @@ function PeerDetailBody({
         </div>
 
         {/* Extra tools */}
-        {hasLocation && (
+        {showMapLink && (
           <div className="border-t border-border px-5 py-4">
             <span className="label-overline">Extra tools</span>
             <button
@@ -375,6 +428,130 @@ function PeerDetailBody({
             </button>
           </div>
         )}
+
+        {/* Danger zone — remove from the shared discovered-peers table. Any
+            saved contact keeps its own cached identity, so this never affects
+            contacts. */}
+        <div className="flex items-center justify-between border-t border-border px-5 py-4">
+          <div className="space-y-0.5">
+            <span className="label-overline">Discovered peer</span>
+            <p className="text-[11px] text-muted-foreground/70">
+              Removes it everywhere{deleting ? "…" : ""}; re-adds itself if heard
+              again.
+            </p>
+          </div>
+          {deleting ? (
+            <span className="font-mono text-[10px] uppercase tracking-[0.12em] text-muted-foreground">
+              deleting…
+            </span>
+          ) : (
+            <InlineConfirm
+              confirming={confirmDelete}
+              onAskRemove={() => setConfirmDelete(true)}
+              onCancel={() => setConfirmDelete(false)}
+              onConfirm={handleDelete}
+              triggerLabel="delete"
+            />
+          )}
+        </div>
+      </div>
+    </div>
+  );
+}
+
+interface MembershipHit {
+  companion: string;
+  isRepeater: boolean;
+}
+
+// Fetches which companions hold this peer as a contact (across all companions),
+// so both the "In companions" list and the delete gate share one source.
+function usePeerMembership(
+  peer: PeerLike,
+  companions: CompanionRef[],
+): MembershipHit[] {
+  const [hits, setHits] = useState<MembershipHit[]>([]);
+  const key = peer.pubkey.toLowerCase();
+  // `companions` is live WS data — a fresh array identity every revalidation
+  // would re-fire the whole N-companion fan-out. Depend on a stable name key
+  // and read the current list through a ref so the fetch only re-runs when the
+  // peer or the set of companions actually changes.
+  const names = companions.map((c) => c.name).join(",");
+  const companionsRef = useRef(companions);
+  companionsRef.current = companions;
+
+  useEffect(() => {
+    let cancelled = false;
+    setHits([]);
+    Promise.all(
+      companionsRef.current.map((c) =>
+        fetch(`/api/companions/${encodeURIComponent(c.name)}/contacts/${key}`)
+          .then((r) => (r.ok ? r.json() : null))
+          .then((contact) =>
+            contact
+              ? ({
+                  companion: c.name,
+                  isRepeater:
+                    contact.metadata?.isRepeater === true ||
+                    (contact.type || "").toUpperCase() === "REPEATER",
+                } as MembershipHit)
+              : null,
+          )
+          .catch(() => null),
+      ),
+    ).then((res) => {
+      if (!cancelled) setHits(res.filter((h): h is MembershipHit => h !== null));
+    });
+    return () => {
+      cancelled = true;
+    };
+  }, [key, names]);
+
+  return hits;
+}
+
+// Lists the companions that already have this peer in their contacts, each
+// linking to where it lives there (repeater admin page or contact detail) — so
+// a discovered peer is reachable in-companion from anywhere the sheet opens.
+function CompanionMembership({
+  pubkeyHex,
+  hits,
+}: {
+  pubkeyHex: string;
+  hits: MembershipHit[];
+}) {
+  const navigate = useNavigate();
+
+  if (hits.length === 0) return null;
+
+  return (
+    <div className="border-b border-border px-5 py-4">
+      <span className="label-overline">In companions</span>
+      <div className="mt-2 space-y-1.5">
+        {hits.map((h) => {
+          const to = contactDetailPath(h.companion, pubkeyHex, h.isRepeater);
+          return (
+            <button
+              key={h.companion}
+              type="button"
+              onClick={() => navigate(to)}
+              className="flex w-full items-center justify-between border border-border px-3 py-2.5 text-left transition-colors hover:border-primary/40 hover:bg-muted/40"
+            >
+              <span className="flex items-center gap-2 font-mono text-xs uppercase tracking-[0.08em]">
+                {h.isRepeater ? (
+                  <Radio className="size-3.5 text-primary" />
+                ) : (
+                  <User className="size-3.5 text-primary" />
+                )}
+                {h.companion}
+                <span className="text-muted-foreground/60">
+                  {h.isRepeater ? "· repeater" : "· contact"}
+                </span>
+              </span>
+              <span className="text-muted-foreground/50">›</span>
+            </button>
+          );
+        })}
       </div>
     </div>
   );

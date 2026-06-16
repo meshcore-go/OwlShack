@@ -317,7 +317,7 @@ export function PacketsPage() {
                       key={g.key}
                       onClick={() => setSelectedKey(g.key)}
                       className={cn(
-                        "border-border/60 cursor-pointer group",
+                        "border-border/60 cursor-pointer group [content-visibility:auto] [contain-intrinsic-size:auto_44px]",
                         isSelected && "bg-primary/5",
                       )}
                     >

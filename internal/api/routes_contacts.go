@@ -12,27 +12,43 @@ import (
 )
 
 type contactJSON struct {
-	PeerPubKey string                `json:"peerPubkey"`
-	Name       string                `json:"name"`
-	Type       string                `json:"type"`
-	AddedAt    string                `json:"addedAt"`
-	Metadata   store.ContactMetadata `json:"metadata"`
+	PeerPubKey      string                `json:"peerPubkey"`
+	Name            string                `json:"name"`
+	Type            string                `json:"type"`
+	Lat             int32                 `json:"lat"`
+	Lon             int32                 `json:"lon"`
+	Feat1           uint16                `json:"feat1"`
+	Feat2           uint16                `json:"feat2"`
+	OutPath         string                `json:"outPath,omitempty"`
+	OutPathHashSize uint8                 `json:"outPathHashSize"`
+	LastSeen        string                `json:"lastSeen,omitempty"`
+	LastAdvertTS    uint32                `json:"lastAdvertTs"`
+	AddedAt         string                `json:"addedAt"`
+	Metadata        store.ContactMetadata `json:"metadata"`
 }
 
-// contactToJSON resolves the contact's display name/type from discovered_peers.
+// contactToJSON serializes a contact from its own cached record (identity/
+// location/path/last-seen, kept fresh by adverts + path learning) —
+// independent of discovered_peers.
 func (s *Server) contactToJSON(c *store.Contact) contactJSON {
-	peerName := ""
-	peerType := ""
-	if peer, err := s.store.Peers.GetByPubKey(c.PeerPubKey); err == nil && peer != nil {
-		peerName = peer.Name
-		peerType = peer.Type
+	lastSeen := ""
+	if !c.LastSeen.IsZero() {
+		lastSeen = c.LastSeen.UTC().Format(time.RFC3339)
 	}
 	return contactJSON{
-		PeerPubKey: hex.EncodeToString(c.PeerPubKey),
-		Name:       peerName,
-		Type:       peerType,
-		AddedAt:    c.AddedAt.UTC().Format(time.RFC3339),
-		Metadata:   c.Metadata,
+		PeerPubKey:      hex.EncodeToString(c.PeerPubKey),
+		Name:            c.Name,
+		Type:            c.Type,
+		Lat:             c.Lat,
+		Lon:             c.Lon,
+		Feat1:           c.Feat1,
+		Feat2:           c.Feat2,
+		OutPath:         hex.EncodeToString(c.OutPath),
+		OutPathHashSize: c.OutPathHashSize,
+		LastSeen:        lastSeen,
+		LastAdvertTS:    c.LastAdvertTS,
+		AddedAt:         c.AddedAt.UTC().Format(time.RFC3339),
+		Metadata:        c.Metadata,
 	}
 }
 
@@ -116,6 +132,19 @@ func (s *Server) handleAddContact(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	// A node can't be its own peer: our own companion identities show up as
+	// discovered peers (e.g. on the map), so reject adding any of them as a
+	// contact rather than creating a nonsensical self-contact row.
+	if comps, lerr := s.store.Companions.List(); lerr == nil {
+		selfHex := hex.EncodeToString(pubkey)
+		for _, c := range comps {
+			if strings.EqualFold(c.PubKey, selfHex) {
+				writeError(w, http.StatusBadRequest, "cannot add your own node as a contact")
+				return
+			}
+		}
+	}
+
 	// Optional display metadata (manual entry or a shared-contact embed).
 	contactName := strings.TrimSpace(body.Name)
 	contactType := strings.ToUpper(strings.TrimSpace(body.Type))
@@ -124,40 +153,62 @@ func (s *Server) handleAddContact(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// Seed discovered_peers so the contact row's FK is satisfiable. An unknown
-	// peer is seeded even with blank name/type (the contract is POST {pubkey};
-	// a later advert fills them in). Known peers are only updated when nameless
-	// — never overwrite a peer we've already heard, so a crafted shared-contact
-	// message can't relabel a trusted peer. Existing rows are loaded and
-	// mutated in place to preserve lat/lon/path.
-	var seedPeer *store.Peer
-	if existing, gerr := s.store.Peers.GetByPubKey(pubkey); gerr == nil {
-		if existing == nil {
-			seedPeer = &store.Peer{
-				PubKey:   pubkey,
-				Name:     contactName,
-				Type:     contactType,
-				LastSeen: time.Now(),
-			}
-		} else if existing.Name == "" && (contactName != "" || contactType != "") {
-			existing.Name = contactName
-			if contactType != "" {
-				existing.Type = contactType
-			}
-			seedPeer = existing
+	// A peer we've already heard, used to (a) backfill the contact's cached
+	// name/type when the request didn't carry them, and (b) seed discovered_peers
+	// so the peer shows up in the Peers list. Known peers are only relabelled
+	// when nameless, so a crafted shared-contact message can't rename a trusted
+	// peer.
+	existing, _ := s.store.Peers.GetByPubKey(pubkey)
+
+	// The contact owns its identity now; backfill from a known peer when blank.
+	storeName, storeType := contactName, contactType
+	if storeName == "" && existing != nil {
+		storeName = existing.Name
+		if storeType == "" {
+			storeType = existing.Type
 		}
+	}
+
+	var seedPeer *store.Peer
+	if existing == nil {
+		seedPeer = &store.Peer{
+			PubKey:   pubkey,
+			Name:     contactName,
+			Type:     contactType,
+			LastSeen: time.Now(),
+		}
+	} else if existing.Name == "" && (contactName != "" || contactType != "") {
+		existing.Name = contactName
+		if contactType != "" {
+			existing.Type = contactType
+		}
+		seedPeer = existing
 	}
 
 	var addErr error
 	s.store.WriteSync(func() {
-		// Seed the peer BEFORE the contact row: companion_contacts.peer_pubkey
-		// has a foreign key to discovered_peers, so for a never-heard peer the
-		// contact insert fails unless the peer row exists first.
+		// Seed the peer so it appears in the Peers list. No longer required for
+		// referential integrity — contacts are decoupled from discovered_peers.
 		if seedPeer != nil {
-			// Non-fatal for known peers: the contact is still added, just nameless.
 			_ = s.store.Peers.Upsert(seedPeer)
 		}
-		addErr = s.store.Contacts.Add(cid, pubkey)
+		if addErr = s.store.Contacts.Add(cid, pubkey, storeName, storeType); addErr != nil {
+			return
+		}
+		// Backfill the full record from what we already know about the peer, so a
+		// contact added from a heard peer has location/path/feat immediately
+		// rather than waiting for the next advert.
+		if existing != nil {
+			hasLoc := existing.Lat != 0 || existing.Lon != 0
+			_ = s.store.Contacts.RefreshFromAdvert(
+				pubkey, existing.Name, existing.Type,
+				existing.Lat, existing.Lon, existing.Feat1, existing.Feat2,
+				existing.LastSeen, existing.LastAdvertTS, hasLoc,
+			)
+			if len(existing.OutPath) > 0 {
+				_ = s.store.Contacts.UpdateOutPath(cid, pubkey, existing.OutPath, existing.OutPathHashSize)
+			}
+		}
 	})
 	if addErr != nil {
 		writeError(w, http.StatusInternalServerError, "failed to add contact")
@@ -227,6 +278,38 @@ func (s *Server) handleUpdateContactMetadata(w http.ResponseWriter, r *http.Requ
 	w.WriteHeader(http.StatusNoContent)
 }
 
+// handleSetContactLocation hand-sets a contact's location (lat/lon in
+// microdegrees, matching discovered_peers). A later advert carrying a position
+// overwrites it ("advert wins").
+func (s *Server) handleSetContactLocation(w http.ResponseWriter, r *http.Request) {
+	cid, ok := s.companionID(w, r.PathValue("name"))
+	if !ok {
+		return
+	}
+	pubkey, err := hex.DecodeString(r.PathValue("pubkey"))
+	if err != nil || len(pubkey) == 0 {
+		writeError(w, http.StatusBadRequest, "invalid pubkey hex")
+		return
+	}
+	var body struct {
+		Lat int32 `json:"lat"`
+		Lon int32 `json:"lon"`
+	}
+	if err := readJSON(r, &body); err != nil {
+		writeError(w, http.StatusBadRequest, "invalid request body")
+		return
+	}
+	var uerr error
+	s.store.WriteSync(func() {
+		uerr = s.store.Contacts.SetLocation(cid, pubkey, body.Lat, body.Lon)
+	})
+	if uerr != nil {
+		writeError(w, http.StatusInternalServerError, "failed to set contact location")
+		return
+	}
+	w.WriteHeader(http.StatusNoContent)
+}
+
 // companionID resolves a companion's surrogate id from its current name (the
 // API keeps name in URLs; per-companion history is keyed by id so a rename
 // keeps it). Writes a 404 and returns ok=false when no companion has that name.
@@ -238,4 +321,3 @@ func (s *Server) companionID(w http.ResponseWriter, name string) (int64, bool) {
 	}
 	return id, true
 }
-

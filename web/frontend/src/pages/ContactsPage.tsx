@@ -1,10 +1,12 @@
 import { useCallback, useMemo, useState } from "react";
 import { Link, useParams } from "react-router-dom";
-import { ArrowLeft, CircleDashed, UserPlus } from "lucide-react";
+import { CircleDashed, UserPlus } from "lucide-react";
 import { toast } from "sonner";
 import { Button } from "@/components/ui/button";
 import { Skeleton } from "@/components/ui/skeleton";
 import { useApiList } from "@/hooks/useApiList";
+import { useCompanions } from "@/hooks/useCompanions";
+import { BackLink } from "@/components/BackLink";
 import { InlineConfirm } from "@/components/InlineConfirm";
 import { LoadErrorAlert } from "@/components/LoadErrorAlert";
 import { PageHeader } from "@/components/PageHeader";
@@ -12,6 +14,7 @@ import { PeerAvatar } from "@/components/PeerAvatar";
 import { PeerTypePill } from "@/components/StatusIndicator";
 import { AddContactDialog } from "@/components/AddContactDialog";
 import { timeAgo, truncateMid } from "@/lib/format";
+import { contactDetailPath } from "@/lib/routes";
 
 interface Contact {
   peerPubkey: string;
@@ -37,6 +40,9 @@ export function ContactsPage() {
   );
   const [confirmRemove, setConfirmRemove] = useState<string | null>(null);
   const [dialogOpen, setDialogOpen] = useState(false);
+  // The companion's own pubkey, so the add dialog can block a self-contact
+  // inline (the backend rejects it too, but this avoids the round-trip).
+  const ownPubkey = useCompanions().find((c) => c.name === companion)?.pubkey;
 
   const removeContact = useCallback(
     async (pubkey: string) => {
@@ -75,13 +81,10 @@ export function ContactsPage() {
   return (
     <div className="space-y-4">
       <div className="flex flex-col gap-3">
-        <Link
+        <BackLink
           to={`/companions/${encodeURIComponent(companion)}`}
-          className="inline-flex items-center gap-1.5 font-mono text-[10px] uppercase tracking-[0.14em] text-muted-foreground hover:text-primary transition-colors w-fit"
-        >
-          <ArrowLeft className="size-3" />
-          {companion || "companion"}
-        </Link>
+          label={companion || "companion"}
+        />
 
         <PageHeader
           title="Contacts"
@@ -167,6 +170,7 @@ export function ContactsPage() {
         open={dialogOpen}
         onOpenChange={setDialogOpen}
         existingPubkeys={existingPubkeys}
+        ownPubkey={ownPubkey}
         onAdded={load}
       />
     </div>
@@ -189,11 +193,11 @@ function ContactRow({
   onConfirm: () => void;
 }) {
   const displayName = contact.name || "unknown peer";
-  // Repeaters have their own admin page; everything else opens contact detail.
-  const detailTo =
-    contact.type?.toUpperCase() === "REPEATER"
-      ? `/companions/${encodeURIComponent(companion)}/repeaters/${contact.peerPubkey}`
-      : `/companions/${encodeURIComponent(companion)}/contacts/${contact.peerPubkey}`;
+  const detailTo = contactDetailPath(
+    companion,
+    contact.peerPubkey,
+    contact.type?.toUpperCase() === "REPEATER",
+  );
   return (
     <div className="flex items-center gap-3 px-4 py-3 hover:bg-muted/40 transition-colors">
       <Link to={detailTo} className="flex items-center gap-3 min-w-0 flex-1">

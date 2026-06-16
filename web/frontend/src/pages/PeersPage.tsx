@@ -1,7 +1,13 @@
-import { useCallback, useEffect, useMemo, useState } from "react";
-import { CircleDashed, RefreshCw, Search, Users } from "lucide-react";
+import { useCallback, useMemo, useState } from "react";
+import { Check, CircleDashed, RefreshCw, Search, Users } from "lucide-react";
+import { toast } from "sonner";
 import { useWebSocket } from "@/hooks/useWebSocket";
 import { useApiList } from "@/hooks/useApiList";
+import { useCompanions } from "@/hooks/useCompanions";
+import { usePeerDetailSheet } from "@/hooks/usePeerDetailSheet";
+import { isPeerDelete } from "@/lib/peerWs";
+import { deletePeers, deletedPeersMessage } from "@/lib/peerApi";
+import { InlineConfirm } from "@/components/InlineConfirm";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Skeleton } from "@/components/ui/skeleton";
@@ -36,9 +42,37 @@ interface Peer {
   outPathHashSize?: number;
 }
 
-interface CompanionRef {
-  name: string;
-  pubkey?: string;
+// Sharp-cornered checkbox matching the operator aesthetic; stops propagation so
+// ticking a row in the table/list doesn't also open its detail sheet.
+function SelectBox({
+  checked,
+  onChange,
+  label,
+}: {
+  checked: boolean;
+  onChange: () => void;
+  label: string;
+}) {
+  return (
+    <button
+      type="button"
+      role="checkbox"
+      aria-checked={checked}
+      aria-label={label}
+      onClick={(e) => {
+        e.stopPropagation();
+        onChange();
+      }}
+      className={cn(
+        "flex size-4 shrink-0 items-center justify-center border transition-colors",
+        checked
+          ? "border-primary bg-primary text-primary-foreground"
+          : "border-border hover:border-primary/60",
+      )}
+    >
+      {checked && <Check className="size-3" />}
+    </button>
+  );
 }
 
 function HopsBadge({ peer }: { peer: Peer }) {
@@ -77,14 +111,33 @@ export function PeersPage() {
     reload,
   } = useApiList<Peer>("/api/peers", "Failed to load peers");
   const peers = items ?? NO_PEERS;
-  const [companions, setCompanions] = useState<CompanionRef[]>([]);
+  const companions = useCompanions();
+  const { selectPeer, sheetProps } = usePeerDetailSheet(peers);
   const [search, setSearch] = useState("");
   const [typeFilter, setTypeFilter] = useState<TypeFilter>("ALL");
-  const [selectedKey, setSelectedKey] = useState<string | null>(null);
+  const [selected, setSelected] = useState<Set<string>>(new Set());
+  const [confirmBulk, setConfirmBulk] = useState(false);
+  const [bulkDeleting, setBulkDeleting] = useState(false);
+
+  const toggleSelect = useCallback((pubkey: string) => {
+    setSelected((prev) => {
+      const next = new Set(prev);
+      if (next.has(pubkey)) next.delete(pubkey);
+      else next.add(pubkey);
+      return next;
+    });
+  }, []);
 
   const handleMessage = useCallback(
     (topic: string, data: unknown) => {
       if (topic !== "peers") return;
+      if (isPeerDelete(data)) {
+        const gone = new Set(data.pubkeys.map((k) => k.toLowerCase()));
+        setPeers((prev) =>
+          (prev ?? []).filter((p) => !gone.has(p.pubkey.toLowerCase())),
+        );
+        return;
+      }
       if (!isPeer(data)) return;
       setPeers((prev) => {
         const arr = prev ?? [];
@@ -99,18 +152,6 @@ export function PeersPage() {
   );
 
   const { connected } = useWebSocket(["peers"], handleMessage);
-
-  useEffect(() => {
-    fetch("/api/companions")
-      .then((r) => (r.ok ? r.json() : []))
-      .then((cs: CompanionRef[]) => setCompanions(cs || []))
-      .catch(() => {});
-  }, []);
-
-  const selected = useMemo(
-    () => peers.find((p) => p.pubkey === selectedKey) ?? null,
-    [peers, selectedKey],
-  );
 
   const filtered = useMemo(() => {
     const q = search.trim().toLowerCase();
@@ -139,6 +180,38 @@ export function PeersPage() {
     () => peers.filter((p) => p.lat !== 0 || p.lon !== 0).length,
     [peers],
   );
+
+  const allFilteredSelected =
+    filtered.length > 0 && filtered.every((p) => selected.has(p.pubkey));
+
+  // Toggle every currently-filtered peer; selections outside the filter are
+  // preserved so search/type filtering can build a selection incrementally.
+  const toggleSelectAll = useCallback(() => {
+    setSelected((prev) => {
+      const next = new Set(prev);
+      const allOn = filtered.every((p) => next.has(p.pubkey));
+      for (const p of filtered) {
+        if (allOn) next.delete(p.pubkey);
+        else next.add(p.pubkey);
+      }
+      return next;
+    });
+  }, [filtered]);
+
+  const bulkDelete = useCallback(async () => {
+    setBulkDeleting(true);
+    try {
+      toast.success(deletedPeersMessage(await deletePeers([...selected])));
+      setSelected(new Set()); // the WS "delete" broadcast prunes the list
+      setConfirmBulk(false);
+    } catch (e) {
+      toast.error(
+        `Bulk delete failed: ${e instanceof Error ? e.message : "error"}`,
+      );
+    } finally {
+      setBulkDeleting(false);
+    }
+  }, [selected]);
 
   return (
     <div className="space-y-4">
@@ -214,6 +287,38 @@ export function PeersPage() {
           })}
         </div>
 
+        {/* Bulk selection bar */}
+        {selected.size > 0 && (
+          <div className="flex items-center justify-between gap-3 border-b border-border bg-primary/5 px-4 py-2.5">
+            <span className="font-mono text-[10px] uppercase tracking-[0.12em] text-muted-foreground tabular-nums">
+              {selected.size} selected
+            </span>
+            <div className="flex items-center gap-2">
+              <Button
+                variant="ghost"
+                size="xs"
+                onClick={() => setSelected(new Set())}
+                className="font-mono text-[10px] uppercase tracking-[0.12em] text-muted-foreground"
+              >
+                clear
+              </Button>
+              {bulkDeleting ? (
+                <span className="font-mono text-[10px] uppercase tracking-[0.12em] text-muted-foreground">
+                  deleting…
+                </span>
+              ) : (
+                <InlineConfirm
+                  confirming={confirmBulk}
+                  onAskRemove={() => setConfirmBulk(true)}
+                  onCancel={() => setConfirmBulk(false)}
+                  onConfirm={bulkDelete}
+                  triggerLabel={`delete ${selected.size}`}
+                />
+              )}
+            </div>
+          </div>
+        )}
+
         {/* Mobile: compact list */}
         <div className="sm:hidden divide-y divide-border/60">
           {loading ? (
@@ -242,29 +347,40 @@ export function PeersPage() {
             </div>
           ) : (
             filtered.map((p) => (
-              <button
+              <div
                 key={p.pubkey}
-                type="button"
-                onClick={() => setSelectedKey(p.pubkey)}
-                className="w-full px-4 py-2.5 flex items-center gap-3 text-left hover:bg-muted/40 transition-colors"
+                className="flex items-center gap-3 px-4 py-2.5 hover:bg-muted/40 transition-colors"
               >
-                <PeerAvatar name={p.name || "?"} size="sm" />
-                <div className="flex-1 min-w-0">
-                  <div className="flex items-center gap-2">
-                    <span className="font-medium text-sm truncate">
-                      {p.name || (
-                        <span className="text-muted-foreground italic">unknown</span>
-                      )}
-                    </span>
-                    <PeerTypePill type={p.type} />
+                <SelectBox
+                  checked={selected.has(p.pubkey)}
+                  onChange={() => toggleSelect(p.pubkey)}
+                  label={`Select ${p.name || "peer"}`}
+                />
+                <button
+                  type="button"
+                  onClick={() => selectPeer(p.pubkey)}
+                  className="flex flex-1 min-w-0 items-center gap-3 text-left"
+                >
+                  <PeerAvatar name={p.name || "?"} size="sm" />
+                  <div className="flex-1 min-w-0">
+                    <div className="flex items-center gap-2">
+                      <span className="font-medium text-sm truncate">
+                        {p.name || (
+                          <span className="text-muted-foreground italic">
+                            unknown
+                          </span>
+                        )}
+                      </span>
+                      <PeerTypePill type={p.type} />
+                    </div>
+                    <div className="flex items-center gap-3 mt-0.5 font-mono text-[10px] tabular-nums text-muted-foreground">
+                      <SignalStrength snr={p.snr} size="sm" />
+                      <HopsBadge peer={p} />
+                      <span>{timeAgo(p.lastSeen)}</span>
+                    </div>
                   </div>
-                  <div className="flex items-center gap-3 mt-0.5 font-mono text-[10px] tabular-nums text-muted-foreground">
-                    <SignalStrength snr={p.snr} size="sm" />
-                    <HopsBadge peer={p} />
-                    <span>{timeAgo(p.lastSeen)}</span>
-                  </div>
-                </div>
-              </button>
+                </button>
+              </div>
             ))
           )}
         </div>
@@ -273,6 +389,13 @@ export function PeersPage() {
         <Table className="hidden sm:table">
           <TableHeader>
             <TableRow className="border-border hover:bg-transparent">
+              <TableHead className="w-8">
+                <SelectBox
+                  checked={allFilteredSelected}
+                  onChange={toggleSelectAll}
+                  label="Select all peers"
+                />
+              </TableHead>
               <TableHead className="font-mono text-[10px] uppercase tracking-[0.12em]">
                 Name
               </TableHead>
@@ -297,6 +420,9 @@ export function PeersPage() {
             {loading ? (
               [...Array(6)].map((_, i) => (
                 <TableRow key={i} className="border-border/60">
+                  <TableCell>
+                    <Skeleton className="size-4 rounded-none" />
+                  </TableCell>
                   <TableCell>
                     <div className="flex items-center gap-2">
                       <Skeleton className="size-7 rounded-sm" />
@@ -323,7 +449,7 @@ export function PeersPage() {
             ) : filtered.length === 0 ? (
               <TableRow>
                 <TableCell
-                  colSpan={6}
+                  colSpan={7}
                   className="text-center py-16 text-sm text-muted-foreground/60"
                 >
                   {peers.length === 0 ? (
@@ -343,9 +469,16 @@ export function PeersPage() {
               filtered.map((p) => (
                 <TableRow
                   key={p.pubkey}
-                  onClick={() => setSelectedKey(p.pubkey)}
+                  onClick={() => selectPeer(p.pubkey)}
                   className="border-border/60 group cursor-pointer"
                 >
+                  <TableCell onClick={(e) => e.stopPropagation()}>
+                    <SelectBox
+                      checked={selected.has(p.pubkey)}
+                      onChange={() => toggleSelect(p.pubkey)}
+                      label={`Select ${p.name || "peer"}`}
+                    />
+                  </TableCell>
                   <TableCell className="font-medium">
                     <div className="flex items-center gap-2.5">
                       <PeerAvatar name={p.name || "?"} size="sm" />
@@ -382,14 +515,7 @@ export function PeersPage() {
         </Table>
       </section>
 
-      <PeerDetailSheet
-        peer={selected}
-        open={!!selectedKey}
-        onOpenChange={(o) => {
-          if (!o) setSelectedKey(null);
-        }}
-        companions={companions}
-      />
+      <PeerDetailSheet {...sheetProps} companions={companions} />
     </div>
   );
 }

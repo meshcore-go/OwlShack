@@ -2,14 +2,20 @@ import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { useSearchParams } from "react-router-dom";
 import L from "leaflet";
 import { MapPin, RefreshCw } from "lucide-react";
+import { toast } from "sonner";
 import { useWebSocket } from "@/hooks/useWebSocket";
 import { useApiList } from "@/hooks/useApiList";
+import { useCompanions } from "@/hooks/useCompanions";
+import { usePeerDetailSheet } from "@/hooks/usePeerDetailSheet";
+import { isPeerDelete } from "@/lib/peerWs";
 import { Button } from "@/components/ui/button";
 import { LoadErrorAlert } from "@/components/LoadErrorAlert";
 import { PageHeader } from "@/components/PageHeader";
 import { ConnectionPill, PEER_TYPE_HEX } from "@/components/StatusIndicator";
+import { InlineConfirm } from "@/components/InlineConfirm";
+import { PeerDetailSheet } from "@/components/PeerDetailSheet";
+import { deletePeers, deletedPeersMessage } from "@/lib/peerApi";
 import { themeTileLayer, useThemeTiles } from "@/lib/leaflet";
-import { timeAgo } from "@/lib/format";
 import { cn } from "@/lib/utils";
 
 interface Peer {
@@ -29,29 +35,6 @@ function isPeer(value: unknown): value is Peer {
   if (!value || typeof value !== "object") return false;
   const v = value as Record<string, unknown>;
   return typeof v.pubkey === "string" && typeof v.name === "string";
-}
-
-function escapeHtml(s: string): string {
-  return s
-    .replace(/&/g, "&amp;")
-    .replace(/</g, "&lt;")
-    .replace(/>/g, "&gt;")
-    .replace(/"/g, "&quot;")
-    .replace(/'/g, "&#39;");
-}
-
-function buildPopupHtml(p: Peer): string {
-  const name = escapeHtml(p.name || "unknown");
-  const type = escapeHtml(p.type || "NONE");
-  const snr = p.snr == null ? "—" : `${p.snr.toFixed(1)}dB`;
-  return `
-    <div style="font-family: var(--font-sans); min-width: 160px;">
-      <div style="font-weight: 600; font-size: 13px; margin-bottom: 4px;">${name}</div>
-      <div style="display:flex; gap:6px; font-family: var(--font-mono); font-size: 10px; text-transform: uppercase; letter-spacing: 0.08em; color: var(--muted-foreground);">
-        <span>${type}</span><span>·</span><span>${snr}</span><span>·</span><span>${escapeHtml(timeAgo(p.lastSeen))}</span>
-      </div>
-    </div>
-  `;
 }
 
 function dotIcon(color: string): L.DivIcon {
@@ -95,6 +78,8 @@ export function MapPage() {
   } = useApiList<Peer>("/api/peers", "Failed to load peers");
   const peers = items ?? NO_PEERS;
   const [hidden, setHidden] = useState<Set<string>>(new Set());
+  const companions = useCompanions();
+  const { selectPeer, sheetProps } = usePeerDetailSheet(peers);
 
   const [searchParams] = useSearchParams();
   const focus = useMemo(() => {
@@ -115,6 +100,13 @@ export function MapPage() {
   const handleMessage = useCallback(
     (topic: string, data: unknown) => {
       if (topic !== "peers") return;
+      if (isPeerDelete(data)) {
+        const gone = new Set(data.pubkeys.map((k) => k.toLowerCase()));
+        setPeers((prev) =>
+          (prev ?? []).filter((p) => !gone.has(p.pubkey.toLowerCase())),
+        );
+        return;
+      }
       if (!isPeer(data)) return;
       setPeers((prev) => {
         const arr = prev ?? [];
@@ -195,6 +187,24 @@ export function MapPage() {
     [located, hidden],
   );
 
+  const [confirmClear, setConfirmClear] = useState(false);
+  const [clearing, setClearing] = useState(false);
+
+  // Deletes exactly what's currently plotted (located + passing the type
+  // filter), so the type pills double as a scoping tool for cleanup.
+  const deleteShown = useCallback(async () => {
+    setClearing(true);
+    try {
+      const result = await deletePeers(visible.map((p) => p.pubkey));
+      toast.success(deletedPeersMessage(result));
+      setConfirmClear(false);
+    } catch (e) {
+      toast.error(`Delete failed: ${e instanceof Error ? e.message : "error"}`);
+    } finally {
+      setClearing(false);
+    }
+  }, [visible]);
+
   // Sync markers with visible peers
   useEffect(() => {
     const map = mapRef.current;
@@ -221,11 +231,11 @@ export function MapPage() {
         existing.setLatLng([lat, lon]);
         // setIcon rebuilds the marker's DOM element — skip when unchanged.
         if (existing.getIcon() !== icon) existing.setIcon(icon);
-        existing.setPopupContent(buildPopupHtml(p));
       } else {
-        const marker = L.marker([lat, lon], { icon })
-          .addTo(map)
-          .bindPopup(buildPopupHtml(p));
+        const marker = L.marker([lat, lon], { icon }).addTo(map);
+        // Click opens the same detail sheet as the Peers page (pubkey is
+        // stable for a marker, so the closure never goes stale).
+        marker.on("click", () => selectPeer(p.pubkey));
         markers.set(p.pubkey, marker);
       }
     }
@@ -313,12 +323,28 @@ export function MapPage() {
               </button>
             );
           })}
-          <div className="ml-auto flex items-center gap-1.5 font-mono text-[10px] uppercase tracking-[0.12em] text-muted-foreground">
-            <MapPin className="size-3" />
-            <span className="tabular-nums">
-              {visible.length}/{located.length}
+          <div className="ml-auto flex items-center gap-3">
+            {visible.length > 0 &&
+              (clearing ? (
+                <span className="font-mono text-[10px] uppercase tracking-[0.12em] text-muted-foreground">
+                  deleting…
+                </span>
+              ) : (
+                <InlineConfirm
+                  confirming={confirmClear}
+                  onAskRemove={() => setConfirmClear(true)}
+                  onCancel={() => setConfirmClear(false)}
+                  onConfirm={deleteShown}
+                  triggerLabel={`delete ${visible.length} shown`}
+                />
+              ))}
+            <span className="flex items-center gap-1.5 font-mono text-[10px] uppercase tracking-[0.12em] text-muted-foreground">
+              <MapPin className="size-3" />
+              <span className="tabular-nums">
+                {visible.length}/{located.length}
+              </span>
+              <span className="text-muted-foreground/60">located</span>
             </span>
-            <span className="text-muted-foreground/60">located</span>
           </div>
         </div>
 
@@ -327,6 +353,8 @@ export function MapPage() {
           className="h-[calc(100vh-260px)] min-h-[420px] w-full"
         />
       </section>
+
+      <PeerDetailSheet {...sheetProps} companions={companions} />
     </div>
   );
 }

@@ -668,6 +668,9 @@ func (c *Companion) handleDMPathReturn(pkt *meshcore.Packet) {
 			hs := uint8(pathHashSize)
 			c.store.WriteAsync(func() {
 				_ = c.store.Peers.UpdateOutPath(ct.PeerPubKey, returnPath, hs)
+				// The contact owns its path, scoped to this companion — DMs route
+				// from it. Companions never share a route to a peer.
+				_ = c.store.Contacts.UpdateOutPath(c.cfg.ID, ct.PeerPubKey, returnPath, hs)
 			})
 		}
 
@@ -744,6 +747,19 @@ func (c *Companion) registerPacketHandlers() {
 			if err := c.store.Peers.Upsert(p); err != nil {
 				c.log.Error("failed to persist peer", "error", err)
 				return
+			}
+
+			// Keep any saved contact's cached record current. Contacts own their
+			// identity/location/feat/last-seen now (decoupled from
+			// discovered_peers), so this is what refreshes them on re-advert.
+			// Location only updates when the advert carries one ("advert wins"
+			// over a hand-set location, but a no-GPS advert leaves it alone).
+			hasLoc := p.Lat != 0 || p.Lon != 0
+			if err := c.store.Contacts.RefreshFromAdvert(
+				p.PubKey, appData.Name, appData.Type,
+				p.Lat, p.Lon, p.Feat1, p.Feat2, p.LastSeen, p.LastAdvertTS, hasLoc,
+			); err != nil {
+				c.log.Error("failed to refresh contact from advert", "error", err)
 			}
 
 			c.log.Debug("peer persisted",
@@ -1281,9 +1297,22 @@ func (c *Companion) SendContactMessage(pubkeyHex, text string) error {
 		return fmt.Errorf("invalid pubkey: %w", err)
 	}
 
-	peer := c.node.Peers().Lookup(peerIdentity.PublicKey())
-	if peer == nil {
-		return fmt.Errorf("peer not found in peer table")
+	// Route from the contact's own stored path (per companion). Fall back to the
+	// in-memory peer table for a non-contact send, then to flood (nil path) when
+	// neither knows a route — SendTextMessage treats a nil path as a flood, so a
+	// contact whose discovered peer was swept still sends fine.
+	var outPath []byte
+	var hashSize uint8
+	if ct, cerr := c.store.Contacts.Get(c.cfg.ID, pubkeyBytes); cerr == nil && ct != nil {
+		outPath, hashSize = ct.OutPath, ct.OutPathHashSize
+	} else if peer := c.node.Peers().Lookup(peerIdentity.PublicKey()); peer != nil {
+		outPath, hashSize = peer.OutPath, peer.OutPathHashSize
+	}
+	// A direct-routed packet needs a real hop-hash width; a stored 0 (e.g. a
+	// migrated row) would otherwise frame the path wrong. Empty/nil path floods,
+	// where the size is irrelevant.
+	if len(outPath) > 0 && hashSize == 0 {
+		hashSize = meshcore.PathHashSize
 	}
 
 	channelKey := "dm:" + pubkeyHex
@@ -1325,8 +1354,8 @@ func (c *Companion) SendContactMessage(pubkeyHex, text string) error {
 		[]byte(text),
 		0,
 		time.Now(),
-		peer.OutPath,
-		meshcore.PathHashSize,
+		outPath,
+		hashSize,
 		5*time.Second,
 		func(result node.DMSendResult) {
 			var status string

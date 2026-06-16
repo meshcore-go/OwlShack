@@ -1,7 +1,6 @@
 import { useCallback, useEffect, useMemo, useState } from "react";
 import { Link, useParams } from "react-router-dom";
 import {
-  ArrowLeft,
   CircleDashed,
   Crosshair,
   KeyRound,
@@ -10,6 +9,7 @@ import {
   Search,
 } from "lucide-react";
 import { toast } from "sonner";
+import { BackLink } from "@/components/BackLink";
 import { Button } from "@/components/ui/button";
 import {
   Dialog,
@@ -188,13 +188,10 @@ export function RepeatersListPage() {
   return (
     <div className="space-y-4">
       <div className="flex flex-col gap-3">
-        <Link
+        <BackLink
           to={`/companions/${encodeURIComponent(companion)}`}
-          className="inline-flex items-center gap-1.5 font-mono text-[10px] uppercase tracking-[0.14em] text-muted-foreground hover:text-primary transition-colors w-fit"
-        >
-          <ArrowLeft className="size-3" />
-          {companion || "companion"}
-        </Link>
+          label={companion || "companion"}
+        />
 
         <PageHeader
           title="Repeaters"

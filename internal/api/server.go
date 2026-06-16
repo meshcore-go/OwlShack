@@ -78,6 +78,7 @@ func NewServer(st *store.Store, assets fs.FS, log *slog.Logger) *Server {
 
 func (s *Server) routes() {
 	s.mux.HandleFunc("GET /api/peers", s.handleListPeers)
+	s.mux.HandleFunc("POST /api/peers/delete", s.handleBulkDeletePeers)
 	s.mux.HandleFunc("DELETE /api/peers/{pubkey}", s.handleDeletePeer)
 	s.mux.HandleFunc("GET /api/packets", s.handleListPackets)
 	s.mux.HandleFunc("GET /api/companions", s.handleListCompanions)
@@ -86,6 +87,7 @@ func (s *Server) routes() {
 	s.mux.HandleFunc("POST /api/companions/{name}/contacts", s.handleAddContact)
 	s.mux.HandleFunc("DELETE /api/companions/{name}/contacts/{pubkey}", s.handleDeleteContact)
 	s.mux.HandleFunc("PATCH /api/companions/{name}/contacts/{pubkey}", s.handleUpdateContactMetadata)
+	s.mux.HandleFunc("PUT /api/companions/{name}/contacts/{pubkey}/location", s.handleSetContactLocation)
 	s.mux.HandleFunc("GET /api/companions/{name}/contacts/{pubkey}/telemetry", s.handleContactTelemetry)
 	// Per-resource config REST (reads; scoped + secret-redacted).
 	s.mux.HandleFunc("GET /api/config/settings", s.handleGetSettings)
@@ -208,6 +210,15 @@ func (s *Server) companionProvider() CompanionProvider {
 func (s *Server) ChannelLookup() ChannelLookup {
 	if b := s.backendRef(); b != nil {
 		return b.ChannelByHash
+	}
+	return nil
+}
+
+// peerRemover returns the in-memory peer eviction op, or nil when no backend is
+// wired (the DB delete still runs; in-memory cleanup is best-effort).
+func (s *Server) peerRemover() func([][]byte) {
+	if b := s.backendRef(); b != nil {
+		return b.RemovePeers
 	}
 	return nil
 }

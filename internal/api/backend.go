@@ -15,6 +15,11 @@ type Backend interface {
 	// across every companion. Returns nil for an unknown hash.
 	ChannelByHash(hash byte) *ChannelInfo
 
+	// RemovePeers drops the given peers from every companion's in-memory peer
+	// table, so a deleted discovered peer doesn't linger in routing/counts until
+	// the next restart. The DB row is deleted separately by the handler.
+	RemovePeers(pubkeys [][]byte)
+
 	// Companion returns the channel/DM senders for a named companion.
 	Companion(name string) (MessageSender, DMSender, bool)
 

@@ -73,6 +73,22 @@ func (b *backend) ChannelByHash(hash byte) *api.ChannelInfo {
 	return nil
 }
 
+// RemovePeers evicts the given peers from every companion's in-memory peer
+// table so a deleted discovered peer is gone from routing/counts immediately,
+// not just from the DB.
+func (b *backend) RemovePeers(pubkeys [][]byte) {
+	for _, pk := range pubkeys {
+		if len(pk) != 32 {
+			continue
+		}
+		var key [32]byte
+		copy(key[:], pk)
+		for _, c := range b.companions {
+			c.Node().Peers().Remove(key)
+		}
+	}
+}
+
 func (b *backend) Companion(name string) (api.MessageSender, api.DMSender, bool) {
 	c, ok := b.find(name)
 	if !ok {
