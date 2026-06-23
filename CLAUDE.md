@@ -479,7 +479,7 @@ Aesthetic: **operator console / radio shack utility**. Phosphor-green primary on
 
 ### Typography
 
-- Body: **Inter**. Mono: **JetBrains Mono**. Both preconnected in [`index.html`](./web/frontend/index.html).
+- Body: **Inter**. Mono: **JetBrains Mono**. **Self-hosted, never the Google Fonts CDN** — this is an offline-first, self-contained binary, so fonts must not be fetched over the network. The latin variable-weight woff2 files live in [`web/frontend/public/fonts/`](./web/frontend/public/fonts/) (embedded into the binary) and are declared via `@font-face` at the top of [`index.css`](./web/frontend/src/index.css). Don't reintroduce `<link>`s to `fonts.googleapis.com`/`fonts.gstatic.com`. To add a weight/family, vendor its woff2 here and add an `@font-face`.
 - All labels, eyebrows, badges, buttons: mono uppercase, `tracking-[0.08em]`–`tracking-[0.14em]`.
 - Numerics get `tabular-nums`.
 

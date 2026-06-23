@@ -1,6 +1,24 @@
 @import "tailwindcss";
 @import "tw-animate-css";
 
+/* Self-hosted fonts (latin, variable weight axis) — served from the embedded
+   binary, never the Google Fonts CDN. This is an offline-first, self-contained
+   app, so it must not fetch fonts over the network. */
+@font-face {
+  font-family: "Inter";
+  font-style: normal;
+  font-display: swap;
+  font-weight: 100 900;
+  src: url("/fonts/inter-latin-wght.woff2") format("woff2");
+}
+@font-face {
+  font-family: "JetBrains Mono";
+  font-style: normal;
+  font-display: swap;
+  font-weight: 100 900;
+  src: url("/fonts/jetbrains-mono-latin-wght.woff2") format("woff2");
+}
+
 @custom-variant dark (&:is(.dark *));
 
 /* =====================================================================
