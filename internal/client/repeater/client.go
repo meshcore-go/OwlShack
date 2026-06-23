@@ -152,6 +152,30 @@ func (rm *Client) persistOutPath(pubkey []byte, path []byte, hashSize uint8) {
 	})
 }
 
+// routeForPeer chooses the send route for a packet to peer, mirroring the
+// node.Peer OutPath contract:
+//   - nil           -> route unknown, FLOOD
+//   - []byte{}      -> direct neighbour (0 hops), RouteTypeDirect with empty path
+//   - []byte{...}   -> multi-hop, RouteTypeDirect along the stored path
+//
+// A node we can reach directly (including a 0-hop neighbour) must NOT be
+// flooded — flooding rebroadcasts across the whole mesh and pollutes it. Only a
+// genuinely unknown route (nil) floods. Returns the header route-type byte and
+// the encoded path-length byte (upper 2 bits = hashSize-1, lower 6 = hop count).
+func routeForPeer(peer *node.Peer) (routeType byte, pathLen uint8) {
+	if peer == nil || peer.OutPath == nil {
+		return meshcore.RouteTypeFlood, 0
+	}
+	if len(peer.OutPath) == 0 {
+		return meshcore.RouteTypeDirect, 0 // direct neighbour, no hops to encode
+	}
+	hashSize := int(peer.OutPathHashSize)
+	if hashSize == 0 {
+		hashSize = int(meshcore.PathHashSize)
+	}
+	return meshcore.RouteTypeDirect, uint8(hashSize-1)<<6 | uint8(len(peer.OutPath)/hashSize)
+}
+
 func (rm *Client) Session(pubkeyHex string) *Session {
 	rm.mu.Lock()
 	defer rm.mu.Unlock()
@@ -345,16 +369,7 @@ func (rm *Client) sendLogin(pubkeyHex, password string, roomSyncSince *uint32, t
 		rm.loginMu.Unlock()
 	}()
 
-	routeType := meshcore.RouteTypeFlood
-	var pathLen uint8
-	if len(peer.OutPath) > 0 {
-		routeType = meshcore.RouteTypeDirect
-		hashSize := int(peer.OutPathHashSize)
-		if hashSize == 0 {
-			hashSize = int(meshcore.PathHashSize)
-		}
-		pathLen = uint8(hashSize-1)<<6 | uint8(len(peer.OutPath)/hashSize)
-	}
+	routeType, pathLen := routeForPeer(peer)
 
 	pkt := &meshcore.Packet{
 		Header:     meshcore.MakeHeader(routeType, meshcore.PayloadTypeAnonReq, 0),
@@ -479,16 +494,7 @@ func (rm *Client) roundtripRequest(peerPub [32]byte, peer *node.Peer, sharedSecr
 		rm.pendingMu.Unlock()
 	}()
 
-	routeType := meshcore.RouteTypeFlood
-	var pathLen uint8
-	if len(peer.OutPath) > 0 {
-		routeType = meshcore.RouteTypeDirect
-		hashSize := int(peer.OutPathHashSize)
-		if hashSize == 0 {
-			hashSize = int(meshcore.PathHashSize)
-		}
-		pathLen = uint8(hashSize-1)<<6 | uint8(len(peer.OutPath)/hashSize)
-	}
+	routeType, pathLen := routeForPeer(peer)
 
 	pkt := &meshcore.Packet{
 		Header:     meshcore.MakeHeader(routeType, meshcore.PayloadTypeReq, 0),
@@ -699,16 +705,7 @@ func (rm *Client) SendCLI(pubkeyHex, command string, timeout time.Duration) (str
 		return "", fmt.Errorf("encoding text message: %w", err)
 	}
 
-	routeType := meshcore.RouteTypeFlood
-	var pathLen uint8
-	if len(peer.OutPath) > 0 {
-		routeType = meshcore.RouteTypeDirect
-		hashSize := int(peer.OutPathHashSize)
-		if hashSize == 0 {
-			hashSize = int(meshcore.PathHashSize)
-		}
-		pathLen = uint8(hashSize-1)<<6 | uint8(len(peer.OutPath)/hashSize)
-	}
+	routeType, pathLen := routeForPeer(peer)
 
 	pkt := &meshcore.Packet{
 		Header:     meshcore.MakeHeader(routeType, meshcore.PayloadTypeTxtMsg, 0),

@@ -490,18 +490,20 @@ func (c *Companion) sendDMAck(pkt *meshcore.Packet, senderPubKey []byte, sharedS
 			c.log.Debug("failed to send DM ACK (path return)", "error", err)
 		}
 	} else {
-		// Direct-routed: send ACK via known out_path or flood
+		// Send the ACK along the peer's known out_path; flood only when the route
+		// is genuinely unknown (nil out_path). A direct neighbour is stored as an
+		// empty but non-nil path, so route it direct with 0 hops rather than
+		// flooding a node we can reach directly (which would pollute the mesh).
 		ackPkt := &meshcore.Packet{
 			Header:  meshcore.MakeHeader(meshcore.RouteTypeFlood, meshcore.PayloadTypeAck, 0),
 			Payload: ackPayload,
 		}
 
-		// Try to use the peer's known out_path for direct send
 		if len(senderPubKey) == 32 {
 			var pubkey [32]byte
 			copy(pubkey[:], senderPubKey)
 			peer := c.node.Peers().Lookup(pubkey)
-			if peer != nil && len(peer.OutPath) > 0 {
+			if peer != nil && peer.OutPath != nil {
 				ackPkt.Header = meshcore.MakeHeader(meshcore.RouteTypeDirect, meshcore.PayloadTypeAck, 0)
 				ackPkt.Path = peer.OutPath
 				ackPkt.PathLength = byte(len(peer.OutPath) / int(meshcore.PathHashSize))
