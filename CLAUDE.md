@@ -733,7 +733,11 @@ Messages have a `status` column: `NULL` (rx/legacy), `"sending"`, `"delivered"`,
 - Don't add per-component `cursor` classes; rely on the global rule in `index.css`.
 - Don't write `.message` wrapper into WS message handling.
 - Don't change the `loggedIn` derivation in `RepeaterDetailPage.tsx` without coordinated firmware/API changes.
-- Prefer Tailwind's built-in utilities over arbitrary-value brackets where an exact equivalent exists (`tracking-widest` not `tracking-[0.1em]`, `min-w-44` not `min-w-[11rem]`). A Tailwind v4 codemod normalized the existing files to this; keep new code consistent with it. Reach for bracket notation only when no built-in matches.
+- **Use canonical Tailwind classes; reach for arbitrary `[...]` brackets only when no built-in matches.** A v4 codemod normalized the existing files to this. These surface as IntelliSense `suggestCanonicalClasses` warnings, which are **editor-only — the build does NOT catch them**, so it's on the author (you) to write them canonically the first time. The conversions that always apply:
+  - **Spacing/sizing scale** — 1 step = `0.25rem` = `4px`, so a px value that lands on a step has a canonical form: `w-[2px]`→`w-0.5`, `gap-[8px]`→`gap-2`, `w-[44px]`→`w-11`, `min-w-[11rem]`→`min-w-44`. Applies to `w/h/size/min-*/max-*/p*/m*/gap*/space-*/inset*/top/right/bottom/left/start/end/translate-*/basis`. (Valid steps: 0, .5, 1, 1.5, 2, 2.5, 3, 3.5, 4, then integers 5–12, then 14, 16, 20, 24, …, 96.)
+  - **CSS-var shorthand (v4)** — `prop-[var(--x)]`→`prop-(--x)`; negated `prop-[calc(var(--x)*-1)]`→`-prop-(--x)` (e.g. `left-[calc(var(--sidebar-width)*-1)]`→`-left-(--sidebar-width)`).
+  - **Named utilities** — `tracking-widest` not `tracking-[0.1em]`, `ring-3` not `ring-[3px]`.
+  - **NOT canonicalizable — leave as brackets** (no built-in equivalent): custom px font sizes (`text-[10px]`, `text-[11px]`), off-scale tracking (`tracking-[0.12em]`, `tracking-[0.08em]`), and `data-[…]`/`group-data-[…]`/`peer-data-[…]`/`has-[…]` — those are variant selectors, not arbitrary values. Don't "fix" them.
 - Don't auto-refresh on tab switch — that spams the mesh radio. Use the fetch-once pattern.
 - Add-contact modal (`AddContactDialog`) is manual-only (Type/Name/Pubkey) — add a *discovered* peer to contacts from the Peers screen (`PeerDetailSheet`), not via a peer-picker in the modal.
 
