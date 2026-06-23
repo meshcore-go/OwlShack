@@ -25,12 +25,17 @@ import {
   CornerUpLeft,
   ExternalLink,
   Hash,
+  Antenna,
   Loader2,
   LogIn,
+  Megaphone,
   MessageSquare,
+  MoreHorizontal,
   MoreVertical,
+  Plus,
   Radar,
   Radio,
+  RadioTower,
   Reply,
   RotateCw,
   Search,
@@ -70,6 +75,7 @@ import {
   DropdownMenu,
   DropdownMenuContent,
   DropdownMenuItem,
+  DropdownMenuSeparator,
   DropdownMenuTrigger,
 } from "@/components/ui/dropdown-menu";
 import {
@@ -79,9 +85,12 @@ import {
 } from "@/components/ui/popover";
 import { ChatHeaderMenu } from "@/components/ChatHeaderMenu";
 import { CoordLink } from "@/components/CoordLink";
+import { AddChannelDialog } from "@/components/AddChannelDialog";
+import { postChannel } from "@/lib/channelsApi";
 import { ComposerAttachMenu } from "@/components/ComposerAttachMenu";
 import { EmojiButton, EmojiMartPanel, EmojiPicker } from "@/components/EmojiPicker";
 import { useEmojiAutocomplete } from "@/hooks/useEmojiAutocomplete";
+import { useMentionAutocomplete } from "@/hooks/useMentionAutocomplete";
 import { useIsMobile } from "@/hooks/use-mobile";
 import {
   AddContactDialog,
@@ -123,6 +132,15 @@ interface Message {
   hops?: number | null;
   pathHashSize?: number | null;
   status?: string | null;
+}
+
+// Context a #hashtag chip needs to resolve itself. `targets` maps a channel's
+// hash-stripped, lowercased name to its real configured name, so a "#weather"
+// reference matches a channel stored as "#weather", "weather" or "Weather".
+interface ChannelLinkCtx {
+  targets: Map<string, string>;
+  onOpen: (realName: string) => void;
+  onAdd: (bareName: string) => void;
 }
 
 // GET /rooms/{pubkey}/session returns {loggedIn:false} or the bare session
@@ -228,12 +246,18 @@ const MENTION_RE = /@\[([^\]]+)\]/g;
 //             surrounding (?<![\d.]) / (?![\d.]) guards stop it matching the
 //             middle of a longer number.
 //  - mention: @[name]
+//  - channel: a #hashtag channel reference. The lookbehind keeps it from
+//             matching mid-word ("abc#def") or a URL fragment (URLs are
+//             tokenized first and swallow their own "#frag"). Sigil stripped at
+//             render; the token must start with a word char so "# heading" and
+//             a bare "#" don't match.
 const TOKEN_RE = new RegExp(
   [
     "(?<contact><[0-9a-fA-F]{64}:[1-4]:[^>]*>)",
     "(?<url>https?:\\/\\/[^\\s<>]+)",
     "(?<coord>(?<![\\d.])-?\\d{1,3}\\.\\d+\\s*,\\s*-?\\d{1,3}\\.\\d+(?![\\d.]))",
     "(?<mention>@\\[[^\\]]+\\])",
+    "(?<channel>(?<![\\w#])#\\w[\\w-]*)",
   ].join("|"),
   "g",
 );
@@ -246,6 +270,16 @@ const CONTACT_TYPE_BY_INT: Record<string, ContactType> = {
 };
 
 const COORD_RE = /^(-?\d{1,3}\.\d+)\s*,\s*(-?\d{1,3}\.\d+)$/;
+
+// Key for matching a typed #hashtag to a configured channel: drop a single
+// leading '#' and lowercase, so "#weather", "weather" and "Weather" all resolve
+// to the same chip target. This is an intentionally case-insensitive *UI*
+// heuristic — NOT the backend's identity: the firmware keys a channel's PSK off
+// the exact name (`#Weather` ≠ `#weather`), which is why AddChannelDialog's
+// duplicate guard stays case-sensitive.
+function channelKey(name: string): string {
+  return name.replace(/^#/, "").toLowerCase();
+}
 
 // Parse + range-validate a "lat,lon" token. Returns null if out of range so
 // the caller leaves it as plain text rather than a bogus map link.
@@ -268,6 +302,171 @@ function splitTrailingPunct(url: string): { url: string; trailing: string } {
   return { url: url.slice(0, m.index), trailing: url.slice(m.index) };
 }
 const SORT_KEY = "companion-sort";
+
+// Shared style for the page-header action chips (contacts/channels/repeaters
+// links + the advert trigger), so the one styling stays in a single place.
+const HEADER_ACTION_CLASS =
+  "inline-flex items-center font-mono text-[10px] uppercase tracking-[0.12em] text-muted-foreground hover:text-primary px-2.5 py-1.5 sm:py-0.5 border border-border";
+
+// The companion's management/nav targets — sub-pages reachable from the chat
+// header. Rendered as inline chips on desktop and as menu items in the mobile
+// overflow menu (see CompanionActions).
+const COMPANION_NAV = [
+  { seg: "contacts", label: "contacts", Icon: Users },
+  { seg: "channels", label: "channels", Icon: Hash },
+  { seg: "repeaters", label: "repeaters", Icon: Radio },
+] as const;
+
+type AdvertMode = "flood" | "zerohop";
+
+// Self-advert POST, shared by the desktop advert chip and the mobile overflow
+// menu. Flood = mesh-wide (repeaters rebroadcast); zero-hop = direct neighbours
+// only. Posts to /api/companions/{name}/advert with {mode}.
+function useAdvert(companion: string) {
+  const [busy, setBusy] = useState<AdvertMode | null>(null);
+  const send = useCallback(
+    async (mode: AdvertMode) => {
+      setBusy(mode);
+      try {
+        const r = await fetch(
+          `/api/companions/${encodeURIComponent(companion)}/advert`,
+          {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({ mode }),
+          },
+        );
+        if (!r.ok) {
+          const e = await r.json().catch(() => ({}));
+          throw new Error(e.error || `HTTP ${r.status}`);
+        }
+        toast.success(
+          mode === "flood" ? "Flood advert sent" : "Zero-hop advert sent",
+        );
+      } catch (e) {
+        toast.error(`Advert failed: ${e instanceof Error ? e.message : "error"}`);
+      } finally {
+        setBusy(null);
+      }
+    },
+    [companion],
+  );
+  return { busy, send };
+}
+
+// The two advert choices as dropdown items, reused by the desktop advert chip
+// and the mobile overflow menu.
+function AdvertItems({
+  busy,
+  onSend,
+}: {
+  busy: AdvertMode | null;
+  onSend: (mode: AdvertMode) => void;
+}) {
+  return (
+    <>
+      <DropdownMenuItem
+        onClick={() => onSend("flood")}
+        disabled={busy !== null}
+        className="gap-2"
+      >
+        <RadioTower className="size-3.5 text-muted-foreground" />
+        <div className="flex flex-col">
+          <span className="font-mono text-xs">Flood advert</span>
+          <span className="text-[10px] text-muted-foreground">
+            mesh-wide · rebroadcast
+          </span>
+        </div>
+      </DropdownMenuItem>
+      <DropdownMenuItem
+        onClick={() => onSend("zerohop")}
+        disabled={busy !== null}
+        className="gap-2"
+      >
+        <Antenna className="size-3.5 text-muted-foreground" />
+        <div className="flex flex-col">
+          <span className="font-mono text-xs">Zero-hop advert</span>
+          <span className="text-[10px] text-muted-foreground">
+            direct neighbours only
+          </span>
+        </div>
+      </DropdownMenuItem>
+    </>
+  );
+}
+
+// Companion header actions. Desktop: inline chips (contacts/channels/repeaters
+// + an Advert dropdown). Mobile: a single "⋯" button collapsing all of them
+// into one menu, so the header stays one tidy row above the threads list
+// instead of wrapping or clipping.
+function CompanionActions({ companion }: { companion: string }) {
+  const { busy, send } = useAdvert(companion);
+  const path = (seg: string) =>
+    `/companions/${encodeURIComponent(companion)}/${seg}`;
+
+  return (
+    <>
+      <div className="hidden sm:flex items-center gap-2">
+        {COMPANION_NAV.map(({ seg, label, Icon }) => (
+          <Link key={seg} to={path(seg)} className={HEADER_ACTION_CLASS}>
+            <Icon className="size-3 mr-1.5" /> {label}
+          </Link>
+        ))}
+        <DropdownMenu>
+          <DropdownMenuTrigger asChild>
+            <button
+              type="button"
+              disabled={busy !== null}
+              className={cn(HEADER_ACTION_CLASS, "disabled:opacity-50")}
+            >
+              {busy ? (
+                <Loader2 className="size-3 mr-1.5 animate-spin" />
+              ) : (
+                <Megaphone className="size-3 mr-1.5" />
+              )}
+              advert
+            </button>
+          </DropdownMenuTrigger>
+          <DropdownMenuContent
+            align="end"
+            className="rounded-none border-border w-56"
+          >
+            <AdvertItems busy={busy} onSend={send} />
+          </DropdownMenuContent>
+        </DropdownMenu>
+      </div>
+
+      <DropdownMenu>
+        <DropdownMenuTrigger asChild>
+          <button
+            type="button"
+            aria-label="Companion actions"
+            className={cn(HEADER_ACTION_CLASS, "sm:hidden")}
+          >
+            <MoreHorizontal className="size-4" />
+          </button>
+        </DropdownMenuTrigger>
+        <DropdownMenuContent
+          align="end"
+          className="rounded-none border-border w-56"
+        >
+          {COMPANION_NAV.map(({ seg, label, Icon }) => (
+            <DropdownMenuItem key={seg} asChild className="gap-2">
+              <Link to={path(seg)}>
+                <Icon className="size-3.5 text-muted-foreground" />
+                <span className="font-mono text-xs uppercase tracking-[0.12em]">
+                  {label}
+                </span>
+              </Link>
+            </DropdownMenuItem>
+          ))}
+          <DropdownMenuSeparator />
+          <AdvertItems busy={busy} onSend={send} />
+        </DropdownMenuContent>
+      </DropdownMenu>
+    </>
+  );
+}
 
 export function CompanionDetailPage() {
   const { name } = useParams<{ name: string }>();
@@ -309,6 +508,8 @@ export function CompanionDetailPage() {
   const [addContactOpen, setAddContactOpen] = useState(false);
   const [addContactPrefill, setAddContactPrefill] =
     useState<ContactPrefill | null>(null);
+  const [addChannelOpen, setAddChannelOpen] = useState(false);
+  const [addChannelPrefill, setAddChannelPrefill] = useState("");
 
   const messagesEndRef = useRef<HTMLDivElement>(null);
   const composerRef = useRef<HTMLTextAreaElement>(null);
@@ -364,6 +565,41 @@ export function CompanionDetailPage() {
     };
   }, [decodedName, roomPubkey]);
 
+  // Mention autocomplete (channels + rooms only — a 1:1 DM has nobody else to
+  // mention). The /participants endpoint gives the full historical rx-sender
+  // list for the conversation; we merge in senders from currently-loaded
+  // messages too so anyone who posts mid-session shows up without a refetch.
+  const mentionEnabled = !!activeConversation && (!isContact || isRoom);
+  const convoId = activeConversation?.id ?? null;
+  const [fetchedParticipants, setFetchedParticipants] = useState<string[]>([]);
+
+  useEffect(() => {
+    setFetchedParticipants([]);
+    if (!mentionEnabled || !convoId || !decodedName) return;
+    let cancelled = false;
+    fetch(
+      `/api/companions/${encodeURIComponent(decodedName)}/conversations/${encodeURIComponent(convoId)}/participants`,
+    )
+      .then((r) => (r.ok ? r.json() : []))
+      .then((d: string[]) => {
+        if (!cancelled) setFetchedParticipants(d || []);
+      })
+      .catch(() => {});
+    return () => {
+      cancelled = true;
+    };
+  }, [mentionEnabled, convoId, decodedName]);
+
+  const mentionNames = useMemo(() => {
+    if (!mentionEnabled) return [];
+    const set = new Set(fetchedParticipants);
+    for (const m of messages) {
+      if (m.direction === "rx" && m.sender && m.sender !== decodedName)
+        set.add(m.sender);
+    }
+    return [...set].sort((a, b) => a.localeCompare(b));
+  }, [mentionEnabled, fetchedParticipants, messages, decodedName]);
+
   const roomLoggedIn =
     !!roomSession && roomSession.loggedIn !== false && !!roomSession.pubkeyHex;
   const roomReadOnly = roomLoggedIn && roomSession?.role === "read-only";
@@ -374,18 +610,24 @@ export function CompanionDetailPage() {
     }
   }, [sort]);
 
-  const loadConversations = useCallback(() => {
-    if (!decodedName) return;
+  const loadConversations = useCallback(async (): Promise<Conversation[]> => {
+    if (!decodedName) return [];
     setLoadingList(true);
     setListError(null);
-    fetch(`/api/companions/${encodeURIComponent(decodedName)}/conversations`)
-      .then((r) => {
-        if (!r.ok) throw new Error("conversations");
-        return r.json();
-      })
-      .then((data: Conversation[]) => setConversations(data || []))
-      .catch(() => setListError("Failed to load conversations"))
-      .finally(() => setLoadingList(false));
+    try {
+      const r = await fetch(
+        `/api/companions/${encodeURIComponent(decodedName)}/conversations`,
+      );
+      if (!r.ok) throw new Error("conversations");
+      const data: Conversation[] = (await r.json()) || [];
+      setConversations(data);
+      return data;
+    } catch {
+      setListError("Failed to load conversations");
+      return [];
+    } finally {
+      setLoadingList(false);
+    }
   }, [decodedName]);
 
   useEffect(() => {
@@ -421,6 +663,62 @@ export function CompanionDetailPage() {
     setAddContactPrefill(prefill);
     setAddContactOpen(true);
   }, []);
+
+  // POST a new channel subscription (driven by the Add Channel dialog from a
+  // #hashtag chip), then refresh the roster so the channel becomes navigable.
+  const addChannel = useCallback(
+    async (channelName: string, privateKey?: string) => {
+      try {
+        await postChannel(decodedName, channelName, privateKey);
+      } catch (e) {
+        toast.error(
+          `Failed to add channel: ${e instanceof Error ? e.message : "failed"}`,
+        );
+        return;
+      }
+      toast.success(`Channel "${channelName}" added`);
+      setAddChannelOpen(false);
+      // The firmware normalizes a public channel name (e.g. "ham" → "#ham"), so
+      // the stored channel may differ from what we submitted. Reload, then open
+      // the channel that actually landed — matched by hash-stripped key — rather
+      // than the raw submitted name, which would resolve to no thread.
+      const updated = await loadConversations();
+      const target = updated.find(
+        (c) =>
+          c.type === "channel" &&
+          channelKey(c.channel) === channelKey(channelName),
+      );
+      setSearchParams({ channel: target ? target.channel : channelName });
+    },
+    [decodedName, loadConversations, setSearchParams],
+  );
+
+  // The companion's configured channels as { name }. The conversation roster
+  // already includes every configured channel (seeded server-side), so this
+  // doubles as the Add Channel dialog's duplicate-name guard and the source for
+  // the #hashtag chip target map below.
+  const configuredChannels = useMemo(
+    () =>
+      conversations
+        .filter((c) => c.type === "channel")
+        .map((c) => ({ name: c.channel })),
+    [conversations],
+  );
+
+  // Resolves a #hashtag to a real configured channel, navigates to known ones,
+  // and routes unknown ones through the (pre-filled) Add Channel dialog.
+  const channelCtx = useMemo<ChannelLinkCtx>(() => {
+    const targets = new Map<string, string>();
+    for (const c of configuredChannels) targets.set(channelKey(c.name), c.name);
+    return {
+      targets,
+      onOpen: (realName) => setSearchParams({ channel: realName }),
+      onAdd: (bareName) => {
+        setAddChannelPrefill(bareName);
+        setAddChannelOpen(true);
+      },
+    };
+  }, [configuredChannels, setSearchParams]);
 
   // Pre-fill the composer from a ?compose= param (e.g. "Share in a message"
   // from the Peers screen), then strip the param so it isn't re-applied.
@@ -745,6 +1043,11 @@ export function CompanionDetailPage() {
     textareaRef: composerRef,
     setText: setComposer,
   });
+  const mentionAC = useMentionAutocomplete({
+    textareaRef: composerRef,
+    setText: setComposer,
+    names: mentionNames,
+  });
 
   const send = useCallback(async () => {
     if (!activeConversation || !composer.trim() || sending) return;
@@ -778,13 +1081,14 @@ export function CompanionDetailPage() {
 
   const onComposerKey = useCallback(
     (e: KeyboardEvent<HTMLTextAreaElement>) => {
+      if (mentionAC.handleKeyDown(e)) return;
       if (emojiAC.handleKeyDown(e)) return;
       if (e.key === "Enter" && !e.shiftKey) {
         e.preventDefault();
         send();
       }
     },
-    [emojiAC.handleKeyDown, send],
+    [mentionAC.handleKeyDown, emojiAC.handleKeyDown, send],
   );
 
   // focus=false keeps the caret without summoning the mobile keyboard (used by
@@ -979,28 +1283,7 @@ export function CompanionDetailPage() {
             </span>
           }
           trailing={<ConnectionPill connected={connected} />}
-          actions={
-            <>
-              <Link
-                to={`/companions/${encodeURIComponent(decodedName)}/contacts`}
-                className="inline-flex items-center font-mono text-[10px] uppercase tracking-[0.12em] text-muted-foreground hover:text-primary px-2.5 py-1.5 sm:py-0.5 border border-border"
-              >
-                <Users className="size-3 mr-1.5" /> contacts
-              </Link>
-              <Link
-                to={`/companions/${encodeURIComponent(decodedName)}/channels`}
-                className="inline-flex items-center font-mono text-[10px] uppercase tracking-[0.12em] text-muted-foreground hover:text-primary px-2.5 py-1.5 sm:py-0.5 border border-border"
-              >
-                <Hash className="size-3 mr-1.5" /> channels
-              </Link>
-              <Link
-                to={`/companions/${encodeURIComponent(decodedName)}/repeaters`}
-                className="inline-flex items-center font-mono text-[10px] uppercase tracking-[0.12em] text-muted-foreground hover:text-primary px-2.5 py-1.5 sm:py-0.5 border border-border"
-              >
-                <Radio className="size-3 mr-1.5" /> repeaters
-              </Link>
-            </>
-          }
+          actions={<CompanionActions companion={decodedName} />}
         />
       </div>
 
@@ -1206,6 +1489,7 @@ export function CompanionDetailPage() {
                       onReply={handleReply}
                       onRetry={handleRetry}
                       onAddContact={onAddContact}
+                      channelCtx={channelCtx}
                     />
                   ))
                 )}
@@ -1222,6 +1506,7 @@ export function CompanionDetailPage() {
               ) : (
               <div className="relative border-t border-border bg-card">
                 {emojiAC.dropdown}
+                {mentionAC.dropdown}
                 <div className="px-3 py-2 flex items-end gap-2">
                   <ComposerAttachMenu
                     companion={decodedName}
@@ -1245,13 +1530,16 @@ export function CompanionDetailPage() {
                     value={composer}
                     onChange={(e: ChangeEvent<HTMLTextAreaElement>) => {
                       setComposer(e.target.value);
-                      emojiAC.handleChange(
-                        e.target.value,
-                        e.target.selectionStart ?? e.target.value.length,
-                      );
+                      const caret =
+                        e.target.selectionStart ?? e.target.value.length;
+                      emojiAC.handleChange(e.target.value, caret);
+                      mentionAC.handleChange(e.target.value, caret);
                     }}
                     onKeyDown={onComposerKey}
-                    onBlur={() => emojiAC.close()}
+                    onBlur={() => {
+                      emojiAC.close();
+                      mentionAC.close();
+                    }}
                     placeholder={
                       roomReadOnly ? "read-only access" : "transmit…"
                     }
@@ -1358,6 +1646,14 @@ export function CompanionDetailPage() {
         onOpenChange={setAddContactOpen}
         initial={addContactPrefill ?? undefined}
         ownPubkey={ownPubkey ?? undefined}
+      />
+
+      <AddChannelDialog
+        open={addChannelOpen}
+        onOpenChange={setAddChannelOpen}
+        existing={configuredChannels}
+        onAdd={addChannel}
+        prefillName={addChannelPrefill}
       />
 
       <Dialog open={!!modal} onOpenChange={(o) => !o && closeModal()}>
@@ -1716,6 +2012,7 @@ function MessageGroup({
   onReply,
   onRetry,
   onAddContact,
+  channelCtx,
 }: {
   group: MessageGroupShape;
   ownName: string;
@@ -1724,6 +2021,7 @@ function MessageGroup({
   onReply: (m: Message) => void;
   onRetry: (m: Message) => void;
   onAddContact: (prefill: ContactPrefill) => void;
+  channelCtx: ChannelLinkCtx;
 }) {
   const isTx = group.direction === "tx";
   return (
@@ -1761,6 +2059,7 @@ function MessageGroup({
             onReply={onReply}
             onRetry={onRetry}
             onAddContact={onAddContact}
+            channelCtx={channelCtx}
           />
         ))}
       </div>
@@ -1777,6 +2076,7 @@ function MessageBubble({
   onReply,
   onRetry,
   onAddContact,
+  channelCtx,
 }: {
   msg: Message;
   isTx: boolean;
@@ -1786,6 +2086,7 @@ function MessageBubble({
   onReply: (m: Message) => void;
   onRetry: (m: Message) => void;
   onAddContact: (prefill: ContactPrefill) => void;
+  channelCtx: ChannelLinkCtx;
 }) {
   const longPressTimer = useRef<number | null>(null);
   const longPressTriggered = useRef(false);
@@ -1841,6 +2142,7 @@ function MessageBubble({
           ownName={ownName}
           ownPubkey={ownPubkey}
           onAddContact={onAddContact}
+          channelCtx={channelCtx}
         />
         {(msg.snr != null ||
           (msg.repeatCount != null && msg.repeatCount > 0) ||
@@ -1941,11 +2243,13 @@ function MessageText({
   ownName,
   ownPubkey,
   onAddContact,
+  channelCtx,
 }: {
   text: string;
   ownName: string;
   ownPubkey: string | null;
   onAddContact: (prefill: ContactPrefill) => void;
+  channelCtx: ChannelLinkCtx;
 }) {
   const parts: ReactNode[] = [];
   let last = 0;
@@ -2002,11 +2306,53 @@ function MessageText({
           @{target}
         </span>,
       );
+    } else if (g.channel) {
+      parts.push(
+        <ChannelChip key={`ch-${key++}`} raw={token} channels={channelCtx} />,
+      );
     }
     last = idx + token.length;
   }
   if (last < text.length) parts.push(text.slice(last));
   return <>{parts}</>;
+}
+
+// "#hashtag" channel reference. Clicking an already-subscribed channel opens it;
+// an unknown one opens the Add Channel dialog pre-filled (the user reviews the
+// name and picks public/private before committing — a hashtag carries no key).
+function ChannelChip({
+  raw,
+  channels,
+}: {
+  raw: string;
+  channels: ChannelLinkCtx;
+}) {
+  const bare = raw.slice(1); // strip the '#' sigil (for display + prefill)
+  // Look up via channelKey so this derivation can't drift from how the target
+  // map was keyed (CompanionDetailPage builds it with channelKey too).
+  const target = channels.targets.get(channelKey(raw));
+  const isAdded = target !== undefined;
+  return (
+    <button
+      type="button"
+      onClick={(e) => {
+        e.stopPropagation();
+        if (isAdded) channels.onOpen(target);
+        else channels.onAdd(bare);
+      }}
+      title={isAdded ? `Open ${raw}` : `Add channel ${raw}`}
+      className={cn(
+        "inline-flex items-center gap-0.5 rounded-sm px-1 -mx-0.5 font-medium align-baseline",
+        isAdded
+          ? "text-primary hover:bg-primary/10"
+          : "text-info hover:bg-info/10",
+      )}
+    >
+      <Hash className="size-3 shrink-0" />
+      {bare}
+      {!isAdded && <Plus className="size-2.5 shrink-0 opacity-70" />}
+    </button>
+  );
 }
 
 // A shared-contact embed rendered as a tappable card. Adding routes through the

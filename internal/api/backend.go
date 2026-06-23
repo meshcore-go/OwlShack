@@ -32,6 +32,9 @@ type Backend interface {
 	// TraceSender returns the trace sender for a named companion.
 	TraceSender(name string) (TraceSender, bool)
 
+	// AdvertSender returns the self-advert sender for a named companion.
+	AdvertSender(name string) (AdvertSender, bool)
+
 	// Repeater returns the repeater operations for a named companion.
 	Repeater(name string) (*RepeaterOps, bool)
 

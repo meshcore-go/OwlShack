@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useMemo, useState } from "react";
 import { Link, useParams } from "react-router-dom";
-import { ExternalLink, SlidersHorizontal } from "lucide-react";
+import { ExternalLink, RefreshCw, SlidersHorizontal } from "lucide-react";
+import { toast } from "sonner";
 import { useWebSocket } from "@/hooks/useWebSocket";
 import { BackLink } from "@/components/BackLink";
 import { PageHeader } from "@/components/PageHeader";
@@ -12,6 +13,7 @@ import { MonitoringSettings } from "@/components/MonitoringSettings";
 import { Button } from "@/components/ui/button";
 import { Skeleton } from "@/components/ui/skeleton";
 import { cn } from "@/lib/utils";
+import { pollNode } from "@/lib/nodesApi";
 import { formatSecsAgo } from "@/lib/format";
 import { metricDef, metricOrderIndex } from "@/lib/metrics";
 import { contactDetailPath } from "@/lib/routes";
@@ -156,6 +158,18 @@ export function MonitoringDetailPage() {
   }, [available]);
   const name = node?.name || pubkey.slice(0, 12);
 
+  // On-demand poll, same as the monitoring list card. Success pushes fresh
+  // metrics over WS, which `onWs` folds into the live stat tiles.
+  const [polling, setPolling] = useState(false);
+  const handlePoll = useCallback(() => {
+    if (polling) return;
+    setPolling(true);
+    pollNode(pubkey)
+      .then(() => toast.success(`Polled ${name}`))
+      .catch((err) => toast.error(`${name}: ${err.message || "poll failed"}`))
+      .finally(() => setPolling(false));
+  }, [polling, pubkey, name]);
+
   // Zip the lat/lon (and optional alt) series — recorded together each poll, so
   // they share bucket timestamps — into ordered track points for the map.
   const trackPoints = useMemo<TrackPoint[]>(() => {
@@ -189,6 +203,19 @@ export function MonitoringDetailPage() {
           <div className="flex items-center gap-2">
             <ConnectionPill connected={connected} />
             <RangeSelector range={range} onChange={setRange} />
+            <Button
+              variant="outline"
+              size="sm"
+              onClick={handlePoll}
+              disabled={polling}
+              title="Poll this node now"
+              className="h-auto rounded-none py-1 font-mono text-[10px] uppercase tracking-[0.12em]"
+            >
+              <RefreshCw className={cn("size-3", polling && "animate-spin")} />
+              <span className="hidden sm:inline">
+                {polling ? "polling" : "poll"}
+              </span>
+            </Button>
             {node?.companionId && (
               <>
                 <Button

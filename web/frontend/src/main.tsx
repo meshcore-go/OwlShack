@@ -5,6 +5,7 @@ import { App } from "./App";
 import { Toaster } from "@/components/ui/sonner";
 import { TooltipProvider } from "@/components/ui/tooltip";
 import { ThemeProvider } from "@/lib/theme";
+import { registerServiceWorker } from "@/lib/registerSW";
 import "leaflet/dist/leaflet.css";
 import "./index.css";
 
@@ -29,3 +30,5 @@ ReactDOM.createRoot(document.getElementById("app")!).render(
     </ThemeProvider>
   </React.StrictMode>,
 );
+
+registerServiceWorker();

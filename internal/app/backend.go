@@ -124,6 +124,14 @@ func (b *backend) TraceSender(name string) (api.TraceSender, bool) {
 	return c.SendTrace, true
 }
 
+func (b *backend) AdvertSender(name string) (api.AdvertSender, bool) {
+	c, ok := b.find(name)
+	if !ok {
+		return nil, false
+	}
+	return c.SendAdvert, true
+}
+
 func (b *backend) Repeater(name string) (*api.RepeaterOps, bool) {
 	c, ok := b.find(name)
 	if !ok {

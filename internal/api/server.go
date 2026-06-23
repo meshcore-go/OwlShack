@@ -4,12 +4,20 @@ import (
 	"encoding/json"
 	"io/fs"
 	"log/slog"
+	"mime"
 	"net/http"
 	"strings"
 	"sync"
 
 	"github.com/meshcore-go/meshcore-bot/internal/store"
 )
+
+func init() {
+	// Go's mime table has no ".webmanifest" entry, so the embedded file server
+	// would otherwise sniff the PWA manifest as text/plain. Serve it as the
+	// spec type so browsers don't warn.
+	_ = mime.AddExtensionType(".webmanifest", "application/manifest+json")
+}
 
 type CompanionInfo struct {
 	Name      string        `json:"name"`
@@ -133,6 +141,7 @@ func (s *Server) routes() {
 	s.mux.HandleFunc("GET /api/companions/{name}/contacts/{pubkey}/path", s.handleGetContactPath)
 	s.mux.HandleFunc("DELETE /api/companions/{name}/contacts/{pubkey}/path", s.handleResetContactPath)
 	s.mux.HandleFunc("POST /api/companions/{name}/trace", s.handleSendTrace)
+	s.mux.HandleFunc("POST /api/companions/{name}/advert", s.handleSendAdvert)
 	s.mux.HandleFunc("POST /api/companions/{name}/repeaters/{pubkey}/login", s.handleRepeaterLogin)
 	s.mux.HandleFunc("GET /api/companions/{name}/repeaters/{pubkey}/status", s.handleRepeaterStatus)
 	s.mux.HandleFunc("POST /api/companions/{name}/repeaters/{pubkey}/cli", s.handleRepeaterCLI)
@@ -254,6 +263,13 @@ func (s *Server) ConfigPersist() func() error {
 func (s *Server) traceSenderLookup() TraceSenderLookup {
 	if b := s.backendRef(); b != nil {
 		return b.TraceSender
+	}
+	return nil
+}
+
+func (s *Server) advertSenderLookup() AdvertSenderLookup {
+	if b := s.backendRef(); b != nil {
+		return b.AdvertSender
 	}
 	return nil
 }

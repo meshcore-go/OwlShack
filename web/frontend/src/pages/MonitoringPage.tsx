@@ -9,6 +9,7 @@ import { NodeStatGrid, sparklineMetricKeys } from "@/components/NodeStatTiles";
 import { type SeriesPoint } from "@/components/MetricChart";
 import { Skeleton } from "@/components/ui/skeleton";
 import { cn } from "@/lib/utils";
+import { pollNode } from "@/lib/nodesApi";
 import { formatSecsAgo } from "@/lib/format";
 
 interface MonitoredNode {
@@ -226,15 +227,8 @@ function NodeCard({
     e.stopPropagation();
     if (polling) return;
     setPolling(true);
-    fetch(`/api/nodes/${node.pubkey}/poll`, { method: "POST" })
-      .then(async (r) => {
-        if (!r.ok) {
-          const body = await r.json().catch(() => ({}));
-          throw new Error(body.error || `poll failed (${r.status})`);
-        }
-        // Success pushes fresh metrics over WS, which updates the card live.
-        toast.success(`Polled ${label}`);
-      })
+    pollNode(node.pubkey)
+      .then(() => toast.success(`Polled ${label}`))
       .catch((err) => toast.error(`${label}: ${err.message || "poll failed"}`))
       .finally(() => setPolling(false));
   };

@@ -388,7 +388,22 @@ func (c *Companion) advertLoop(ctx context.Context) {
 	}
 }
 
+// advert sends the periodic self-advert used by advertLoop: always flood-routed.
 func (c *Companion) advert() error {
+	return c.sendAdvert(true)
+}
+
+// SendAdvert broadcasts a self-advert on demand. flood=true is a mesh-wide
+// advert that repeaters rebroadcast (path built up as it propagates);
+// flood=false is a zero-hop advert that only direct neighbours receive and is
+// never rebroadcast. Mirrors the firmware's `advert` / `advert.zerohop` CLI
+// commands (Mesh::sendFlood vs Mesh::sendZeroHop): same signed payload, the
+// route type + path length differ.
+func (c *Companion) SendAdvert(flood bool) error {
+	return c.sendAdvert(flood)
+}
+
+func (c *Companion) sendAdvert(flood bool) error {
 	appData := meshcore.AdvertAppData{
 		Type: "CHAT",
 		Name: c.cfg.Name,
@@ -418,11 +433,27 @@ func (c *Companion) advert() error {
 		return err
 	}
 
+	// Flood: ROUTE_TYPE_FLOOD with the path-hash-size nibble and a zero hop
+	// count. Zero-hop: ROUTE_TYPE_DIRECT with path length 0 (path_len==0 is what
+	// the firmware reads as "zero hop"), so neighbours accept but never relay it.
+	routeType := meshcore.RouteTypeFlood
+	pathLength := byte(meshcore.PathHashSize - 1)
+	if !flood {
+		routeType = meshcore.RouteTypeDirect
+		pathLength = 0
+	}
+
 	pkt := meshcore.Packet{
-		Header:     meshcore.MakeHeader(meshcore.RouteTypeFlood, meshcore.PayloadTypeAdvert, 0),
-		PathLength: meshcore.PathHashSize - 1,
+		Header:     meshcore.MakeHeader(routeType, meshcore.PayloadTypeAdvert, 0),
+		PathLength: pathLength,
 		Payload:    payload,
 	}
+
+	mode := "flood"
+	if !flood {
+		mode = "zero-hop"
+	}
+	c.log.Info("sending self-advert", "mode", mode)
 
 	return c.node.SendPacket(&pkt)
 }
