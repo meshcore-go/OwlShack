@@ -1,12 +1,16 @@
 package store
 
-import "strings"
+import (
+	"context"
+	"fmt"
+	"strings"
+)
 
 // eachInChunk splits a pubkey list into batches that stay under SQLite's
-// bound-parameter limit and invokes fn with the "?,?,..." placeholder string
-// and matching args for each batch. Shared by the IN(...) queries over pubkey
-// lists (peer delete, contact membership lookup).
-func eachInChunk(pubkeys [][]byte, fn func(placeholders string, args []any) error) error {
+// bound-parameter limit and invokes fn with the request context, the
+// "?,?,..." placeholder string and matching args for each batch. Shared by the
+// IN(...) queries over pubkey lists (peer delete, contact membership lookup).
+func eachInChunk(ctx context.Context, pubkeys [][]byte, fn func(ctx context.Context, placeholders string, args []any) error) error {
 	const chunk = 500
 	for start := 0; start < len(pubkeys); start += chunk {
 		end := start + chunk
@@ -19,8 +23,8 @@ func eachInChunk(pubkeys [][]byte, fn func(placeholders string, args []any) erro
 		for i, pk := range batch {
 			args[i] = pk
 		}
-		if err := fn(placeholders, args); err != nil {
-			return err
+		if err := fn(ctx, placeholders, args); err != nil {
+			return fmt.Errorf("processing pubkey chunk: %w", err)
 		}
 	}
 	return nil

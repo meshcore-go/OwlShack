@@ -1,8 +1,10 @@
 package store
 
 import (
+	"context"
 	"database/sql"
 	"encoding/json"
+	"fmt"
 	"time"
 )
 
@@ -78,10 +80,10 @@ type ContactRepo struct {
 	db *sql.DB
 }
 
-func (r *ContactRepo) Add(companionID int64, peerPubKey []byte, name, contactType string) error {
+func (r *ContactRepo) Add(ctx context.Context, companionID int64, peerPubKey []byte, name, contactType string) error {
 	// On re-add, only overwrite the cached identity when the new value is
 	// non-empty, so adding by bare pubkey never blanks a known name.
-	_, err := r.db.Exec(`
+	_, err := r.db.ExecContext(ctx, `
 		INSERT INTO companion_contacts (companion_id, peer_pubkey, name, type)
 		VALUES (?, ?, ?, ?)
 		ON CONFLICT(companion_id, peer_pubkey) DO UPDATE SET
@@ -89,7 +91,10 @@ func (r *ContactRepo) Add(companionID int64, peerPubKey []byte, name, contactTyp
 			type = CASE WHEN excluded.type <> '' THEN excluded.type ELSE companion_contacts.type END`,
 		companionID, peerPubKey, name, contactType,
 	)
-	return err
+	if err != nil {
+		return fmt.Errorf("adding contact: %w", err)
+	}
+	return nil
 }
 
 // RefreshFromAdvert updates every companion's contact row for this peer when an
@@ -98,11 +103,12 @@ func (r *ContactRepo) Add(companionID int64, peerPubKey []byte, name, contactTyp
 // actually carries one (hasLocation) — so a no-GPS advert never wipes a
 // hand-set location, while a real one wins. No-op unless the peer is a contact.
 func (r *ContactRepo) RefreshFromAdvert(
+	ctx context.Context,
 	peerPubKey []byte, name, contactType string,
 	lat, lon int32, feat1, feat2 uint16, lastSeen time.Time, lastAdvertTS uint32,
 	hasLocation bool,
 ) error {
-	_, err := r.db.Exec(`
+	_, err := r.db.ExecContext(ctx, `
 		UPDATE companion_contacts SET
 			name           = CASE WHEN ? <> '' THEN ? ELSE name END,
 			type           = CASE WHEN ? <> '' THEN ? ELSE type END,
@@ -118,41 +124,50 @@ func (r *ContactRepo) RefreshFromAdvert(
 		feat1, feat2, lastSeen, lastAdvertTS,
 		peerPubKey,
 	)
-	return err
+	if err != nil {
+		return fmt.Errorf("refreshing contact from advert: %w", err)
+	}
+	return nil
 }
 
 // UpdateOutPath persists a learned route onto this companion's contact row only.
 // A contact belongs to a single companion and companions never share a route to
 // a peer, so the path is scoped by companion_id — a DM then routes from it
 // directly without the in-memory peer table, and it survives a peer sweep.
-func (r *ContactRepo) UpdateOutPath(companionID int64, peerPubKey []byte, path []byte, hashSize uint8) error {
-	_, err := r.db.Exec(`
+func (r *ContactRepo) UpdateOutPath(ctx context.Context, companionID int64, peerPubKey []byte, path []byte, hashSize uint8) error {
+	_, err := r.db.ExecContext(ctx, `
 		UPDATE companion_contacts SET out_path = ?, out_path_hash_size = ?
 		WHERE companion_id = ? AND peer_pubkey = ?`,
 		path, hashSize, companionID, peerPubKey,
 	)
-	return err
+	if err != nil {
+		return fmt.Errorf("updating contact out_path: %w", err)
+	}
+	return nil
 }
 
 // SetLocation hand-sets a contact's location. "Advert wins" still applies: a
 // later advert carrying a position will overwrite this (RefreshFromAdvert).
-func (r *ContactRepo) SetLocation(companionID int64, peerPubKey []byte, lat, lon int32) error {
-	_, err := r.db.Exec(`
+func (r *ContactRepo) SetLocation(ctx context.Context, companionID int64, peerPubKey []byte, lat, lon int32) error {
+	_, err := r.db.ExecContext(ctx, `
 		UPDATE companion_contacts SET lat = ?, lon = ?
 		WHERE companion_id = ? AND peer_pubkey = ?`,
 		lat, lon, companionID, peerPubKey,
 	)
-	return err
+	if err != nil {
+		return fmt.Errorf("setting contact location: %w", err)
+	}
+	return nil
 }
 
-func (r *ContactRepo) List(companionID int64) ([]Contact, error) {
-	rows, err := r.db.Query(`
+func (r *ContactRepo) List(ctx context.Context, companionID int64) ([]Contact, error) {
+	rows, err := r.db.QueryContext(ctx, `
 		SELECT `+contactColumns+`
 		FROM companion_contacts
 		WHERE companion_id = ?
 		ORDER BY added_at DESC`, companionID)
 	if err != nil {
-		return nil, err
+		return nil, fmt.Errorf("querying contacts: %w", err)
 	}
 	defer rows.Close()
 
@@ -160,45 +175,61 @@ func (r *ContactRepo) List(companionID int64) ([]Contact, error) {
 	for rows.Next() {
 		c, err := scanContact(rows)
 		if err != nil {
-			return nil, err
+			return nil, fmt.Errorf("scanning contact row: %w", err)
 		}
 		contacts = append(contacts, *c)
 	}
-	return contacts, rows.Err()
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("iterating contacts: %w", err)
+	}
+	return contacts, nil
 }
 
-func (r *ContactRepo) UpdateMetadata(companionID int64, peerPubKey []byte, meta ContactMetadata) error {
+func (r *ContactRepo) UpdateMetadata(ctx context.Context, companionID int64, peerPubKey []byte, meta ContactMetadata) error {
 	metaJSON, err := json.Marshal(meta)
 	if err != nil {
-		return err
+		return fmt.Errorf("marshaling contact metadata: %w", err)
 	}
-	_, err = r.db.Exec(`
+	_, err = r.db.ExecContext(ctx, `
 		UPDATE companion_contacts SET metadata = ?
 		WHERE companion_id = ? AND peer_pubkey = ?`,
 		string(metaJSON), companionID, peerPubKey,
 	)
-	return err
+	if err != nil {
+		return fmt.Errorf("updating contact metadata: %w", err)
+	}
+	return nil
 }
 
-func (r *ContactRepo) Get(companionID int64, peerPubKey []byte) (*Contact, error) {
-	return scanContact(r.db.QueryRow(`
+func (r *ContactRepo) Get(ctx context.Context, companionID int64, peerPubKey []byte) (*Contact, error) {
+	c, err := scanContact(r.db.QueryRowContext(ctx, `
 		SELECT `+contactColumns+`
 		FROM companion_contacts
 		WHERE companion_id = ? AND peer_pubkey = ?`,
 		companionID, peerPubKey,
 	))
+	if err != nil {
+		return nil, fmt.Errorf("getting contact: %w", err)
+	}
+	return c, nil
 }
 
-func (r *ContactRepo) Delete(companionID int64, peerPubKey []byte) error {
-	_, err := r.db.Exec(`
+func (r *ContactRepo) Delete(ctx context.Context, companionID int64, peerPubKey []byte) error {
+	_, err := r.db.ExecContext(ctx, `
 		DELETE FROM companion_contacts
 		WHERE companion_id = ? AND peer_pubkey = ?`,
 		companionID, peerPubKey,
 	)
-	return err
+	if err != nil {
+		return fmt.Errorf("deleting contact: %w", err)
+	}
+	return nil
 }
 
-func (r *ContactRepo) DeleteAll(companionID int64) error {
-	_, err := r.db.Exec("DELETE FROM companion_contacts WHERE companion_id = ?", companionID)
-	return err
+func (r *ContactRepo) DeleteAll(ctx context.Context, companionID int64) error {
+	_, err := r.db.ExecContext(ctx, "DELETE FROM companion_contacts WHERE companion_id = ?", companionID)
+	if err != nil {
+		return fmt.Errorf("deleting all contacts: %w", err)
+	}
+	return nil
 }

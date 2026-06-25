@@ -1,6 +1,7 @@
 package app
 
 import (
+	"context"
 	"fmt"
 	"log/slog"
 	"path/filepath"
@@ -13,23 +14,23 @@ import (
 // Config is stored relationally (the internal/store config_* tables);
 // the assemble/disassemble seam lives in config_tables.go.
 
-func saveConfig(db *store.Store, cfg *config.Config) error {
-	return persistToTables(db, cfg)
+func saveConfig(ctx context.Context, db *store.Store, cfg *config.Config) error {
+	return persistToTables(ctx, db, cfg)
 }
 
-func loadConfigFromDB(db *store.Store) (*config.Config, error) {
-	return readConfigFromTables(db)
+func loadConfigFromDB(ctx context.Context, db *store.Store) (*config.Config, error) {
+	return readConfigFromTables(ctx, db)
 }
 
 // resolveConfig determines the active config at startup: an explicit -config
 // flag imports (and overwrites) into the database; otherwise the database wins.
 // initConfigTables handles first-run population (migrate the legacy JSON blob,
 // import a default-named file, or bootstrap a quiet default).
-func resolveConfig(db *store.Store, importPath string) (*config.Config, error) {
+func resolveConfig(ctx context.Context, db *store.Store, importPath string) (*config.Config, error) {
 	if importPath != "" {
-		return importConfigFile(db, importPath)
+		return importConfigFile(ctx, db, importPath)
 	}
-	cfg, err := initConfigTables(db)
+	cfg, err := initConfigTables(ctx, db)
 	if err != nil {
 		return nil, err
 	}
@@ -39,7 +40,7 @@ func resolveConfig(db *store.Store, importPath string) (*config.Config, error) {
 	return cfg, nil
 }
 
-func importConfigFile(db *store.Store, path string) (*config.Config, error) {
+func importConfigFile(ctx context.Context, db *store.Store, path string) (*config.Config, error) {
 	cfg, resolved, err := config.LoadFromPath(path)
 	if err != nil {
 		return nil, err
@@ -56,11 +57,11 @@ func importConfigFile(db *store.Store, path string) (*config.Config, error) {
 	// Importing a file is a deliberate configuration step, so skip the wizard.
 	complete := true
 	cfg.SetupComplete = &complete
-	if err := saveConfig(db, cfg); err != nil {
+	if err := saveConfig(ctx, db, cfg); err != nil {
 		return nil, err
 	}
 	slog.Info("imported config file into database; the file is no longer read at runtime", "path", resolved)
 	// Re-read from the tables so the returned config carries the surrogate
 	// companion ids the runtime keys history on (the parsed file has none).
-	return readConfigFromTables(db)
+	return readConfigFromTables(ctx, db)
 }

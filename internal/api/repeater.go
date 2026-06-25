@@ -30,6 +30,7 @@ func (s *Server) handleRepeaterLogin(w http.ResponseWriter, r *http.Request) {
 
 	result, err := ops.Login(r.PathValue("pubkey"), body.Password)
 	if err != nil {
+		s.log.Error("repeater login", "error", err)
 		writeError(w, http.StatusInternalServerError, err.Error())
 		return
 	}
@@ -66,14 +67,15 @@ func (s *Server) handleRoomLogin(w http.ResponseWriter, r *http.Request) {
 		if *body.SyncSince > 0 {
 			syncSince = uint32(*body.SyncSince)
 		}
-	} else if cid, err := s.store.Companions.IDByName(name); err == nil {
-		if latest, lerr := s.store.Messages.LatestRx(cid, "dm:"+pubkey); lerr == nil && latest != nil {
+	} else if cid, err := s.store.Companions.IDByName(r.Context(), name); err == nil {
+		if latest, lerr := s.store.Messages.LatestRx(r.Context(), cid, "dm:"+pubkey); lerr == nil && latest != nil {
 			syncSince = uint32(latest.Timestamp.Unix())
 		}
 	}
 
 	result, err := ops.RoomLogin(pubkey, body.Password, syncSince)
 	if err != nil {
+		s.log.Error("room login", "error", err)
 		writeError(w, http.StatusInternalServerError, err.Error())
 		return
 	}
@@ -90,6 +92,7 @@ func (s *Server) handleRepeaterStatus(w http.ResponseWriter, r *http.Request) {
 
 	status, err := ops.StatusReq(r.PathValue("pubkey"))
 	if err != nil {
+		s.log.Error("repeater status request", "error", err)
 		writeError(w, http.StatusInternalServerError, err.Error())
 		return
 	}
@@ -118,6 +121,7 @@ func (s *Server) handleRepeaterCLI(w http.ResponseWriter, r *http.Request) {
 
 	response, err := ops.CLI(r.PathValue("pubkey"), body.Command)
 	if err != nil {
+		s.log.Error("repeater cli command", "error", err)
 		writeError(w, http.StatusInternalServerError, err.Error())
 		return
 	}
@@ -161,6 +165,7 @@ func (s *Server) handleRepeaterPathGet(w http.ResponseWriter, r *http.Request) {
 
 	info, err := ops.PathGet(r.PathValue("pubkey"))
 	if err != nil {
+		s.log.Error("repeater path get", "error", err)
 		writeError(w, http.StatusInternalServerError, err.Error())
 		return
 	}
@@ -176,6 +181,7 @@ func (s *Server) handleRepeaterPathReset(w http.ResponseWriter, r *http.Request)
 	}
 
 	if err := ops.PathReset(r.PathValue("pubkey")); err != nil {
+		s.log.Error("repeater path reset", "error", err)
 		writeError(w, http.StatusInternalServerError, err.Error())
 		return
 	}
@@ -204,6 +210,7 @@ func (s *Server) handleRepeaterPathSet(w http.ResponseWriter, r *http.Request) {
 	}
 
 	if err := ops.PathSet(r.PathValue("pubkey"), body.Path, body.PathHashSize); err != nil {
+		s.log.Error("repeater path update", "error", err)
 		writeError(w, http.StatusInternalServerError, err.Error())
 		return
 	}
@@ -235,6 +242,7 @@ func (s *Server) handleRepeaterNeighbors(w http.ResponseWriter, r *http.Request)
 
 	res, err := ops.NeighborsReq(r.PathValue("pubkey"), count, offset)
 	if err != nil {
+		s.log.Error("repeater neighbours request", "error", err)
 		writeError(w, http.StatusInternalServerError, err.Error())
 		return
 	}
@@ -251,6 +259,7 @@ func (s *Server) handleRepeaterOwnerInfo(w http.ResponseWriter, r *http.Request)
 
 	res, err := ops.OwnerInfoReq(r.PathValue("pubkey"))
 	if err != nil {
+		s.log.Error("repeater owner info request", "error", err)
 		writeError(w, http.StatusInternalServerError, err.Error())
 		return
 	}
@@ -267,6 +276,7 @@ func (s *Server) handleRepeaterAccessList(w http.ResponseWriter, r *http.Request
 
 	res, err := ops.AccessList(r.PathValue("pubkey"))
 	if err != nil {
+		s.log.Error("repeater access list request", "error", err)
 		writeError(w, http.StatusInternalServerError, err.Error())
 		return
 	}
@@ -290,6 +300,7 @@ func (s *Server) handleRepeaterAccessSet(w http.ResponseWriter, r *http.Request)
 	}
 
 	if err := ops.SetPerm(r.PathValue("pubkey"), r.PathValue("target"), body.Permissions); err != nil {
+		s.log.Error("repeater access set", "error", err)
 		writeError(w, http.StatusInternalServerError, err.Error())
 		return
 	}
@@ -305,6 +316,7 @@ func (s *Server) handleRepeaterAccessRemove(w http.ResponseWriter, r *http.Reque
 	}
 
 	if err := ops.SetPerm(r.PathValue("pubkey"), r.PathValue("target"), 0); err != nil {
+		s.log.Error("repeater access remove", "error", err)
 		writeError(w, http.StatusInternalServerError, err.Error())
 		return
 	}
@@ -321,6 +333,7 @@ func (s *Server) handleRepeaterTelemetry(w http.ResponseWriter, r *http.Request)
 
 	res, err := ops.TelemetryReq(r.PathValue("pubkey"))
 	if err != nil {
+		s.log.Error("repeater telemetry request", "error", err)
 		writeError(w, http.StatusInternalServerError, err.Error())
 		return
 	}
@@ -337,6 +350,7 @@ func (s *Server) handleContactTelemetry(w http.ResponseWriter, r *http.Request) 
 
 	res, err := ops.ContactTelemetryReq(r.PathValue("pubkey"))
 	if err != nil {
+		s.log.Error("contact telemetry request", "error", err)
 		writeError(w, http.StatusInternalServerError, err.Error())
 		return
 	}

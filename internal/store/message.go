@@ -1,11 +1,18 @@
 package store
 
 import (
+	"context"
 	"database/sql"
+	"errors"
+	"fmt"
 	"time"
 )
 
 const DefaultMaxMessages = 5000
+
+// messageColumns is the SELECT list for a full Message row, shared by every
+// query that returns Messages (keep in sync with scanMessage and Insert).
+const messageColumns = `id, companion_id, channel, channel_hash, sender, text, direction, timestamp, snr, rssi, confirmed, path_hashes, path_hash_size, hops, status`
 
 type Message struct {
 	ID           int64
@@ -30,190 +37,223 @@ type MessageRepo struct {
 	maxRows int
 }
 
-func (r *MessageRepo) Insert(m *Message) error {
-	res, err := r.db.Exec(`
+// scanMessage scans one full Message row from a *sql.Row or *sql.Rows.
+func scanMessage(s interface{ Scan(...any) error }) (Message, error) {
+	var m Message
+	err := s.Scan(
+		&m.ID, &m.CompanionID, &m.Channel, &m.ChannelHash,
+		&m.Sender, &m.Text, &m.Direction, &m.Timestamp,
+		&m.SNR, &m.RSSI, &m.RepeatCount,
+		&m.PathHashes, &m.PathHashSize, &m.Hops, &m.Status,
+	)
+	return m, err
+}
+
+func (r *MessageRepo) Insert(ctx context.Context, m *Message) error {
+	res, err := r.db.ExecContext(ctx, `
 		INSERT INTO messages (companion_id, channel, channel_hash, sender, text, direction, timestamp, snr, rssi, confirmed, path_hashes, path_hash_size, hops, status)
 		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
 		m.CompanionID, m.Channel, m.ChannelHash, m.Sender, m.Text, m.Direction, m.Timestamp, m.SNR, m.RSSI, m.RepeatCount,
 		m.PathHashes, m.PathHashSize, m.Hops, m.Status,
 	)
 	if err != nil {
-		return err
+		return fmt.Errorf("inserting message: %w", err)
 	}
 	id, err := res.LastInsertId()
 	if err != nil {
-		return err
+		return fmt.Errorf("reading inserted id: %w", err)
 	}
 	m.ID = id
-	return r.prune()
+	return r.prune(ctx)
 }
 
-func (r *MessageRepo) UpdateStatus(id int64, status string) error {
-	_, err := r.db.Exec(`UPDATE messages SET status = ? WHERE id = ?`, status, id)
-	return err
-}
-
-func (r *MessageRepo) GetByID(id int64) (*Message, error) {
-	var m Message
-	err := r.db.QueryRow(`
-		SELECT id, companion_id, channel, channel_hash, sender, text, direction, timestamp, snr, rssi, confirmed, path_hashes, path_hash_size, hops, status
-		FROM messages WHERE id = ?`, id).Scan(
-		&m.ID, &m.CompanionID, &m.Channel, &m.ChannelHash,
-		&m.Sender, &m.Text, &m.Direction, &m.Timestamp,
-		&m.SNR, &m.RSSI, &m.RepeatCount,
-		&m.PathHashes, &m.PathHashSize, &m.Hops, &m.Status,
-	)
+func (r *MessageRepo) UpdateStatus(ctx context.Context, id int64, status string) error {
+	_, err := r.db.ExecContext(ctx, `UPDATE messages SET status = ? WHERE id = ?`, status, id)
 	if err != nil {
-		return nil, err
+		return fmt.Errorf("updating message status: %w", err)
+	}
+	return nil
+}
+
+func (r *MessageRepo) GetByID(ctx context.Context, id int64) (*Message, error) {
+	m, err := scanMessage(r.db.QueryRowContext(ctx,
+		"SELECT "+messageColumns+" FROM messages WHERE id = ?", id))
+	if err != nil {
+		return nil, fmt.Errorf("getting message by id: %w", err)
 	}
 	return &m, nil
 }
 
-func (r *MessageRepo) IncrementRepeatCount(id int64) (int, error) {
+func (r *MessageRepo) IncrementRepeatCount(ctx context.Context, id int64) (int, error) {
 	var count int
-	err := r.db.QueryRow(`
+	err := r.db.QueryRowContext(ctx, `
 		UPDATE messages SET confirmed = COALESCE(confirmed, 0) + 1 WHERE id = ?
 		RETURNING confirmed`, id).Scan(&count)
-	return count, err
+	if err != nil {
+		return count, fmt.Errorf("incrementing repeat count: %w", err)
+	}
+	return count, nil
 }
 
-func (r *MessageRepo) List(companionID int64, channel string, limit, offset int) ([]Message, error) {
+func (r *MessageRepo) List(ctx context.Context, companionID int64, channel string, limit, offset int) ([]Message, error) {
 	if limit <= 0 {
 		limit = 100
 	}
 
-	query := `
-		SELECT id, companion_id, channel, channel_hash, sender, text, direction, timestamp, snr, rssi, confirmed, path_hashes, path_hash_size, hops, status
+	query := "SELECT " + messageColumns + `
 		FROM messages
 		WHERE companion_id = ? AND channel = ?
 		ORDER BY id DESC
 		LIMIT ? OFFSET ?`
 
-	rows, err := r.db.Query(query, companionID, channel, limit, offset)
+	rows, err := r.db.QueryContext(ctx, query, companionID, channel, limit, offset)
 	if err != nil {
-		return nil, err
+		return nil, fmt.Errorf("querying messages: %w", err)
 	}
 	defer rows.Close()
 
 	var messages []Message
 	for rows.Next() {
-		var m Message
-		if err := rows.Scan(
-			&m.ID, &m.CompanionID, &m.Channel, &m.ChannelHash,
-			&m.Sender, &m.Text, &m.Direction, &m.Timestamp,
-			&m.SNR, &m.RSSI, &m.RepeatCount,
-			&m.PathHashes, &m.PathHashSize, &m.Hops, &m.Status,
-		); err != nil {
-			return nil, err
+		m, err := scanMessage(rows)
+		if err != nil {
+			return nil, fmt.Errorf("scanning message row: %w", err)
 		}
 		messages = append(messages, m)
 	}
-	return messages, rows.Err()
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("iterating messages: %w", err)
+	}
+	return messages, nil
 }
 
-func (r *MessageRepo) ListAfter(companionID int64, channel string, afterID int64, limit int) ([]Message, error) {
+// ListBefore returns up to `limit` messages older than beforeID (id < beforeID)
+// for a channel, newest-first (DESC) like List — the caller reverses for display.
+// Cursor-based (not OFFSET) so concurrent inserts can't shift the window.
+func (r *MessageRepo) ListBefore(ctx context.Context, companionID int64, channel string, beforeID int64, limit int) ([]Message, error) {
+	if limit <= 0 {
+		limit = 100
+	}
+
+	rows, err := r.db.QueryContext(ctx, "SELECT "+messageColumns+`
+		FROM messages
+		WHERE companion_id = ? AND channel = ? AND id < ?
+		ORDER BY id DESC
+		LIMIT ?`, companionID, channel, beforeID, limit)
+	if err != nil {
+		return nil, fmt.Errorf("querying messages before id: %w", err)
+	}
+	defer rows.Close()
+
+	var messages []Message
+	for rows.Next() {
+		m, err := scanMessage(rows)
+		if err != nil {
+			return nil, fmt.Errorf("scanning message row: %w", err)
+		}
+		messages = append(messages, m)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("iterating messages: %w", err)
+	}
+	return messages, nil
+}
+
+func (r *MessageRepo) ListAfter(ctx context.Context, companionID int64, channel string, afterID int64, limit int) ([]Message, error) {
 	if limit <= 0 {
 		limit = 200
 	}
 
-	rows, err := r.db.Query(`
-		SELECT id, companion_id, channel, channel_hash, sender, text, direction, timestamp, snr, rssi, confirmed, path_hashes, path_hash_size, hops, status
+	rows, err := r.db.QueryContext(ctx, "SELECT "+messageColumns+`
 		FROM messages
 		WHERE companion_id = ? AND channel = ? AND id > ?
 		ORDER BY id ASC
 		LIMIT ?`, companionID, channel, afterID, limit)
 	if err != nil {
-		return nil, err
+		return nil, fmt.Errorf("querying messages after id: %w", err)
 	}
 	defer rows.Close()
 
 	var messages []Message
 	for rows.Next() {
-		var m Message
-		if err := rows.Scan(
-			&m.ID, &m.CompanionID, &m.Channel, &m.ChannelHash,
-			&m.Sender, &m.Text, &m.Direction, &m.Timestamp,
-			&m.SNR, &m.RSSI, &m.RepeatCount,
-			&m.PathHashes, &m.PathHashSize, &m.Hops, &m.Status,
-		); err != nil {
-			return nil, err
+		m, err := scanMessage(rows)
+		if err != nil {
+			return nil, fmt.Errorf("scanning message row: %w", err)
 		}
 		messages = append(messages, m)
 	}
-	return messages, rows.Err()
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("iterating messages: %w", err)
+	}
+	return messages, nil
 }
 
-func (r *MessageRepo) ListAll(companionID int64, limit, offset int) ([]Message, error) {
+func (r *MessageRepo) ListAll(ctx context.Context, companionID int64, limit, offset int) ([]Message, error) {
 	if limit <= 0 {
 		limit = 100
 	}
 
-	rows, err := r.db.Query(`
-		SELECT id, companion_id, channel, channel_hash, sender, text, direction, timestamp, snr, rssi, confirmed, path_hashes, path_hash_size, hops, status
+	rows, err := r.db.QueryContext(ctx, "SELECT "+messageColumns+`
 		FROM messages
 		WHERE companion_id = ?
 		ORDER BY id DESC
 		LIMIT ? OFFSET ?`, companionID, limit, offset)
 	if err != nil {
-		return nil, err
+		return nil, fmt.Errorf("querying all messages: %w", err)
 	}
 	defer rows.Close()
 
 	var messages []Message
 	for rows.Next() {
-		var m Message
-		if err := rows.Scan(
-			&m.ID, &m.CompanionID, &m.Channel, &m.ChannelHash,
-			&m.Sender, &m.Text, &m.Direction, &m.Timestamp,
-			&m.SNR, &m.RSSI, &m.RepeatCount,
-			&m.PathHashes, &m.PathHashSize, &m.Hops, &m.Status,
-		); err != nil {
-			return nil, err
+		m, err := scanMessage(rows)
+		if err != nil {
+			return nil, fmt.Errorf("scanning message row: %w", err)
 		}
 		messages = append(messages, m)
 	}
-	return messages, rows.Err()
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("iterating messages: %w", err)
+	}
+	return messages, nil
 }
 
 // LatestRx returns the most recently inserted rx message for a channel, or nil.
-func (r *MessageRepo) LatestRx(companionID int64, channel string) (*Message, error) {
-	var m Message
-	err := r.db.QueryRow(`
-		SELECT id, companion_id, channel, channel_hash, sender, text, direction, timestamp, snr, rssi, confirmed, path_hashes, path_hash_size, hops, status
+func (r *MessageRepo) LatestRx(ctx context.Context, companionID int64, channel string) (*Message, error) {
+	m, err := scanMessage(r.db.QueryRowContext(ctx, "SELECT "+messageColumns+`
 		FROM messages
 		WHERE companion_id = ? AND channel = ? AND direction = 'rx'
-		ORDER BY id DESC LIMIT 1`, companionID, channel).Scan(
-		&m.ID, &m.CompanionID, &m.Channel, &m.ChannelHash,
-		&m.Sender, &m.Text, &m.Direction, &m.Timestamp,
-		&m.SNR, &m.RSSI, &m.RepeatCount,
-		&m.PathHashes, &m.PathHashSize, &m.Hops, &m.Status,
-	)
-	if err == sql.ErrNoRows {
+		ORDER BY id DESC LIMIT 1`, companionID, channel))
+	if errors.Is(err, sql.ErrNoRows) {
 		return nil, nil
 	}
 	if err != nil {
-		return nil, err
+		return nil, fmt.Errorf("getting latest rx message: %w", err)
 	}
 	return &m, nil
 }
 
-func (r *MessageRepo) Delete(id int64) error {
-	_, err := r.db.Exec(`DELETE FROM messages WHERE id = ?`, id)
-	return err
+func (r *MessageRepo) Delete(ctx context.Context, id int64) error {
+	_, err := r.db.ExecContext(ctx, `DELETE FROM messages WHERE id = ?`, id)
+	if err != nil {
+		return fmt.Errorf("deleting message: %w", err)
+	}
+	return nil
 }
 
-func (r *MessageRepo) DeleteByChannel(companionID int64, channel string) error {
-	_, err := r.db.Exec(`DELETE FROM messages WHERE companion_id = ? AND channel = ?`, companionID, channel)
-	return err
+func (r *MessageRepo) DeleteByChannel(ctx context.Context, companionID int64, channel string) error {
+	_, err := r.db.ExecContext(ctx, `DELETE FROM messages WHERE companion_id = ? AND channel = ?`, companionID, channel)
+	if err != nil {
+		return fmt.Errorf("deleting messages by channel: %w", err)
+	}
+	return nil
 }
 
-func (r *MessageRepo) DistinctSenders(companionID int64, channel string) ([]string, error) {
-	rows, err := r.db.Query(`
+func (r *MessageRepo) DistinctSenders(ctx context.Context, companionID int64, channel string) ([]string, error) {
+	rows, err := r.db.QueryContext(ctx, `
 		SELECT DISTINCT sender FROM messages
 		WHERE companion_id = ? AND channel = ? AND direction = 'rx' AND sender != ''
 		ORDER BY sender`, companionID, channel)
 	if err != nil {
-		return nil, err
+		return nil, fmt.Errorf("querying distinct senders: %w", err)
 	}
 	defer rows.Close()
 
@@ -221,19 +261,25 @@ func (r *MessageRepo) DistinctSenders(companionID int64, channel string) ([]stri
 	for rows.Next() {
 		var s string
 		if err := rows.Scan(&s); err != nil {
-			return nil, err
+			return nil, fmt.Errorf("scanning sender row: %w", err)
 		}
 		senders = append(senders, s)
 	}
-	return senders, rows.Err()
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("iterating senders: %w", err)
+	}
+	return senders, nil
 }
 
-func (r *MessageRepo) prune() error {
-	_, err := r.db.Exec(`
+func (r *MessageRepo) prune(ctx context.Context) error {
+	_, err := r.db.ExecContext(ctx, `
 		DELETE FROM messages WHERE id IN (
 			SELECT id FROM messages ORDER BY id ASC LIMIT MAX(0,
 				(SELECT COUNT(*) FROM messages) - ?
 			)
 		)`, r.maxRows)
-	return err
+	if err != nil {
+		return fmt.Errorf("pruning messages: %w", err)
+	}
+	return nil
 }

@@ -57,12 +57,12 @@ func (s *Server) handleListConversations(w http.ResponseWriter, r *http.Request)
 		return
 	}
 
-	cid, ok := s.companionID(w, name)
+	cid, ok := s.companionID(r.Context(), w, name)
 	if !ok {
 		return
 	}
 
-	contacts, err := s.store.Contacts.List(cid)
+	contacts, err := s.store.Contacts.List(r.Context(), cid)
 	if err != nil {
 		writeError(w, http.StatusInternalServerError, "failed to list contacts")
 		return
@@ -74,7 +74,7 @@ func (s *Server) handleListConversations(w http.ResponseWriter, r *http.Request)
 	for _, ct := range contacts {
 		pubHex := hex.EncodeToString(ct.PeerPubKey)
 		peerName := pubHex[:12] + "…"
-		if peer, err := s.store.Peers.GetByPubKey(ct.PeerPubKey); err == nil && peer != nil {
+		if peer, err := s.store.Peers.GetByPubKey(r.Context(), ct.PeerPubKey); err == nil && peer != nil {
 			if peer.Name != "" {
 				peerName = peer.Name
 			}
@@ -87,7 +87,7 @@ func (s *Server) handleListConversations(w http.ResponseWriter, r *http.Request)
 		contactMeta[pubHex] = ct.Metadata
 	}
 
-	convos, err := s.store.Conversations.List(cid, channelNames, contactInfos)
+	convos, err := s.store.Conversations.List(r.Context(), cid, channelNames, contactInfos)
 	if err != nil {
 		writeError(w, http.StatusInternalServerError, "failed to list conversations")
 		return
@@ -138,7 +138,7 @@ func (s *Server) handleMarkRead(w http.ResponseWriter, r *http.Request) {
 	name := r.PathValue("name")
 	conversationID := r.PathValue("conversationId")
 
-	cid, ok := s.companionID(w, name)
+	cid, ok := s.companionID(r.Context(), w, name)
 	if !ok {
 		return
 	}
@@ -163,7 +163,7 @@ func (s *Server) handleMarkRead(w http.ResponseWriter, r *http.Request) {
 
 	var markErr error
 	s.store.WriteSync(func() {
-		markErr = s.store.Conversations.MarkRead(cid, conversationID, body.LastReadID)
+		markErr = s.store.Conversations.MarkRead(r.Context(), cid, conversationID, body.LastReadID)
 	})
 	if markErr != nil {
 		writeError(w, http.StatusInternalServerError, "failed to mark read")

@@ -1,6 +1,7 @@
 import {
   useCallback,
   useEffect,
+  useLayoutEffect,
   useMemo,
   useRef,
   useState,
@@ -482,6 +483,7 @@ export function CompanionDetailPage() {
   const [messages, setMessages] = useState<Message[]>([]);
   const [loadingList, setLoadingList] = useState(true);
   const [loadingMsgs, setLoadingMsgs] = useState(false);
+  const [loadingOlder, setLoadingOlder] = useState(false);
   const [listError, setListError] = useState<string | null>(null);
   const [search, setSearch] = useState("");
   const [sort, setSort] = useState<SortMode>(() => {
@@ -512,9 +514,18 @@ export function CompanionDetailPage() {
   const [addChannelPrefill, setAddChannelPrefill] = useState("");
 
   const messagesEndRef = useRef<HTMLDivElement>(null);
+  const scrollContainerRef = useRef<HTMLDivElement>(null);
   const composerRef = useRef<HTMLTextAreaElement>(null);
   const messageCacheRef = useRef<Map<string, Message[]>>(new Map());
   const wasConnectedRef = useRef(false);
+  // Channels whose full history has been paged back to the start — stop fetching.
+  const reachedStartRef = useRef<Set<string>>(new Set());
+  // Set when a scroll-up prepend is in flight, so the auto-scroll-to-bottom
+  // effect skips and the layout effect can restore the prior scroll position.
+  const pendingPrependRef = useRef<{ prevHeight: number; prevTop: number } | null>(
+    null,
+  );
+  const skipAutoScrollRef = useRef(false);
 
   const activeConversation = useMemo(
     () => conversations.find((c) => c.channel === activeChannel) ?? null,
@@ -788,6 +799,72 @@ export function CompanionDetailPage() {
     [decodedName, lastIdOf, initialLoadMessages, activeChannel],
   );
 
+  // Scroll-up history paging: fetch the 100 messages older than the oldest one
+  // currently held, prepend them, and preserve the viewport via pendingPrependRef.
+  const loadOlderMessages = useCallback(
+    async (channel: string) => {
+      if (!decodedName) return;
+      if (reachedStartRef.current.has(channel)) return;
+      const existing = messageCacheRef.current.get(channel) || [];
+      // existing is ascending (oldest first) — find the smallest real id.
+      let oldest = 0;
+      for (const m of existing) {
+        if (typeof m.id === "number" && m.id > 0) {
+          oldest = m.id;
+          break;
+        }
+      }
+      if (oldest <= 0) return;
+      // Capture scroll metrics now, before the spinner toggles container height —
+      // both this measurement and the post-prepend one exclude the spinner, so
+      // the restore delta is purely the height of the newly prepended messages.
+      const el = scrollContainerRef.current;
+      const prevHeight = el?.scrollHeight ?? 0;
+      const prevTop = el?.scrollTop ?? 0;
+      setLoadingOlder(true);
+      try {
+        const r = await fetch(
+          `/api/companions/${encodeURIComponent(decodedName)}/messages?channel=${encodeURIComponent(channel)}&beforeId=${oldest}&limit=100`,
+        );
+        if (!r.ok) return;
+        const older: Message[] = await r.json();
+        if (!older || older.length === 0) {
+          reachedStartRef.current.add(channel);
+          return;
+        }
+        if (older.length < 100) reachedStartRef.current.add(channel);
+        const orderedOlder = older.slice().reverse();
+        const merged = mergeMessages(orderedOlder, existing);
+        messageCacheRef.current.set(channel, merged);
+        if (channel === activeChannel) {
+          if (el) {
+            pendingPrependRef.current = { prevHeight, prevTop };
+            skipAutoScrollRef.current = true;
+          }
+          setMessages(merged);
+        }
+      } catch {
+        // best-effort; user can scroll up again to retry
+      } finally {
+        setLoadingOlder(false);
+      }
+    },
+    [decodedName, activeChannel],
+  );
+
+  const handleMessagesScroll = useCallback(() => {
+    const el = scrollContainerRef.current;
+    if (!el || !activeChannel) return;
+    if (
+      el.scrollTop <= 80 &&
+      !loadingOlder &&
+      !loadingMsgs &&
+      !reachedStartRef.current.has(activeChannel)
+    ) {
+      loadOlderMessages(activeChannel);
+    }
+  }, [activeChannel, loadingOlder, loadingMsgs, loadOlderMessages]);
+
   useEffect(() => {
     if (!activeChannel) {
       setMessages([]);
@@ -939,8 +1016,24 @@ export function CompanionDetailPage() {
     setMsgSearchOpen(false);
   }, [activeChannel]);
 
+  // After older messages are prepended, restore scroll so the viewport stays
+  // anchored on the message the user was looking at (runs before paint → no jump).
+  useLayoutEffect(() => {
+    const pending = pendingPrependRef.current;
+    if (!pending) return;
+    pendingPrependRef.current = null;
+    const el = scrollContainerRef.current;
+    if (!el) return;
+    el.scrollTop = pending.prevTop + (el.scrollHeight - pending.prevHeight);
+  }, [messages]);
+
   useEffect(() => {
     if (loadingMsgs || messages.length === 0) return;
+    if (skipAutoScrollRef.current) {
+      // this messages change was a scroll-up prepend — don't yank to the bottom.
+      skipAutoScrollRef.current = false;
+      return;
+    }
     if (!initialScrollDoneRef.current) {
       messagesEndRef.current?.scrollIntoView({ behavior: "instant" as ScrollBehavior });
       initialScrollDoneRef.current = true;
@@ -1439,6 +1532,7 @@ export function CompanionDetailPage() {
                   onMessagesCleared={() => {
                     setMessages([]);
                     messageCacheRef.current.delete(activeConversation.channel);
+                    reachedStartRef.current.delete(activeConversation.channel);
                   }}
                 />
               </div>
@@ -1468,7 +1562,16 @@ export function CompanionDetailPage() {
                 </div>
               )}
 
-              <div className="flex-1 overflow-y-auto overflow-x-hidden px-4 py-4 space-y-4 bg-background/30">
+              <div
+                ref={scrollContainerRef}
+                onScroll={handleMessagesScroll}
+                className="flex-1 overflow-y-auto overflow-x-hidden px-4 py-4 space-y-4 bg-background/30"
+              >
+                {!loadingMsgs && loadingOlder && (
+                  <div className="flex items-center justify-center py-2 text-muted-foreground/60">
+                    <Loader2 className="size-4 animate-spin" />
+                  </div>
+                )}
                 {loadingMsgs ? (
                   <MessagesSkeleton />
                 ) : groupedMessages.length === 0 ? (

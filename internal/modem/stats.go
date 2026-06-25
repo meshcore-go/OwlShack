@@ -103,4 +103,3 @@ func (p *kissStatsProvider) onBattery(_ byte, data []byte) {
 	p.batteryMV = binary.LittleEndian.Uint16(data[:2])
 	p.mu.Unlock()
 }
-

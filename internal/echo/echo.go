@@ -1,6 +1,7 @@
 package echo
 
 import (
+	"context"
 	"sync"
 	"time"
 
@@ -92,7 +93,7 @@ func (t *Tracker) OnRawPacket(data []byte, snr float32, rssi int8, hasSignalInfo
 	}
 
 	t.store.WriteAsync(func() {
-		if err := t.store.Echoes.Insert(echo); err != nil {
+		if err := t.store.Echoes.Insert(context.Background(), echo); err != nil {
 			t.log.Error("failed to insert echo", "error", err, "messageID", entry.messageID)
 			return
 		}
@@ -101,7 +102,7 @@ func (t *Tracker) OnRawPacket(data []byte, snr float32, rssi int8, hasSignalInfo
 			return
 		}
 
-		count, err := t.store.Messages.IncrementRepeatCount(entry.messageID)
+		count, err := t.store.Messages.IncrementRepeatCount(context.Background(), entry.messageID)
 		if err != nil {
 			t.log.Error("failed to increment repeat count", "error", err, "messageID", entry.messageID)
 			return

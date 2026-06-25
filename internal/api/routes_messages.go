@@ -43,7 +43,7 @@ func (s *Server) handleAddChannel(w http.ResponseWriter, r *http.Request) {
 	}
 
 	if persist := s.ConfigPersist(); persist != nil {
-		if err := persist(); err != nil {
+		if err := persist(r.Context()); err != nil {
 			s.log.Error("config persist failed after channel add", "error", err)
 		}
 	}
@@ -73,7 +73,7 @@ func (s *Server) handleRemoveChannel(w http.ResponseWriter, r *http.Request) {
 	}
 
 	if persist := s.ConfigPersist(); persist != nil {
-		if err := persist(); err != nil {
+		if err := persist(r.Context()); err != nil {
 			s.log.Error("config persist failed after channel remove", "error", err)
 		}
 	}
@@ -103,7 +103,7 @@ func (s *Server) handleListChannels(w http.ResponseWriter, r *http.Request) {
 
 func (s *Server) handleListMessages(w http.ResponseWriter, r *http.Request) {
 	name := r.PathValue("name")
-	cid, ok := s.companionID(w, name)
+	cid, ok := s.companionID(r.Context(), w, name)
 	if !ok {
 		return
 	}
@@ -112,36 +112,30 @@ func (s *Server) handleListMessages(w http.ResponseWriter, r *http.Request) {
 	limit, _ := strconv.Atoi(r.URL.Query().Get("limit"))
 	offset, _ := strconv.Atoi(r.URL.Query().Get("offset"))
 	afterID, _ := strconv.ParseInt(r.URL.Query().Get("afterId"), 10, 64)
+	beforeID, _ := strconv.ParseInt(r.URL.Query().Get("beforeId"), 10, 64)
 
-	var messages []messageJSON
+	var msgs []store.Message
 	var err error
 
-	if channel != "" && afterID > 0 {
-		msgs, e := s.store.Messages.ListAfter(cid, channel, afterID, limit)
-		err = e
-		messages = make([]messageJSON, 0, len(msgs))
-		for _, m := range msgs {
-			messages = append(messages, toMessageJSON(m))
-		}
-	} else if channel != "" {
-		msgs, e := s.store.Messages.List(cid, channel, limit, offset)
-		err = e
-		messages = make([]messageJSON, 0, len(msgs))
-		for _, m := range msgs {
-			messages = append(messages, toMessageJSON(m))
-		}
-	} else {
-		msgs, e := s.store.Messages.ListAll(cid, limit, offset)
-		err = e
-		messages = make([]messageJSON, 0, len(msgs))
-		for _, m := range msgs {
-			messages = append(messages, toMessageJSON(m))
-		}
+	switch {
+	case channel != "" && afterID > 0:
+		msgs, err = s.store.Messages.ListAfter(r.Context(), cid, channel, afterID, limit)
+	case channel != "" && beforeID > 0:
+		msgs, err = s.store.Messages.ListBefore(r.Context(), cid, channel, beforeID, limit)
+	case channel != "":
+		msgs, err = s.store.Messages.List(r.Context(), cid, channel, limit, offset)
+	default:
+		msgs, err = s.store.Messages.ListAll(r.Context(), cid, limit, offset)
 	}
 
 	if err != nil {
 		writeError(w, http.StatusInternalServerError, "failed to list messages")
 		return
+	}
+
+	messages := make([]messageJSON, 0, len(msgs))
+	for _, m := range msgs {
+		messages = append(messages, toMessageJSON(m))
 	}
 
 	writeJSON(w, http.StatusOK, messages)
@@ -188,6 +182,7 @@ func (s *Server) handleSendMessage(w http.ResponseWriter, r *http.Request) {
 	}
 
 	if sendErr != nil {
+		s.log.Error("channel/dm send", "error", sendErr)
 		writeError(w, http.StatusInternalServerError, "send failed: "+sendErr.Error())
 		return
 	}
@@ -234,12 +229,12 @@ func (s *Server) handleRetryMessage(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusBadRequest, "invalid message ID")
 		return
 	}
-	cid, ok := s.companionID(w, name)
+	cid, ok := s.companionID(r.Context(), w, name)
 	if !ok {
 		return
 	}
 
-	msg, err := s.store.Messages.GetByID(messageID)
+	msg, err := s.store.Messages.GetByID(r.Context(), messageID)
 	if err != nil {
 		writeError(w, http.StatusNotFound, "message not found")
 		return
@@ -275,10 +270,11 @@ func (s *Server) handleRetryMessage(w http.ResponseWriter, r *http.Request) {
 	}
 
 	// Delete the failed message — dmSender will create a new one with fresh status tracking
-	_ = s.store.Messages.Delete(messageID)
+	_ = s.store.Messages.Delete(r.Context(), messageID)
 
 	pubkeyHex := strings.TrimPrefix(msg.Channel, "dm:")
 	if sendErr := dmSender(pubkeyHex, msg.Text); sendErr != nil {
+		s.log.Error("message retry", "error", sendErr)
 		writeError(w, http.StatusInternalServerError, "retry failed: "+sendErr.Error())
 		return
 	}

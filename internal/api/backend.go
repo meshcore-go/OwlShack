@@ -1,5 +1,7 @@
 package api
 
+import "context"
+
 // Backend is the single seam between the HTTP/WS layer and the companion
 // runtime. The app package implements it; the api package never imports the
 // domain, which keeps the dependency arrow pointing inward (app -> api -> store).
@@ -40,23 +42,25 @@ type Backend interface {
 
 	// PersistChannels writes the companions' current channels back to the
 	// config file.
-	PersistChannels() error
+	PersistChannels(ctx context.Context) error
 
 	// Per-resource config writes. Each applies the change by surrogate id,
 	// re-validates the whole assembled config, and reloads — so an invalid edit
 	// is rejected before it persists. Save* with id==0 creates (returning the
 	// new id); id>0 updates. Secret fields typed *string mean "keep existing"
-	// when nil, set when non-nil, cleared when empty.
-	SaveSettings(in SettingsInput) error
-	SaveMqtt(in MqttInput) error
-	SaveBroker(in BrokerInput) (int64, error)
-	DeleteBroker(id int64) error
-	SaveCompanion(in CompanionInput) (int64, error)
-	DeleteCompanion(id int64) error
-	SaveChannel(in ChannelInput) (int64, error)
-	DeleteChannel(id int64) error
-	SaveTrigger(in TriggerInput) (int64, error)
-	DeleteTrigger(id int64) error
+	// when nil, set when non-nil, cleared when empty. The ctx is the request
+	// context, valid through the blocking write (the subsequent reload runs on
+	// the app lifecycle, not this ctx).
+	SaveSettings(ctx context.Context, in SettingsInput) error
+	SaveMqtt(ctx context.Context, in MqttInput) error
+	SaveBroker(ctx context.Context, in BrokerInput) (int64, error)
+	DeleteBroker(ctx context.Context, id int64) error
+	SaveCompanion(ctx context.Context, in CompanionInput) (int64, error)
+	DeleteCompanion(ctx context.Context, id int64) error
+	SaveChannel(ctx context.Context, in ChannelInput) (int64, error)
+	DeleteChannel(ctx context.Context, id int64) error
+	SaveTrigger(ctx context.Context, in TriggerInput) (int64, error)
+	DeleteTrigger(ctx context.Context, id int64) error
 }
 
 // --- per-resource config write inputs (JSON request bodies) ---

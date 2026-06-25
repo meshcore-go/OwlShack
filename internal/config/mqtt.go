@@ -27,19 +27,19 @@ func (c *MqttConfig) IsEnabled() bool {
 }
 
 type BrokerConfig struct {
-	Name                  string   `json:"name" yaml:"name" toml:"name"`
-	Enabled               bool     `json:"enabled" yaml:"enabled" toml:"enabled"`
-	Dedup                 bool     `json:"dedup" yaml:"dedup" toml:"dedup"`             // Do we enable dedup checks
-	Transport             string   `json:"transport" yaml:"transport" toml:"transport"` // websockets or tcp
-	Host                  string   `json:"host" yaml:"host" toml:"host"`
-	Port                  int      `json:"port" yaml:"port" toml:"port"`
+	Name      string `json:"name" yaml:"name" toml:"name"`
+	Enabled   bool   `json:"enabled" yaml:"enabled" toml:"enabled"`
+	Dedup     bool   `json:"dedup" yaml:"dedup" toml:"dedup"`             // Do we enable dedup checks
+	Transport string `json:"transport" yaml:"transport" toml:"transport"` // websockets or tcp
+	Host      string `json:"host" yaml:"host" toml:"host"`
+	Port      int    `json:"port" yaml:"port" toml:"port"`
 	// Deprecated: folded into the topic templates by ApplyDefaults.
 	TopicPrefix string `json:"topicPrefix,omitempty" yaml:"topicPrefix,omitempty" toml:"topicPrefix,omitempty"`
 	// Topic templates. Placeholders: {iata} {pubkey} {name} —
 	// meshcoretomqtt-style uppercase tokens ({IATA}, {PUBLIC_KEY}) also work.
 	// Empty = "meshcore/{iata}/{pubkey}/packets" (resp. "/status").
-	PacketTopic string `json:"packetTopic,omitempty" yaml:"packetTopic,omitempty" toml:"packetTopic,omitempty"`
-	StatusTopic string `json:"statusTopic,omitempty" yaml:"statusTopic,omitempty" toml:"statusTopic,omitempty"`
+	PacketTopic           string   `json:"packetTopic,omitempty" yaml:"packetTopic,omitempty" toml:"packetTopic,omitempty"`
+	StatusTopic           string   `json:"statusTopic,omitempty" yaml:"statusTopic,omitempty" toml:"statusTopic,omitempty"`
 	DisallowedPacketTypes []string `json:"disallowedPacketTypes" yaml:"disallowedPacketTypes" toml:"disallowedPacketTypes"`
 	RetainStatus          bool     `json:"retainStatus" yaml:"retainStatus" toml:"retainStatus"`
 	TlsEnabled            bool     `json:"tlsEnabled" yaml:"tlsEnabled" toml:"tlsEnabled"`

@@ -1,8 +1,10 @@
 package store
 
 import (
+	"context"
 	"database/sql"
 	"encoding/json"
+	"fmt"
 	"strings"
 )
 
@@ -60,44 +62,47 @@ type Neighbor struct {
 
 // RecordMetrics inserts a batch of readings in a single transaction. A nil/empty
 // batch is a no-op. Call inside WriteAsync/WriteSync.
-func (r *MetricsRepo) RecordMetrics(metrics []Metric) error {
+func (r *MetricsRepo) RecordMetrics(ctx context.Context, metrics []Metric) error {
 	if len(metrics) == 0 {
 		return nil
 	}
-	tx, err := r.db.Begin()
+	tx, err := r.db.BeginTx(ctx, nil)
 	if err != nil {
-		return err
+		return fmt.Errorf("beginning tx: %w", err)
 	}
 	defer tx.Rollback()
 
-	stmt, err := tx.Prepare(`
+	stmt, err := tx.PrepareContext(ctx, `
 		INSERT INTO node_metrics (ts, pubkey, metric, channel, value)
 		VALUES (?, ?, ?, ?, ?)`)
 	if err != nil {
-		return err
+		return fmt.Errorf("preparing metric insert: %w", err)
 	}
 	defer stmt.Close()
 
 	for _, m := range metrics {
-		if _, err := stmt.Exec(m.TS, m.Pubkey, m.Metric, m.Channel, m.Value); err != nil {
-			return err
+		if _, err := stmt.ExecContext(ctx, m.TS, m.Pubkey, m.Metric, m.Channel, m.Value); err != nil {
+			return fmt.Errorf("inserting metric: %w", err)
 		}
 	}
-	return tx.Commit()
+	if err := tx.Commit(); err != nil {
+		return fmt.Errorf("committing tx: %w", err)
+	}
+	return nil
 }
 
 // QueryHistory returns readings for one (pubkey, metric) between from..to (unix
 // seconds, inclusive), averaged into fixed-width buckets so charts stay smooth
 // and cheap regardless of polling cadence. bucketSecs <= 0 disables bucketing
 // (raw points). Points are ordered ascending by time.
-func (r *MetricsRepo) QueryHistory(pubkey []byte, metric string, from, to, bucketSecs int64) ([]HistoryPoint, error) {
+func (r *MetricsRepo) QueryHistory(ctx context.Context, pubkey []byte, metric string, from, to, bucketSecs int64) ([]HistoryPoint, error) {
 	var (
 		rows *sql.Rows
 		err  error
 	)
 	if bucketSecs > 0 {
 		// Integer bucket key: floor(ts/bucket)*bucket gives the bucket start.
-		rows, err = r.db.Query(`
+		rows, err = r.db.QueryContext(ctx, `
 			SELECT (ts / ?) * ? AS bucket, AVG(value)
 			FROM node_metrics
 			WHERE pubkey = ? AND metric = ? AND ts >= ? AND ts <= ?
@@ -105,7 +110,7 @@ func (r *MetricsRepo) QueryHistory(pubkey []byte, metric string, from, to, bucke
 			ORDER BY bucket ASC`,
 			bucketSecs, bucketSecs, pubkey, metric, from, to)
 	} else {
-		rows, err = r.db.Query(`
+		rows, err = r.db.QueryContext(ctx, `
 			SELECT ts, value
 			FROM node_metrics
 			WHERE pubkey = ? AND metric = ? AND ts >= ? AND ts <= ?
@@ -113,7 +118,7 @@ func (r *MetricsRepo) QueryHistory(pubkey []byte, metric string, from, to, bucke
 			pubkey, metric, from, to)
 	}
 	if err != nil {
-		return nil, err
+		return nil, fmt.Errorf("querying metric history: %w", err)
 	}
 	defer rows.Close()
 
@@ -121,20 +126,23 @@ func (r *MetricsRepo) QueryHistory(pubkey []byte, metric string, from, to, bucke
 	for rows.Next() {
 		var p HistoryPoint
 		if err := rows.Scan(&p.TS, &p.Value); err != nil {
-			return nil, err
+			return nil, fmt.Errorf("scanning history point: %w", err)
 		}
 		points = append(points, p)
 	}
-	return points, rows.Err()
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("iterating metric history: %w", err)
+	}
+	return points, nil
 }
 
 // ListMetricNames returns the distinct metric names recorded for a node, so the
 // frontend can populate a metric picker without hardcoding the catalogue.
-func (r *MetricsRepo) ListMetricNames(pubkey []byte) ([]string, error) {
-	rows, err := r.db.Query(`
+func (r *MetricsRepo) ListMetricNames(ctx context.Context, pubkey []byte) ([]string, error) {
+	rows, err := r.db.QueryContext(ctx, `
 		SELECT DISTINCT metric FROM node_metrics WHERE pubkey = ? ORDER BY metric ASC`, pubkey)
 	if err != nil {
-		return nil, err
+		return nil, fmt.Errorf("querying metric names: %w", err)
 	}
 	defer rows.Close()
 
@@ -142,11 +150,14 @@ func (r *MetricsRepo) ListMetricNames(pubkey []byte) ([]string, error) {
 	for rows.Next() {
 		var n string
 		if err := rows.Scan(&n); err != nil {
-			return nil, err
+			return nil, fmt.Errorf("scanning metric name: %w", err)
 		}
 		names = append(names, n)
 	}
-	return names, rows.Err()
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("iterating metric names: %w", err)
+	}
+	return names, nil
 }
 
 // UpsertNodeState writes the latest snapshot for a node. The new snapshot is
@@ -154,18 +165,18 @@ func (r *MetricsRepo) ListMetricNames(pubkey []byte) ([]string, error) {
 // succeeded but telemetry failed — keeps the last-known value of metrics it
 // didn't refresh rather than dropping them from the dashboard. Call inside
 // WriteAsync/WriteSync.
-func (r *MetricsRepo) UpsertNodeState(s *NodeState) error {
+func (r *MetricsRepo) UpsertNodeState(ctx context.Context, s *NodeState) error {
 	state := s.State
 	if strings.TrimSpace(state) == "" {
 		state = "{}"
 	}
 	var prev string
-	if err := r.db.QueryRow(`SELECT state FROM node_state WHERE pubkey = ?`, s.Pubkey).Scan(&prev); err == nil {
+	if err := r.db.QueryRowContext(ctx, `SELECT state FROM node_state WHERE pubkey = ?`, s.Pubkey).Scan(&prev); err == nil {
 		if merged, mErr := mergeStateJSON(prev, state); mErr == nil {
 			state = merged
 		}
 	}
-	_, err := r.db.Exec(`
+	if _, err := r.db.ExecContext(ctx, `
 		INSERT INTO node_state (pubkey, companion_id, kind, name, last_poll_ts, last_ok_ts, last_error, state)
 		VALUES (?, ?, ?, ?, ?, ?, ?, ?)
 		ON CONFLICT(pubkey) DO UPDATE SET
@@ -176,8 +187,10 @@ func (r *MetricsRepo) UpsertNodeState(s *NodeState) error {
 			last_ok_ts   = excluded.last_ok_ts,
 			last_error   = excluded.last_error,
 			state        = excluded.state`,
-		s.Pubkey, s.CompanionID, s.Kind, s.Name, s.LastPollTS, s.LastOkTS, s.LastError, state)
-	return err
+		s.Pubkey, s.CompanionID, s.Kind, s.Name, s.LastPollTS, s.LastOkTS, s.LastError, state); err != nil {
+		return fmt.Errorf("upserting node state: %w", err)
+	}
+	return nil
 }
 
 // mergeStateJSON returns prev overlaid with cur (cur wins on conflict), so the
@@ -207,8 +220,8 @@ func mergeStateJSON(prev, cur string) (string, error) {
 // snapshot: it updates only last_poll_ts + last_error (and companion/kind),
 // preserving name, last_ok_ts and the metric state on conflict. A transient
 // failure shouldn't blank a node's dashboard. Call inside WriteAsync/WriteSync.
-func (r *MetricsRepo) MarkPollFailure(s *NodeState) error {
-	_, err := r.db.Exec(`
+func (r *MetricsRepo) MarkPollFailure(ctx context.Context, s *NodeState) error {
+	if _, err := r.db.ExecContext(ctx, `
 		INSERT INTO node_state (pubkey, companion_id, kind, last_poll_ts, last_error)
 		VALUES (?, ?, ?, ?, ?)
 		ON CONFLICT(pubkey) DO UPDATE SET
@@ -216,18 +229,20 @@ func (r *MetricsRepo) MarkPollFailure(s *NodeState) error {
 			kind         = excluded.kind,
 			last_poll_ts = excluded.last_poll_ts,
 			last_error   = excluded.last_error`,
-		s.Pubkey, s.CompanionID, s.Kind, s.LastPollTS, s.LastError)
-	return err
+		s.Pubkey, s.CompanionID, s.Kind, s.LastPollTS, s.LastError); err != nil {
+		return fmt.Errorf("marking poll failure: %w", err)
+	}
+	return nil
 }
 
 // ListNodeStates returns every node snapshot, most-recently-polled first.
-func (r *MetricsRepo) ListNodeStates() ([]NodeState, error) {
-	rows, err := r.db.Query(`
+func (r *MetricsRepo) ListNodeStates(ctx context.Context) ([]NodeState, error) {
+	rows, err := r.db.QueryContext(ctx, `
 		SELECT pubkey, companion_id, kind, name, last_poll_ts, last_ok_ts, last_error, state
 		FROM node_state
 		ORDER BY last_poll_ts DESC`)
 	if err != nil {
-		return nil, err
+		return nil, fmt.Errorf("querying node states: %w", err)
 	}
 	defer rows.Close()
 
@@ -235,52 +250,58 @@ func (r *MetricsRepo) ListNodeStates() ([]NodeState, error) {
 	for rows.Next() {
 		var s NodeState
 		if err := rows.Scan(&s.Pubkey, &s.CompanionID, &s.Kind, &s.Name, &s.LastPollTS, &s.LastOkTS, &s.LastError, &s.State); err != nil {
-			return nil, err
+			return nil, fmt.Errorf("scanning node state: %w", err)
 		}
 		states = append(states, s)
 	}
-	return states, rows.Err()
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("iterating node states: %w", err)
+	}
+	return states, nil
 }
 
 // RecordNeighbors inserts a batch of neighbour SNR samples. Call inside
 // WriteAsync/WriteSync.
-func (r *MetricsRepo) RecordNeighbors(neighbors []Neighbor) error {
+func (r *MetricsRepo) RecordNeighbors(ctx context.Context, neighbors []Neighbor) error {
 	if len(neighbors) == 0 {
 		return nil
 	}
-	tx, err := r.db.Begin()
+	tx, err := r.db.BeginTx(ctx, nil)
 	if err != nil {
-		return err
+		return fmt.Errorf("beginning tx: %w", err)
 	}
 	defer tx.Rollback()
 
-	stmt, err := tx.Prepare(`
+	stmt, err := tx.PrepareContext(ctx, `
 		INSERT OR REPLACE INTO node_neighbors (ts, pubkey, neighbor_pubkey, snr)
 		VALUES (?, ?, ?, ?)`)
 	if err != nil {
-		return err
+		return fmt.Errorf("preparing neighbor insert: %w", err)
 	}
 	defer stmt.Close()
 
 	for _, n := range neighbors {
-		if _, err := stmt.Exec(n.TS, n.Pubkey, n.NeighborPubkey, n.SNR); err != nil {
-			return err
+		if _, err := stmt.ExecContext(ctx, n.TS, n.Pubkey, n.NeighborPubkey, n.SNR); err != nil {
+			return fmt.Errorf("inserting neighbor: %w", err)
 		}
 	}
-	return tx.Commit()
+	if err := tx.Commit(); err != nil {
+		return fmt.Errorf("committing tx: %w", err)
+	}
+	return nil
 }
 
 // PruneMetrics deletes time-series rows older than the given unix-seconds
 // cutoff, bounding raw storage growth. Returns the number of rows removed.
 // Call inside WriteAsync/WriteSync.
-func (r *MetricsRepo) PruneMetrics(cutoff int64) (int64, error) {
-	res, err := r.db.Exec(`DELETE FROM node_metrics WHERE ts < ?`, cutoff)
+func (r *MetricsRepo) PruneMetrics(ctx context.Context, cutoff int64) (int64, error) {
+	res, err := r.db.ExecContext(ctx, `DELETE FROM node_metrics WHERE ts < ?`, cutoff)
 	if err != nil {
-		return 0, err
+		return 0, fmt.Errorf("pruning node metrics: %w", err)
 	}
 	mRows, _ := res.RowsAffected()
-	if _, err := r.db.Exec(`DELETE FROM node_neighbors WHERE ts < ?`, cutoff); err != nil {
-		return mRows, err
+	if _, err := r.db.ExecContext(ctx, `DELETE FROM node_neighbors WHERE ts < ?`, cutoff); err != nil {
+		return mRows, fmt.Errorf("pruning node neighbors: %w", err)
 	}
 	return mRows, nil
 }

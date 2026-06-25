@@ -1,6 +1,7 @@
 package api
 
 import (
+	"context"
 	"encoding/hex"
 	"net/http"
 	"strconv"
@@ -21,7 +22,7 @@ func (s *Server) handleListEchoes(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	echoes, err := s.store.Echoes.ListByMessage(msgID)
+	echoes, err := s.store.Echoes.ListByMessage(r.Context(), msgID)
 	if err != nil {
 		writeError(w, http.StatusInternalServerError, "failed to list echoes")
 		return
@@ -48,7 +49,7 @@ func (s *Server) handleListEchoes(w http.ResponseWriter, r *http.Request) {
 			RSSI:         e.RSSI,
 		}
 
-		ej.Path = s.resolvePathHashes(e.PathHashes, e.PathHashSize)
+		ej.Path = s.resolvePathHashes(r.Context(), e.PathHashes, e.PathHashSize)
 		out = append(out, ej)
 	}
 
@@ -69,12 +70,12 @@ func (s *Server) handleGetMessagePath(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusBadRequest, "channel is required")
 		return
 	}
-	cid, ok := s.companionID(w, name)
+	cid, ok := s.companionID(r.Context(), w, name)
 	if !ok {
 		return
 	}
 
-	msgs, err := s.store.Messages.List(cid, channel, 1000, 0)
+	msgs, err := s.store.Messages.List(r.Context(), cid, channel, 1000, 0)
 	if err != nil {
 		writeError(w, http.StatusInternalServerError, "failed to fetch messages")
 		return
@@ -103,7 +104,7 @@ func (s *Server) handleGetMessagePath(w http.ResponseWriter, r *http.Request) {
 			result.PathHashSize = *m.PathHashSize
 		}
 
-		result.Path = s.resolvePathHashes(m.PathHashes, result.PathHashSize)
+		result.Path = s.resolvePathHashes(r.Context(), m.PathHashes, result.PathHashSize)
 		writeJSON(w, http.StatusOK, result)
 		return
 	}
@@ -111,7 +112,7 @@ func (s *Server) handleGetMessagePath(w http.ResponseWriter, r *http.Request) {
 	writeError(w, http.StatusNotFound, "message not found")
 }
 
-func (s *Server) resolvePathHashes(pathBytes []byte, hashSize int) []pathHopJSON {
+func (s *Server) resolvePathHashes(ctx context.Context, pathBytes []byte, hashSize int) []pathHopJSON {
 	if hashSize <= 0 {
 		hashSize = 1
 	}
@@ -124,7 +125,7 @@ func (s *Server) resolvePathHashes(pathBytes []byte, hashSize int) []pathHopJSON
 			Hash: hex.EncodeToString(hashBytes),
 		}
 
-		peers, err := s.store.Peers.LookupByHash(hashBytes)
+		peers, err := s.store.Peers.LookupByHash(ctx, hashBytes)
 		if err == nil {
 			hop.PeerNames = peers
 		}
@@ -145,7 +146,7 @@ func (s *Server) handleDeleteMessage(w http.ResponseWriter, r *http.Request) {
 
 	var delErr error
 	s.store.WriteSync(func() {
-		delErr = s.store.Messages.Delete(msgID)
+		delErr = s.store.Messages.Delete(r.Context(), msgID)
 	})
 	if delErr != nil {
 		writeError(w, http.StatusInternalServerError, "failed to delete message")
@@ -166,14 +167,14 @@ func (s *Server) handleBlockSender(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusBadRequest, "sender is required")
 		return
 	}
-	cid, ok := s.companionID(w, name)
+	cid, ok := s.companionID(r.Context(), w, name)
 	if !ok {
 		return
 	}
 
 	var blockErr error
 	s.store.WriteSync(func() {
-		blockErr = s.store.BlockedSenders.Block(cid, convoID, body.Sender)
+		blockErr = s.store.BlockedSenders.Block(r.Context(), cid, convoID, body.Sender)
 	})
 	if blockErr != nil {
 		writeError(w, http.StatusInternalServerError, "failed to block sender")
@@ -187,14 +188,14 @@ func (s *Server) handleUnblockSender(w http.ResponseWriter, r *http.Request) {
 	name := r.PathValue("name")
 	convoID := r.PathValue("conversationId")
 	sender := r.PathValue("sender")
-	cid, ok := s.companionID(w, name)
+	cid, ok := s.companionID(r.Context(), w, name)
 	if !ok {
 		return
 	}
 
 	var unblockErr error
 	s.store.WriteSync(func() {
-		unblockErr = s.store.BlockedSenders.Unblock(cid, convoID, sender)
+		unblockErr = s.store.BlockedSenders.Unblock(r.Context(), cid, convoID, sender)
 	})
 	if unblockErr != nil {
 		writeError(w, http.StatusInternalServerError, "failed to unblock sender")
@@ -207,12 +208,12 @@ func (s *Server) handleUnblockSender(w http.ResponseWriter, r *http.Request) {
 func (s *Server) handleListBlockedSenders(w http.ResponseWriter, r *http.Request) {
 	name := r.PathValue("name")
 	convoID := r.PathValue("conversationId")
-	cid, ok := s.companionID(w, name)
+	cid, ok := s.companionID(r.Context(), w, name)
 	if !ok {
 		return
 	}
 
-	senders, err := s.store.BlockedSenders.List(cid, convoID)
+	senders, err := s.store.BlockedSenders.List(r.Context(), cid, convoID)
 	if err != nil {
 		writeError(w, http.StatusInternalServerError, "failed to list blocked senders")
 		return
@@ -229,7 +230,7 @@ func (s *Server) handleDeleteConversationMessages(w http.ResponseWriter, r *http
 	name := r.PathValue("name")
 	convoID := r.PathValue("conversationId")
 
-	cid, ok := s.companionID(w, name)
+	cid, ok := s.companionID(r.Context(), w, name)
 	if !ok {
 		return
 	}
@@ -246,7 +247,7 @@ func (s *Server) handleDeleteConversationMessages(w http.ResponseWriter, r *http
 
 	var delErr error
 	s.store.WriteSync(func() {
-		delErr = s.store.Messages.DeleteByChannel(cid, channel)
+		delErr = s.store.Messages.DeleteByChannel(r.Context(), cid, channel)
 	})
 	if delErr != nil {
 		writeError(w, http.StatusInternalServerError, "failed to delete messages")
@@ -260,7 +261,7 @@ func (s *Server) handleListParticipants(w http.ResponseWriter, r *http.Request) 
 	name := r.PathValue("name")
 	convoID := r.PathValue("conversationId")
 
-	cid, ok := s.companionID(w, name)
+	cid, ok := s.companionID(r.Context(), w, name)
 	if !ok {
 		return
 	}
@@ -275,7 +276,7 @@ func (s *Server) handleListParticipants(w http.ResponseWriter, r *http.Request) 
 		return
 	}
 
-	senders, err := s.store.Messages.DistinctSenders(cid, channel)
+	senders, err := s.store.Messages.DistinctSenders(r.Context(), cid, channel)
 	if err != nil {
 		writeError(w, http.StatusInternalServerError, "failed to list participants")
 		return
@@ -312,7 +313,7 @@ func (s *Server) handleRenameChannel(w http.ResponseWriter, r *http.Request) {
 	}
 
 	if persist := s.ConfigPersist(); persist != nil {
-		if err := persist(); err != nil {
+		if err := persist(r.Context()); err != nil {
 			s.log.Error("config persist failed after channel rename", "error", err)
 		}
 	}

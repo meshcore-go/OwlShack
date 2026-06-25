@@ -1,6 +1,7 @@
 package app
 
 import (
+	"context"
 	"database/sql"
 	"errors"
 	"fmt"
@@ -79,28 +80,28 @@ type configRows struct {
 	triggers   []store.Trigger          // across all companions, with ChannelIDs
 }
 
-func loadConfigRows(st *store.Store) (*configRows, error) {
-	s, err := st.Settings.Get()
+func loadConfigRows(ctx context.Context, st *store.Store) (*configRows, error) {
+	s, err := st.Settings.Get(ctx)
 	if err != nil {
 		return nil, fmt.Errorf("reading settings: %w", err)
 	}
-	mq, err := st.Mqtt.Get()
+	mq, err := st.Mqtt.Get(ctx)
 	if err != nil {
 		return nil, fmt.Errorf("reading mqtt: %w", err)
 	}
-	brokers, err := st.Brokers.List()
+	brokers, err := st.Brokers.List(ctx)
 	if err != nil {
 		return nil, fmt.Errorf("reading brokers: %w", err)
 	}
-	comps, err := st.Companions.List()
+	comps, err := st.Companions.List(ctx)
 	if err != nil {
 		return nil, fmt.Errorf("reading companions: %w", err)
 	}
-	chans, err := st.Channels.List()
+	chans, err := st.Channels.List(ctx)
 	if err != nil {
 		return nil, fmt.Errorf("reading channels: %w", err)
 	}
-	trigs, err := st.Triggers.List()
+	trigs, err := st.Triggers.List(ctx)
 	if err != nil {
 		return nil, fmt.Errorf("reading triggers: %w", err)
 	}
@@ -225,8 +226,8 @@ func assembleFromRows(rows *configRows) *config.Config {
 }
 
 // readConfigFromTables assembles a *config.Config from the relational schema.
-func readConfigFromTables(st *store.Store) (*config.Config, error) {
-	rows, err := loadConfigRows(st)
+func readConfigFromTables(ctx context.Context, st *store.Store) (*config.Config, error) {
+	rows, err := loadConfigRows(ctx, st)
 	if err != nil {
 		return nil, err
 	}
@@ -246,12 +247,12 @@ func hasMqttConfig(mq *store.MqttSettings, brokers []store.Broker) bool {
 // writeConfigToTables disassembles a *config.Config into the relational schema.
 // MUST be called inside store.WriteSync (it issues many writes). Companions are
 // upserted by name to keep surrogate ids stable; everything else is replaced.
-func writeConfigToTables(st *store.Store, cfg *config.Config) error {
+func writeConfigToTables(ctx context.Context, st *store.Store, cfg *config.Config) error {
 	connType := "kiss"
 	if cfg.ConnectionType != nil && *cfg.ConnectionType != "" {
 		connType = *cfg.ConnectionType
 	}
-	if err := st.Settings.Set(&store.Settings{
+	if err := st.Settings.Set(ctx, &store.Settings{
 		LogLevel:       cfg.LogLevel,
 		ConnectionType: connType,
 		Connection:     cfg.Connection,
@@ -267,7 +268,7 @@ func writeConfigToTables(st *store.Store, cfg *config.Config) error {
 		return err
 	}
 
-	existing, err := st.Companions.List()
+	existing, err := st.Companions.List(ctx)
 	if err != nil {
 		return err
 	}
@@ -290,40 +291,40 @@ func writeConfigToTables(st *store.Store, cfg *config.Config) error {
 		}
 		if prev, ok := byName[cc.Name]; ok {
 			row.ID = prev.ID
-			if err := st.Companions.Update(&row); err != nil {
+			if err := st.Companions.Update(ctx, &row); err != nil {
 				return err
 			}
-		} else if err := st.Companions.Create(&row); err != nil {
+		} else if err := st.Companions.Create(ctx, &row); err != nil {
 			return err
 		}
 		keep[row.ID] = true
 		nameToID[cc.Name] = row.ID
 
-		if err := replaceCompanionChildren(st, row.ID, cc); err != nil {
+		if err := replaceCompanionChildren(ctx, st, row.ID, cc); err != nil {
 			return err
 		}
 	}
 	for _, c := range existing {
 		if !keep[c.ID] {
-			if err := st.Companions.Delete(c.ID); err != nil {
+			if err := st.Companions.Delete(ctx, c.ID); err != nil {
 				return err
 			}
 		}
 	}
 
-	return writeMqtt(st, cfg, nameToID)
+	return writeMqtt(ctx, st, cfg, nameToID)
 }
 
 // replaceCompanionChildren rewrites a companion's channels and triggers from
 // scratch. Channels first, so triggers can resolve their channel references to
 // the freshly-created channel ids.
-func replaceCompanionChildren(st *store.Store, companionID int64, cc config.CompanionConfig) error {
-	oldChans, err := st.Channels.ListByCompanion(companionID)
+func replaceCompanionChildren(ctx context.Context, st *store.Store, companionID int64, cc config.CompanionConfig) error {
+	oldChans, err := st.Channels.ListByCompanion(ctx, companionID)
 	if err != nil {
 		return err
 	}
 	for _, oc := range oldChans {
-		if err := st.Channels.Delete(oc.ID); err != nil {
+		if err := st.Channels.Delete(ctx, oc.ID); err != nil {
 			return err
 		}
 	}
@@ -332,19 +333,19 @@ func replaceCompanionChildren(st *store.Store, companionID int64, cc config.Comp
 	if cc.Channels != nil {
 		for _, ch := range *cc.Channels {
 			cr := store.CompanionChannel{CompanionID: companionID, Name: ch.Name, PrivateKey: ch.PrivateKey}
-			if err := st.Channels.Create(&cr); err != nil {
+			if err := st.Channels.Create(ctx, &cr); err != nil {
 				return err
 			}
 			chanID[ch.Name] = cr.ID
 		}
 	}
 
-	oldTrigs, err := st.Triggers.ListByCompanion(companionID)
+	oldTrigs, err := st.Triggers.ListByCompanion(ctx, companionID)
 	if err != nil {
 		return err
 	}
 	for _, ot := range oldTrigs {
-		if err := st.Triggers.Delete(ot.ID); err != nil {
+		if err := st.Triggers.Delete(ctx, ot.ID); err != nil {
 			return err
 		}
 	}
@@ -361,7 +362,7 @@ func replaceCompanionChildren(st *store.Store, companionID int64, cc config.Comp
 					// list (shouldn't happen post-ApplyDefaults) — create it so a
 					// private channel's key is never dropped.
 					cr := store.CompanionChannel{CompanionID: companionID, Name: ref.Name, PrivateKey: ref.PrivateKey}
-					if err := st.Channels.Create(&cr); err != nil {
+					if err := st.Channels.Create(ctx, &cr); err != nil {
 						return err
 					}
 					chanID[ref.Name] = cr.ID
@@ -383,14 +384,14 @@ func replaceCompanionChildren(st *store.Store, companionID int64, cc config.Comp
 			Schedule:           emptyToNil(tg.Schedule),
 			ChannelIDs:         chIDs,
 		}
-		if err := st.Triggers.Create(&tr); err != nil {
+		if err := st.Triggers.Create(ctx, &tr); err != nil {
 			return err
 		}
 	}
 	return nil
 }
 
-func writeMqtt(st *store.Store, cfg *config.Config, nameToID map[string]int64) error {
+func writeMqtt(ctx context.Context, st *store.Store, cfg *config.Config, nameToID map[string]int64) error {
 	var mq store.MqttSettings
 	var brokers []config.BrokerConfig
 	if cfg.Mqtt != nil {
@@ -406,21 +407,21 @@ func writeMqtt(st *store.Store, cfg *config.Config, nameToID map[string]int64) e
 		}
 		brokers = cfg.Mqtt.Brokers
 	}
-	if err := st.Mqtt.Set(&mq); err != nil {
+	if err := st.Mqtt.Set(ctx, &mq); err != nil {
 		return err
 	}
 
-	oldB, err := st.Brokers.List()
+	oldB, err := st.Brokers.List(ctx)
 	if err != nil {
 		return err
 	}
 	for _, b := range oldB {
-		if err := st.Brokers.Delete(b.ID); err != nil {
+		if err := st.Brokers.Delete(ctx, b.ID); err != nil {
 			return err
 		}
 	}
 	for _, b := range brokers {
-		if err := st.Brokers.Create(&store.Broker{
+		if err := st.Brokers.Create(ctx, &store.Broker{
 			Name:                  b.Name,
 			Enabled:               b.Enabled,
 			Dedup:                 b.Dedup,
@@ -450,15 +451,15 @@ func writeMqtt(st *store.Store, cfg *config.Config, nameToID map[string]int64) e
 // through the normal normalization path so legacy migrations apply), or imports
 // a default-named config file, or bootstraps a quiet default. Idempotent: once
 // the settings row exists it simply reads back.
-func initConfigTables(st *store.Store) (*config.Config, error) {
-	if _, err := st.Settings.Get(); err == nil {
-		return readConfigFromTables(st)
+func initConfigTables(ctx context.Context, st *store.Store) (*config.Config, error) {
+	if _, err := st.Settings.Get(ctx); err == nil {
+		return readConfigFromTables(ctx, st)
 	} else if !errors.Is(err, sql.ErrNoRows) {
 		return nil, fmt.Errorf("checking settings: %w", err)
 	}
 
 	// Not yet initialized. Migrate the legacy blob if present.
-	if raw, berr := st.AppConfig.Get(); berr == nil {
+	if raw, berr := st.AppConfig.Get(ctx); berr == nil {
 		cfg, perr := config.UnmarshalConfigJson([]byte(raw))
 		if perr != nil {
 			return nil, fmt.Errorf("parsing legacy config blob: %w", perr)
@@ -466,31 +467,31 @@ func initConfigTables(st *store.Store) (*config.Config, error) {
 		if err := cfg.EnsureCompanionKeys(); err != nil {
 			return nil, err
 		}
-		if err := persistToTables(st, cfg); err != nil {
+		if err := persistToTables(ctx, st, cfg); err != nil {
 			return nil, err
 		}
 		slog.Info("migrated legacy config blob into relational tables", "companions", len(cfg.Companions))
-		return readConfigFromTables(st)
+		return readConfigFromTables(ctx, st)
 	} else if !errors.Is(berr, sql.ErrNoRows) {
 		return nil, fmt.Errorf("reading legacy config blob: %w", berr)
 	}
 
 	// No tables, no blob: import a default-named file or bootstrap a default.
 	if path := config.FindDefaultConfig(); path != "" {
-		return importConfigFile(st, path)
+		return importConfigFile(ctx, st, path)
 	}
 	def := config.DefaultConfig()
-	if err := persistToTables(st, &def); err != nil {
+	if err := persistToTables(ctx, st, &def); err != nil {
 		return nil, err
 	}
 	slog.Info("no config found; bootstrapped a quiet default, complete setup in the web UI")
-	return readConfigFromTables(st)
+	return readConfigFromTables(ctx, st)
 }
 
 // persistToTables writes a config through the store's single writer goroutine.
-func persistToTables(st *store.Store, cfg *config.Config) error {
+func persistToTables(ctx context.Context, st *store.Store, cfg *config.Config) error {
 	var werr error
-	st.WriteSync(func() { werr = writeConfigToTables(st, cfg) })
+	st.WriteSync(func() { werr = writeConfigToTables(ctx, st, cfg) })
 	return werr
 }
 

@@ -17,9 +17,9 @@ func (s *Server) handleListPackets(w http.ResponseWriter, r *http.Request) {
 		limit = 100
 	}
 
-	packets, err := s.store.Packets.List(limit, offset)
+	packets, err := s.store.Packets.List(r.Context(), limit, offset)
 	if err != nil {
-		writeError(w, http.StatusInternalServerError, err.Error())
+		s.serverError(w, "failed to list packets", err)
 		return
 	}
 

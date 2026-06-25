@@ -1,6 +1,10 @@
 package store
 
-import "database/sql"
+import (
+	"context"
+	"database/sql"
+	"fmt"
+)
 
 // Companion is a node personality the bot runs. id is the stable key; name,
 // pubkey and private_key are all mutable (rename / rotate keypair freely).
@@ -24,64 +28,83 @@ func scanCompanion(s interface{ Scan(...any) error }) (*Companion, error) {
 	return &c, nil
 }
 
-func (r *CompanionRepo) List() ([]Companion, error) {
-	rows, err := r.db.Query(`
+func (r *CompanionRepo) List(ctx context.Context) ([]Companion, error) {
+	rows, err := r.db.QueryContext(ctx, `
 		SELECT id, name, private_key, pubkey, latitude, longitude, advert_interval
 		FROM companions ORDER BY id ASC`)
 	if err != nil {
-		return nil, err
+		return nil, fmt.Errorf("querying companions: %w", err)
 	}
 	defer rows.Close()
 	var out []Companion
 	for rows.Next() {
 		c, err := scanCompanion(rows)
 		if err != nil {
-			return nil, err
+			return nil, fmt.Errorf("scanning companion row: %w", err)
 		}
 		out = append(out, *c)
 	}
-	return out, rows.Err()
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("iterating companions: %w", err)
+	}
+	return out, nil
 }
 
-func (r *CompanionRepo) Get(id int64) (*Companion, error) {
-	return scanCompanion(r.db.QueryRow(`
+func (r *CompanionRepo) Get(ctx context.Context, id int64) (*Companion, error) {
+	c, err := scanCompanion(r.db.QueryRowContext(ctx, `
 		SELECT id, name, private_key, pubkey, latitude, longitude, advert_interval
 		FROM companions WHERE id = ?`, id))
+	if err != nil {
+		return nil, fmt.Errorf("getting companion: %w", err)
+	}
+	return c, nil
 }
 
 // IDByName resolves a companion's surrogate id from its (current) name. The API
 // keeps name in its URLs; history is keyed by id, so handlers resolve here.
 // Returns sql.ErrNoRows when no companion has that name.
-func (r *CompanionRepo) IDByName(name string) (int64, error) {
+func (r *CompanionRepo) IDByName(ctx context.Context, name string) (int64, error) {
 	var id int64
-	err := r.db.QueryRow(`SELECT id FROM companions WHERE name = ?`, name).Scan(&id)
-	return id, err
+	err := r.db.QueryRowContext(ctx, `SELECT id FROM companions WHERE name = ?`, name).Scan(&id)
+	if err != nil {
+		return id, fmt.Errorf("resolving companion id by name: %w", err)
+	}
+	return id, nil
 }
 
 // Create inserts a companion and sets c.ID to the new surrogate key.
-func (r *CompanionRepo) Create(c *Companion) error {
-	res, err := r.db.Exec(`
+func (r *CompanionRepo) Create(ctx context.Context, c *Companion) error {
+	res, err := r.db.ExecContext(ctx, `
 		INSERT INTO companions (name, private_key, pubkey, latitude, longitude, advert_interval)
 		VALUES (?, ?, ?, ?, ?, ?)`,
 		c.Name, c.PrivateKey, c.PubKey, c.Latitude, c.Longitude, c.AdvertInterval)
 	if err != nil {
-		return err
+		return fmt.Errorf("inserting companion: %w", err)
 	}
 	c.ID, err = res.LastInsertId()
-	return err
+	if err != nil {
+		return fmt.Errorf("reading inserted companion id: %w", err)
+	}
+	return nil
 }
 
-func (r *CompanionRepo) Update(c *Companion) error {
-	_, err := r.db.Exec(`
+func (r *CompanionRepo) Update(ctx context.Context, c *Companion) error {
+	_, err := r.db.ExecContext(ctx, `
 		UPDATE companions SET name=?, private_key=?, pubkey=?, latitude=?, longitude=?, advert_interval=?
 		WHERE id=?`,
 		c.Name, c.PrivateKey, c.PubKey, c.Latitude, c.Longitude, c.AdvertInterval, c.ID)
-	return err
+	if err != nil {
+		return fmt.Errorf("updating companion: %w", err)
+	}
+	return nil
 }
 
-func (r *CompanionRepo) Delete(id int64) error {
-	_, err := r.db.Exec(`DELETE FROM companions WHERE id = ?`, id)
-	return err
+func (r *CompanionRepo) Delete(ctx context.Context, id int64) error {
+	_, err := r.db.ExecContext(ctx, `DELETE FROM companions WHERE id = ?`, id)
+	if err != nil {
+		return fmt.Errorf("deleting companion: %w", err)
+	}
+	return nil
 }
 
 // CompanionChannel is a companion-owned channel. private_key empty = a public /
@@ -96,74 +119,89 @@ type CompanionChannel struct {
 type ChannelRepo struct{ db *sql.DB }
 
 // List returns every channel across all companions.
-func (r *ChannelRepo) List() ([]CompanionChannel, error) {
-	rows, err := r.db.Query(`
+func (r *ChannelRepo) List(ctx context.Context) ([]CompanionChannel, error) {
+	rows, err := r.db.QueryContext(ctx, `
 		SELECT id, companion_id, name, private_key
 		FROM companion_channels ORDER BY companion_id ASC, id ASC`)
 	if err != nil {
-		return nil, err
+		return nil, fmt.Errorf("querying channels: %w", err)
 	}
 	defer rows.Close()
 	var out []CompanionChannel
 	for rows.Next() {
 		var c CompanionChannel
 		if err := rows.Scan(&c.ID, &c.CompanionID, &c.Name, &c.PrivateKey); err != nil {
-			return nil, err
+			return nil, fmt.Errorf("scanning channel row: %w", err)
 		}
 		out = append(out, c)
 	}
-	return out, rows.Err()
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("iterating channels: %w", err)
+	}
+	return out, nil
 }
 
-func (r *ChannelRepo) ListByCompanion(companionID int64) ([]CompanionChannel, error) {
-	rows, err := r.db.Query(`
+func (r *ChannelRepo) ListByCompanion(ctx context.Context, companionID int64) ([]CompanionChannel, error) {
+	rows, err := r.db.QueryContext(ctx, `
 		SELECT id, companion_id, name, private_key
 		FROM companion_channels WHERE companion_id = ? ORDER BY id ASC`, companionID)
 	if err != nil {
-		return nil, err
+		return nil, fmt.Errorf("querying channels by companion: %w", err)
 	}
 	defer rows.Close()
 	var out []CompanionChannel
 	for rows.Next() {
 		var c CompanionChannel
 		if err := rows.Scan(&c.ID, &c.CompanionID, &c.Name, &c.PrivateKey); err != nil {
-			return nil, err
+			return nil, fmt.Errorf("scanning channel row: %w", err)
 		}
 		out = append(out, c)
 	}
-	return out, rows.Err()
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("iterating channels: %w", err)
+	}
+	return out, nil
 }
 
-func (r *ChannelRepo) Get(id int64) (*CompanionChannel, error) {
+func (r *ChannelRepo) Get(ctx context.Context, id int64) (*CompanionChannel, error) {
 	var c CompanionChannel
-	err := r.db.QueryRow(`
+	err := r.db.QueryRowContext(ctx, `
 		SELECT id, companion_id, name, private_key FROM companion_channels WHERE id = ?`, id).
 		Scan(&c.ID, &c.CompanionID, &c.Name, &c.PrivateKey)
 	if err != nil {
-		return nil, err
+		return nil, fmt.Errorf("getting channel: %w", err)
 	}
 	return &c, nil
 }
 
-func (r *ChannelRepo) Create(c *CompanionChannel) error {
-	res, err := r.db.Exec(`
+func (r *ChannelRepo) Create(ctx context.Context, c *CompanionChannel) error {
+	res, err := r.db.ExecContext(ctx, `
 		INSERT INTO companion_channels (companion_id, name, private_key) VALUES (?, ?, ?)`,
 		c.CompanionID, c.Name, c.PrivateKey)
 	if err != nil {
-		return err
+		return fmt.Errorf("inserting channel: %w", err)
 	}
 	c.ID, err = res.LastInsertId()
-	return err
+	if err != nil {
+		return fmt.Errorf("reading inserted channel id: %w", err)
+	}
+	return nil
 }
 
-func (r *ChannelRepo) Update(c *CompanionChannel) error {
-	_, err := r.db.Exec(`
+func (r *ChannelRepo) Update(ctx context.Context, c *CompanionChannel) error {
+	_, err := r.db.ExecContext(ctx, `
 		UPDATE companion_channels SET name=?, private_key=? WHERE id=?`,
 		c.Name, c.PrivateKey, c.ID)
-	return err
+	if err != nil {
+		return fmt.Errorf("updating channel: %w", err)
+	}
+	return nil
 }
 
-func (r *ChannelRepo) Delete(id int64) error {
-	_, err := r.db.Exec(`DELETE FROM companion_channels WHERE id = ?`, id)
-	return err
+func (r *ChannelRepo) Delete(ctx context.Context, id int64) error {
+	_, err := r.db.ExecContext(ctx, `DELETE FROM companion_channels WHERE id = ?`, id)
+	if err != nil {
+		return fmt.Errorf("deleting channel: %w", err)
+	}
+	return nil
 }
