@@ -1,6 +1,7 @@
 package app
 
 import (
+	"context"
 	"encoding/hex"
 	"fmt"
 	"log/slog"
@@ -189,8 +190,8 @@ func (b *backend) Repeater(name string) (*api.RepeaterOps, bool) {
 
 // PersistChannels writes each companion's current standalone channels back to
 // the config file, leaving the rest of the file intact.
-func (b *backend) PersistChannels() error {
-	cfg, err := loadConfigFromDB(b.db)
+func (b *backend) PersistChannels(ctx context.Context) error {
+	cfg, err := loadConfigFromDB(ctx, b.db)
 	if err != nil {
 		return fmt.Errorf("reading config for persist: %w", err)
 	}
@@ -208,7 +209,7 @@ func (b *backend) PersistChannels() error {
 		}
 	}
 
-	if err := saveConfig(b.db, cfg); err != nil {
+	if err := saveConfig(ctx, b.db, cfg); err != nil {
 		return err
 	}
 

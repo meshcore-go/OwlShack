@@ -1,7 +1,9 @@
 package store
 
 import (
+	"context"
 	"database/sql"
+	"fmt"
 	"strings"
 )
 
@@ -43,22 +45,22 @@ type Settings struct {
 
 type SettingsRepo struct{ db *sql.DB }
 
-func (r *SettingsRepo) Get() (*Settings, error) {
+func (r *SettingsRepo) Get(ctx context.Context) (*Settings, error) {
 	var s Settings
-	err := r.db.QueryRow(`
+	err := r.db.QueryRowContext(ctx, `
 		SELECT log_level, connection_type, connection, baud_rate, freq, bw, sf, cr, tx, listen_addr, setup_complete
 		FROM settings WHERE id = 1`).Scan(
 		&s.LogLevel, &s.ConnectionType, &s.Connection, &s.BaudRate,
 		&s.Freq, &s.BW, &s.SF, &s.CR, &s.TX, &s.ListenAddr, &s.SetupComplete,
 	)
 	if err != nil {
-		return nil, err
+		return nil, fmt.Errorf("getting settings: %w", err)
 	}
 	return &s, nil
 }
 
-func (r *SettingsRepo) Set(s *Settings) error {
-	_, err := r.db.Exec(`
+func (r *SettingsRepo) Set(ctx context.Context, s *Settings) error {
+	_, err := r.db.ExecContext(ctx, `
 		INSERT INTO settings
 			(id, log_level, connection_type, connection, baud_rate, freq, bw, sf, cr, tx, listen_addr, setup_complete)
 		VALUES (1, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
@@ -70,7 +72,10 @@ func (r *SettingsRepo) Set(s *Settings) error {
 		s.LogLevel, s.ConnectionType, s.Connection, s.BaudRate,
 		s.Freq, s.BW, s.SF, s.CR, s.TX, s.ListenAddr, s.SetupComplete,
 	)
-	return err
+	if err != nil {
+		return fmt.Errorf("setting settings: %w", err)
+	}
+	return nil
 }
 
 // MqttSettings is the single-row top-level MQTT config. NodeCompanionID selects
@@ -86,21 +91,21 @@ type MqttSettings struct {
 
 type MqttRepo struct{ db *sql.DB }
 
-func (r *MqttRepo) Get() (*MqttSettings, error) {
+func (r *MqttRepo) Get(ctx context.Context) (*MqttSettings, error) {
 	var m MqttSettings
-	err := r.db.QueryRow(`
+	err := r.db.QueryRowContext(ctx, `
 		SELECT enabled, node_companion_id, iata_code, status_interval, owner, email
 		FROM mqtt_settings WHERE id = 1`).Scan(
 		&m.Enabled, &m.NodeCompanionID, &m.IataCode, &m.StatusInterval, &m.Owner, &m.Email,
 	)
 	if err != nil {
-		return nil, err
+		return nil, fmt.Errorf("getting mqtt settings: %w", err)
 	}
 	return &m, nil
 }
 
-func (r *MqttRepo) Set(m *MqttSettings) error {
-	_, err := r.db.Exec(`
+func (r *MqttRepo) Set(ctx context.Context, m *MqttSettings) error {
+	_, err := r.db.ExecContext(ctx, `
 		INSERT INTO mqtt_settings
 			(id, enabled, node_companion_id, iata_code, status_interval, owner, email)
 		VALUES (1, ?, ?, ?, ?, ?, ?)
@@ -110,5 +115,8 @@ func (r *MqttRepo) Set(m *MqttSettings) error {
 			owner=excluded.owner, email=excluded.email`,
 		m.Enabled, m.NodeCompanionID, m.IataCode, m.StatusInterval, m.Owner, m.Email,
 	)
-	return err
+	if err != nil {
+		return fmt.Errorf("setting mqtt settings: %w", err)
+	}
+	return nil
 }

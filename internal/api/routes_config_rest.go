@@ -124,7 +124,7 @@ func triggerToDTO(t store.Trigger) triggerDTO {
 // --- handlers ---
 
 func (s *Server) handleGetSettings(w http.ResponseWriter, r *http.Request) {
-	st, err := s.store.Settings.Get()
+	st, err := s.store.Settings.Get(r.Context())
 	if err != nil {
 		writeError(w, http.StatusInternalServerError, "failed to read settings")
 		return
@@ -137,7 +137,7 @@ func (s *Server) handleGetSettings(w http.ResponseWriter, r *http.Request) {
 }
 
 func (s *Server) handleGetMqtt(w http.ResponseWriter, r *http.Request) {
-	m, err := s.store.Mqtt.Get()
+	m, err := s.store.Mqtt.Get(r.Context())
 	if err != nil {
 		writeError(w, http.StatusInternalServerError, "failed to read mqtt settings")
 		return
@@ -149,7 +149,7 @@ func (s *Server) handleGetMqtt(w http.ResponseWriter, r *http.Request) {
 }
 
 func (s *Server) handleGetBrokers(w http.ResponseWriter, r *http.Request) {
-	brokers, err := s.store.Brokers.List()
+	brokers, err := s.store.Brokers.List(r.Context())
 	if err != nil {
 		writeError(w, http.StatusInternalServerError, "failed to read brokers")
 		return
@@ -158,7 +158,7 @@ func (s *Server) handleGetBrokers(w http.ResponseWriter, r *http.Request) {
 }
 
 func (s *Server) handleGetCompanions(w http.ResponseWriter, r *http.Request) {
-	companions, err := s.store.Companions.List()
+	companions, err := s.store.Companions.List(r.Context())
 	if err != nil {
 		writeError(w, http.StatusInternalServerError, "failed to read companions")
 		return
@@ -172,7 +172,7 @@ func (s *Server) handleGetCompanionChannels(w http.ResponseWriter, r *http.Reque
 		writeError(w, http.StatusBadRequest, "invalid companion id")
 		return
 	}
-	chans, err := s.store.Channels.ListByCompanion(id)
+	chans, err := s.store.Channels.ListByCompanion(r.Context(), id)
 	if err != nil {
 		writeError(w, http.StatusInternalServerError, "failed to read channels")
 		return
@@ -184,7 +184,7 @@ func (s *Server) handleGetCompanionChannels(w http.ResponseWriter, r *http.Reque
 // uses it to resolve a trigger's channelIds to names without a fetch per
 // companion (each channel carries its companionId for client-side grouping).
 func (s *Server) handleGetAllChannels(w http.ResponseWriter, r *http.Request) {
-	chans, err := s.store.Channels.List()
+	chans, err := s.store.Channels.List(r.Context())
 	if err != nil {
 		writeError(w, http.StatusInternalServerError, "failed to read channels")
 		return
@@ -230,7 +230,7 @@ func (s *Server) handlePutSettings(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusBadRequest, "invalid JSON: "+err.Error())
 		return
 	}
-	if err := b.SaveSettings(in); err != nil {
+	if err := b.SaveSettings(r.Context(), in); err != nil {
 		writeError(w, http.StatusUnprocessableEntity, err.Error())
 		return
 	}
@@ -247,7 +247,7 @@ func (s *Server) handlePutMqtt(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusBadRequest, "invalid JSON: "+err.Error())
 		return
 	}
-	if err := b.SaveMqtt(in); err != nil {
+	if err := b.SaveMqtt(r.Context(), in); err != nil {
 		writeError(w, http.StatusUnprocessableEntity, err.Error())
 		return
 	}
@@ -267,7 +267,7 @@ func (s *Server) handleSaveBroker(w http.ResponseWriter, r *http.Request) {
 	if id, ok := pathID(r, "id"); ok {
 		in.ID = id
 	}
-	id, err := b.SaveBroker(in)
+	id, err := b.SaveBroker(r.Context(), in)
 	if err != nil {
 		writeError(w, http.StatusUnprocessableEntity, err.Error())
 		return
@@ -285,7 +285,7 @@ func (s *Server) handleDeleteBroker(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusBadRequest, "invalid id")
 		return
 	}
-	if err := b.DeleteBroker(id); err != nil {
+	if err := b.DeleteBroker(r.Context(), id); err != nil {
 		writeError(w, http.StatusUnprocessableEntity, err.Error())
 		return
 	}
@@ -305,7 +305,7 @@ func (s *Server) handleSaveCompanion(w http.ResponseWriter, r *http.Request) {
 	if id, ok := pathID(r, "id"); ok {
 		in.ID = id
 	}
-	id, err := b.SaveCompanion(in)
+	id, err := b.SaveCompanion(r.Context(), in)
 	if err != nil {
 		writeError(w, http.StatusUnprocessableEntity, err.Error())
 		return
@@ -323,7 +323,7 @@ func (s *Server) handleDeleteCompanion(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusBadRequest, "invalid id")
 		return
 	}
-	if err := b.DeleteCompanion(id); err != nil {
+	if err := b.DeleteCompanion(r.Context(), id); err != nil {
 		writeError(w, http.StatusUnprocessableEntity, err.Error())
 		return
 	}
@@ -347,7 +347,7 @@ func (s *Server) handleCreateChannel(w http.ResponseWriter, r *http.Request) {
 	}
 	in.ID = 0
 	in.CompanionID = cid
-	id, err := b.SaveChannel(in)
+	id, err := b.SaveChannel(r.Context(), in)
 	if err != nil {
 		writeError(w, http.StatusUnprocessableEntity, err.Error())
 		return
@@ -371,7 +371,7 @@ func (s *Server) handleSaveChannel(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	in.ID = id
-	if _, err := b.SaveChannel(in); err != nil {
+	if _, err := b.SaveChannel(r.Context(), in); err != nil {
 		writeError(w, http.StatusUnprocessableEntity, err.Error())
 		return
 	}
@@ -388,7 +388,7 @@ func (s *Server) handleDeleteChannel(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusBadRequest, "invalid id")
 		return
 	}
-	if err := b.DeleteChannel(id); err != nil {
+	if err := b.DeleteChannel(r.Context(), id); err != nil {
 		writeError(w, http.StatusUnprocessableEntity, err.Error())
 		return
 	}
@@ -408,7 +408,7 @@ func (s *Server) handleSaveTrigger(w http.ResponseWriter, r *http.Request) {
 	if id, ok := pathID(r, "id"); ok {
 		in.ID = id
 	}
-	id, err := b.SaveTrigger(in)
+	id, err := b.SaveTrigger(r.Context(), in)
 	if err != nil {
 		writeError(w, http.StatusUnprocessableEntity, err.Error())
 		return
@@ -426,7 +426,7 @@ func (s *Server) handleDeleteTrigger(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusBadRequest, "invalid id")
 		return
 	}
-	if err := b.DeleteTrigger(id); err != nil {
+	if err := b.DeleteTrigger(r.Context(), id); err != nil {
 		writeError(w, http.StatusUnprocessableEntity, err.Error())
 		return
 	}
@@ -443,9 +443,9 @@ func (s *Server) handleGetTriggers(w http.ResponseWriter, r *http.Request) {
 			writeError(w, http.StatusBadRequest, "invalid companionId")
 			return
 		}
-		trigs, err = s.store.Triggers.ListByCompanion(id)
+		trigs, err = s.store.Triggers.ListByCompanion(r.Context(), id)
 	} else {
-		trigs, err = s.store.Triggers.List()
+		trigs, err = s.store.Triggers.List(r.Context())
 	}
 	if err != nil {
 		writeError(w, http.StatusInternalServerError, "failed to read triggers")

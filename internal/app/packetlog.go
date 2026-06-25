@@ -1,6 +1,7 @@
 package app
 
 import (
+	"context"
 	"encoding/hex"
 	"log/slog"
 	"time"
@@ -40,7 +41,7 @@ func wirePacketLogger(mux *node.RadioMux, db *store.Store, srv *api.Server) {
 		}
 
 		db.WriteAsync(func() {
-			if insertErr := db.Packets.Insert(rec); insertErr != nil {
+			if insertErr := db.Packets.Insert(context.Background(), rec); insertErr != nil {
 				slog.Debug("failed to log rx packet", "error", insertErr)
 			}
 		})
@@ -66,7 +67,7 @@ func wirePacketLogger(mux *node.RadioMux, db *store.Store, srv *api.Server) {
 		}
 
 		db.WriteAsync(func() {
-			if insertErr := db.Packets.Insert(rec); insertErr != nil {
+			if insertErr := db.Packets.Insert(context.Background(), rec); insertErr != nil {
 				slog.Debug("failed to log tx packet", "error", insertErr)
 			}
 		})

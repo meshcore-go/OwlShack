@@ -81,13 +81,13 @@ type Target struct {
 // Lister supplies the current set of monitor targets. Called once per cycle, so
 // adding/removing a monitor takes effect on the next tick with no restart.
 type Lister interface {
-	Targets() ([]Target, error)
+	Targets(ctx context.Context) ([]Target, error)
 }
 
 // ListerFunc adapts a function to the Lister interface.
-type ListerFunc func() ([]Target, error)
+type ListerFunc func(ctx context.Context) ([]Target, error)
 
-func (f ListerFunc) Targets() ([]Target, error) { return f() }
+func (f ListerFunc) Targets(ctx context.Context) ([]Target, error) { return f(ctx) }
 
 // Reading is one decoded value a Collector reports for a node. Channel is the
 // CayenneLPP channel for sensor readings (0 for status fields with no channel).
@@ -159,8 +159,8 @@ func New(st *store.Store, bc Broadcaster, lister Lister, log *slog.Logger) *Serv
 // Targets returns the current monitor target set from the lister — the nodes
 // whose monitor toggle is on right now. The API uses this to list monitored
 // nodes, so a freshly enrolled node shows up before its first poll completes.
-func (s *Service) Targets() ([]Target, error) {
-	return s.lister.Targets()
+func (s *Service) Targets(ctx context.Context) ([]Target, error) {
+	return s.lister.Targets(ctx)
 }
 
 // RegisterCollector wires a Collector for the given node kind (e.g. "repeater").
@@ -196,7 +196,7 @@ func (s *Service) scheduleLoop(ctx context.Context) {
 }
 
 func (s *Service) runCycle(ctx context.Context) {
-	targets, err := s.lister.Targets()
+	targets, err := s.lister.Targets(ctx)
 	if err != nil {
 		s.log.Error("listing monitor targets", "error", err)
 		return
@@ -305,15 +305,17 @@ func (s *Service) poll(ctx context.Context, t Target) error {
 		})
 	}
 
-	// Persist metrics + neighbours + state on the writer goroutine.
+	// Persist metrics + neighbours + state on the writer goroutine. The poll
+	// ctx is a per-request timeout that's cancelled once poll() returns, so the
+	// async closure must use a background ctx instead of capturing it.
 	s.st.WriteAsync(func() {
-		if err := s.st.Metrics.RecordMetrics(metrics); err != nil {
+		if err := s.st.Metrics.RecordMetrics(context.Background(), metrics); err != nil {
 			s.log.Error("recording metrics", "error", err)
 		}
-		if err := s.st.Metrics.RecordNeighbors(neighbors); err != nil {
+		if err := s.st.Metrics.RecordNeighbors(context.Background(), neighbors); err != nil {
 			s.log.Error("recording neighbors", "error", err)
 		}
-		if err := s.st.Metrics.UpsertNodeState(&state); err != nil {
+		if err := s.st.Metrics.UpsertNodeState(context.Background(), &state); err != nil {
 			s.log.Error("upserting node state", "error", err)
 		}
 	})
@@ -344,7 +346,7 @@ func (s *Service) PollNow(ctx context.Context, pubkey []byte) error {
 	}
 	defer s.pollMu.Unlock()
 
-	targets, err := s.lister.Targets()
+	targets, err := s.lister.Targets(ctx)
 	if err != nil {
 		return fmt.Errorf("listing monitor targets: %w", err)
 	}
@@ -383,7 +385,7 @@ func (s *Service) PollNow(ctx context.Context, pubkey []byte) error {
 // snapshot (preserves last_ok_ts + metric state).
 func (s *Service) persistState(state store.NodeState) {
 	s.st.WriteAsync(func() {
-		if err := s.st.Metrics.MarkPollFailure(&state); err != nil {
+		if err := s.st.Metrics.MarkPollFailure(context.Background(), &state); err != nil {
 			s.log.Error("recording poll failure", "error", err)
 		}
 	})
@@ -408,7 +410,7 @@ func (s *Service) pruneLoop(ctx context.Context) {
 func (s *Service) prune() {
 	cutoff := time.Now().Add(-retention).Unix()
 	s.st.WriteAsync(func() {
-		removed, err := s.st.Metrics.PruneMetrics(cutoff)
+		removed, err := s.st.Metrics.PruneMetrics(context.Background(), cutoff)
 		if err != nil {
 			s.log.Error("pruning metrics", "error", err)
 			return

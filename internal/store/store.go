@@ -1,6 +1,7 @@
 package store
 
 import (
+	"context"
 	"database/sql"
 	"fmt"
 	"log/slog"
@@ -39,7 +40,7 @@ type Store struct {
 	dropped    atomic.Uint64
 }
 
-func Open(path string) (*Store, error) {
+func Open(ctx context.Context, path string) (*Store, error) {
 	// modernc.org/sqlite (NOT mattn/go-sqlite3) configures pragmas via "_pragma="
 	// query params applied to every pooled connection. The old mattn-style
 	// "_journal_mode=WAL&_busy_timeout=..." form was silently ignored, leaving the
@@ -53,7 +54,7 @@ func Open(path string) (*Store, error) {
 		return nil, fmt.Errorf("opening database: %w", err)
 	}
 
-	if err := db.Ping(); err != nil {
+	if err := db.PingContext(ctx); err != nil {
 		db.Close()
 		return nil, fmt.Errorf("pinging database: %w", err)
 	}
@@ -79,7 +80,7 @@ func Open(path string) (*Store, error) {
 		writerDone:     make(chan struct{}),
 	}
 
-	if err := s.migrate(); err != nil {
+	if err := s.migrate(ctx); err != nil {
 		db.Close()
 		return nil, fmt.Errorf("running migrations: %w", err)
 	}
@@ -147,21 +148,21 @@ func (s *Store) Close() error {
 	return s.db.Close()
 }
 
-func (s *Store) migrate() error {
+func (s *Store) migrate(ctx context.Context) error {
 	var version int
-	if err := s.db.QueryRow("PRAGMA user_version").Scan(&version); err != nil {
+	if err := s.db.QueryRowContext(ctx, "PRAGMA user_version").Scan(&version); err != nil {
 		return fmt.Errorf("reading schema version: %w", err)
 	}
 
-	migrations := []func(*sql.DB) error{
+	migrations := []func(context.Context, *sql.DB) error{
 		migrateV1,
 	}
 
 	for i := version; i < len(migrations); i++ {
-		if err := migrations[i](s.db); err != nil {
+		if err := migrations[i](ctx, s.db); err != nil {
 			return fmt.Errorf("migration %d: %w", i+1, err)
 		}
-		if _, err := s.db.Exec(fmt.Sprintf("PRAGMA user_version = %d", i+1)); err != nil {
+		if _, err := s.db.ExecContext(ctx, fmt.Sprintf("PRAGMA user_version = %d", i+1)); err != nil {
 			return fmt.Errorf("setting schema version %d: %w", i+1, err)
 		}
 	}
@@ -176,8 +177,8 @@ func (s *Store) migrate() error {
 // decibels (REAL); rssi is whole dBm (INTEGER). companion_contacts is a
 // self-contained address-book record (its own name/type/location/path/feat/
 // last-seen, no discovered_peers FK), so deleting a peer never touches a contact.
-func migrateV1(db *sql.DB) error {
-	_, err := db.Exec(`
+func migrateV1(ctx context.Context, db *sql.DB) error {
+	_, err := db.ExecContext(ctx, `
 		CREATE TABLE IF NOT EXISTS discovered_peers (
 			pubkey             BLOB PRIMARY KEY,
 			name               TEXT NOT NULL DEFAULT '',

@@ -80,7 +80,7 @@ func (r *companionRegistry) find(name string) (*companion.Companion, bool) {
 // node that's a contact of two companions isn't polled twice. Called once per
 // poll cycle, so toggling monitoring in the UI takes effect on the next tick.
 func newContactLister(reg *companionRegistry, db *store.Store) monitor.ListerFunc {
-	return func() ([]monitor.Target, error) {
+	return func(ctx context.Context) ([]monitor.Target, error) {
 		reg.mu.RLock()
 		comps := make(map[string]*companion.Companion, len(reg.byName))
 		for n, c := range reg.byName {
@@ -91,7 +91,7 @@ func newContactLister(reg *companionRegistry, db *store.Store) monitor.ListerFun
 		seen := make(map[string]bool)
 		var targets []monitor.Target
 		for name, c := range comps {
-			contacts, err := db.Contacts.List(c.ID())
+			contacts, err := db.Contacts.List(ctx, c.ID())
 			if err != nil {
 				// Don't silently drop a companion's nodes — that surfaces as a
 				// misleading "not monitored" on a manual poll. Fail the listing so
@@ -188,7 +188,7 @@ func (rc *repeaterCollector) Collect(ctx context.Context, t monitor.Target) (*mo
 
 	hadSession := client.Session(pubkeyHex) != nil
 	if !hadSession {
-		if err := rc.login(client, t, c.ID()); err != nil {
+		if err := rc.login(ctx, client, t, c.ID()); err != nil {
 			return nil, fmt.Errorf("login: %w", err)
 		}
 	}
@@ -202,7 +202,7 @@ func (rc *repeaterCollector) Collect(ctx context.Context, t monitor.Target) (*mo
 			// A pre-existing session went stale (repeater reboot / expiry):
 			// drop it, re-login once, and retry the request.
 			client.Logout(pubkeyHex)
-			if lerr := rc.login(client, t, c.ID()); lerr != nil {
+			if lerr := rc.login(ctx, client, t, c.ID()); lerr != nil {
 				return nil, fmt.Errorf("re-login after stale session: %w", lerr)
 			}
 			status, err = client.SendStatusReq(pubkeyHex, monitorReqTimeout)
@@ -290,9 +290,9 @@ func probeEnabled(probes []string, name string) bool {
 
 // login resolves the stored admin password from contact metadata (blank if
 // none — some repeaters have no admin password) and authenticates.
-func (rc *repeaterCollector) login(client *repeater.Client, t monitor.Target, companionID int64) error {
+func (rc *repeaterCollector) login(ctx context.Context, client *repeater.Client, t monitor.Target, companionID int64) error {
 	password := ""
-	if contact, err := rc.db.Contacts.Get(companionID, t.Pubkey); err == nil && contact != nil {
+	if contact, err := rc.db.Contacts.Get(ctx, companionID, t.Pubkey); err == nil && contact != nil {
 		password = contact.Metadata.RepeaterPassword
 	}
 	_, err := client.SendLogin(hex.EncodeToString(t.Pubkey), password, monitorLoginTimeout)

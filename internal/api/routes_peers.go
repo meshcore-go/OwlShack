@@ -7,9 +7,9 @@ import (
 )
 
 func (s *Server) handleListPeers(w http.ResponseWriter, r *http.Request) {
-	peers, err := s.store.Peers.List()
+	peers, err := s.store.Peers.List(r.Context())
 	if err != nil {
-		writeError(w, http.StatusInternalServerError, err.Error())
+		s.serverError(w, "failed to list peers", err)
 		return
 	}
 
@@ -63,10 +63,10 @@ func (s *Server) handleDeletePeer(w http.ResponseWriter, r *http.Request) {
 	// needed.
 	var delErr error
 	s.store.WriteSync(func() {
-		delErr = s.store.Peers.Delete(pubkey)
+		delErr = s.store.Peers.Delete(r.Context(), pubkey)
 	})
 	if delErr != nil {
-		writeError(w, http.StatusInternalServerError, delErr.Error())
+		s.serverError(w, "failed to delete peer", delErr)
 		return
 	}
 	s.afterPeerDelete([]string{pubkeyHex}, [][]byte{pubkey})
@@ -100,10 +100,10 @@ func (s *Server) handleBulkDeletePeers(w http.ResponseWriter, r *http.Request) {
 
 	var delErr error
 	s.store.WriteSync(func() {
-		delErr = s.store.Peers.DeleteMany(pubkeys)
+		delErr = s.store.Peers.DeleteMany(r.Context(), pubkeys)
 	})
 	if delErr != nil {
-		writeError(w, http.StatusInternalServerError, delErr.Error())
+		s.serverError(w, "failed to delete peer", delErr)
 		return
 	}
 	s.afterPeerDelete(hexes, pubkeys)

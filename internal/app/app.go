@@ -68,13 +68,13 @@ func applyListenEnvOverrides(addr string) string {
 // It returns a non-nil error only on a fatal startup or unrecoverable failure;
 // a clean shutdown via ctx returns nil.
 func Run(ctx context.Context, importPath string, verbosity int) error {
-	db, err := store.Open("meshcore.db")
+	db, err := store.Open(ctx, "meshcore.db")
 	if err != nil {
 		return fmt.Errorf("database open: %w", err)
 	}
 	defer db.Close()
 
-	cfg, err := resolveConfig(db, importPath)
+	cfg, err := resolveConfig(ctx, db, importPath)
 	if err != nil {
 		return fmt.Errorf("resolving config: %w", err)
 	}
@@ -155,7 +155,7 @@ func Run(ctx context.Context, importPath string, verbosity int) error {
 		case <-sighup:
 			slog.Info("SIGHUP received, reloading config...")
 
-			newCfg, err := loadConfigFromDB(db)
+			newCfg, err := loadConfigFromDB(ctx, db)
 			if err != nil {
 				slog.Error("config reload failed, keeping current config", "error", err)
 				continue
@@ -327,7 +327,7 @@ func reloadCompanions(ctx context.Context, oldCfg, newCfg *config.Config, runnin
 		slog.Info("started companion", "companion", p.block.Name)
 	}
 
-	hydratePeerTables(db, fresh)
+	hydratePeerTables(ctx, db, fresh)
 
 	return companions, stats, nil
 }
@@ -384,12 +384,12 @@ func stopCompanions(companions []*companion.Companion) {
 // hydratePeerTables seeds the companions' in-memory peer tables from the
 // database so a fresh process knows about previously-seen peers. OutPath is
 // intentionally not seeded: send-paths are learned-only (flood first).
-func hydratePeerTables(db *store.Store, companions []*companion.Companion) {
+func hydratePeerTables(ctx context.Context, db *store.Store, companions []*companion.Companion) {
 	if len(companions) == 0 {
 		return
 	}
 
-	peers, err := db.Peers.LoadAll()
+	peers, err := db.Peers.LoadAll(ctx)
 	if err != nil {
 		slog.Error("failed to load peers for hydration", "error", err)
 		return

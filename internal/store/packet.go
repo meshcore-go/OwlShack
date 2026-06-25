@@ -1,7 +1,9 @@
 package store
 
 import (
+	"context"
 	"database/sql"
+	"fmt"
 	"time"
 )
 
@@ -23,29 +25,29 @@ type PacketRepo struct {
 	maxRows int
 }
 
-func (r *PacketRepo) Insert(p *PacketRecord) error {
-	_, err := r.db.Exec(`
+func (r *PacketRepo) Insert(ctx context.Context, p *PacketRecord) error {
+	_, err := r.db.ExecContext(ctx, `
 		INSERT INTO packets (received_at, direction, raw, route_type, payload_type, snr, rssi)
 		VALUES (?, ?, ?, ?, ?, ?, ?)`,
 		p.ReceivedAt, p.Direction, p.Raw, p.RouteType, p.PayloadType, p.SNR, p.RSSI,
 	)
 	if err != nil {
-		return err
+		return fmt.Errorf("inserting packet: %w", err)
 	}
-	return r.prune()
+	return r.prune(ctx)
 }
 
-func (r *PacketRepo) List(limit, offset int) ([]PacketRecord, error) {
+func (r *PacketRepo) List(ctx context.Context, limit, offset int) ([]PacketRecord, error) {
 	if limit <= 0 {
 		limit = 100
 	}
-	rows, err := r.db.Query(`
+	rows, err := r.db.QueryContext(ctx, `
 		SELECT id, received_at, direction, raw, route_type, payload_type, snr, rssi
 		FROM packets
 		ORDER BY id DESC
 		LIMIT ? OFFSET ?`, limit, offset)
 	if err != nil {
-		return nil, err
+		return nil, fmt.Errorf("querying packets: %w", err)
 	}
 	defer rows.Close()
 
@@ -56,25 +58,34 @@ func (r *PacketRepo) List(limit, offset int) ([]PacketRecord, error) {
 			&p.ID, &p.ReceivedAt, &p.Direction, &p.Raw,
 			&p.RouteType, &p.PayloadType, &p.SNR, &p.RSSI,
 		); err != nil {
-			return nil, err
+			return nil, fmt.Errorf("scanning packet row: %w", err)
 		}
 		packets = append(packets, p)
 	}
-	return packets, rows.Err()
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("iterating packets: %w", err)
+	}
+	return packets, nil
 }
 
-func (r *PacketRepo) Count() (int64, error) {
+func (r *PacketRepo) Count(ctx context.Context) (int64, error) {
 	var count int64
-	err := r.db.QueryRow("SELECT COUNT(*) FROM packets").Scan(&count)
-	return count, err
+	err := r.db.QueryRowContext(ctx, "SELECT COUNT(*) FROM packets").Scan(&count)
+	if err != nil {
+		return 0, fmt.Errorf("counting packets: %w", err)
+	}
+	return count, nil
 }
 
-func (r *PacketRepo) prune() error {
-	_, err := r.db.Exec(`
+func (r *PacketRepo) prune(ctx context.Context) error {
+	_, err := r.db.ExecContext(ctx, `
 		DELETE FROM packets WHERE id IN (
 			SELECT id FROM packets ORDER BY id ASC LIMIT MAX(0,
 				(SELECT COUNT(*) FROM packets) - ?
 			)
 		)`, r.maxRows)
-	return err
+	if err != nil {
+		return fmt.Errorf("pruning packets: %w", err)
+	}
+	return nil
 }

@@ -1,6 +1,7 @@
 package api
 
 import (
+	"context"
 	"encoding/json"
 	"io/fs"
 	"log/slog"
@@ -253,7 +254,7 @@ func (s *Server) ChannelRenamer() ChannelRenamerFunc {
 	return nil
 }
 
-func (s *Server) ConfigPersist() func() error {
+func (s *Server) ConfigPersist() func(context.Context) error {
 	if b := s.backendRef(); b != nil {
 		return b.PersistChannels
 	}
@@ -303,6 +304,13 @@ func writeJSON(w http.ResponseWriter, status int, v any) {
 
 func writeError(w http.ResponseWriter, status int, msg string) {
 	writeJSON(w, status, map[string]string{"error": msg})
+}
+
+// serverError logs a technical/internal failure (DB, encoding, etc.) and returns
+// an opaque 500 — the underlying error must never leak to API clients.
+func (s *Server) serverError(w http.ResponseWriter, msg string, err error) {
+	s.log.Error(msg, "error", err)
+	writeError(w, http.StatusInternalServerError, msg)
 }
 
 func readJSON(r *http.Request, v any) error {

@@ -19,7 +19,7 @@ import (
 // PollNow is the one monitoring write path (the rest are reads off the store).
 type NodePoller interface {
 	PollNow(ctx context.Context, pubkey []byte) error
-	Targets() ([]monitor.Target, error)
+	Targets(ctx context.Context) ([]monitor.Target, error)
 }
 
 // Node monitoring read endpoints. Which nodes are monitored is toggled through
@@ -38,14 +38,14 @@ func (s *Server) handleListMonitoredNodes(w http.ResponseWriter, r *http.Request
 		writeError(w, http.StatusServiceUnavailable, "monitor not ready")
 		return
 	}
-	targets, err := poller.Targets()
+	targets, err := poller.Targets(r.Context())
 	if err != nil {
-		writeError(w, http.StatusInternalServerError, err.Error())
+		s.serverError(w, "failed to list monitored nodes", err)
 		return
 	}
-	states, err := s.store.Metrics.ListNodeStates()
+	states, err := s.store.Metrics.ListNodeStates(r.Context())
 	if err != nil {
-		writeError(w, http.StatusInternalServerError, err.Error())
+		s.serverError(w, "failed to list node states", err)
 		return
 	}
 	stateByKey := make(map[string]*store.NodeState, len(states))
@@ -98,7 +98,7 @@ func (s *Server) handleListMonitoredNodes(w http.ResponseWriter, r *http.Request
 		// node_state only learns the name from a successful poll; fall back to
 		// the discovered-peers table so an unpolled node isn't nameless.
 		if n.Name == "" {
-			if p, err := s.store.Peers.GetByPubKey(t.Pubkey); err == nil && p != nil {
+			if p, err := s.store.Peers.GetByPubKey(r.Context(), t.Pubkey); err == nil && p != nil {
 				n.Name = p.Name
 			}
 		}
@@ -123,9 +123,9 @@ func (s *Server) handleListNodeMetricNames(w http.ResponseWriter, r *http.Reques
 		writeError(w, http.StatusBadRequest, "invalid pubkey hex")
 		return
 	}
-	names, err := s.store.Metrics.ListMetricNames(pubkey)
+	names, err := s.store.Metrics.ListMetricNames(r.Context(), pubkey)
 	if err != nil {
-		writeError(w, http.StatusInternalServerError, err.Error())
+		s.serverError(w, "failed to query node metrics", err)
 		return
 	}
 	if names == nil {
@@ -154,9 +154,9 @@ func (s *Server) handleNodeHistory(w http.ResponseWriter, r *http.Request) {
 	to := parseInt64(q.Get("to"), 1<<62)
 	bucket := parseInt64(q.Get("bucket"), 300)
 
-	points, err := s.store.Metrics.QueryHistory(pubkey, metric, from, to, bucket)
+	points, err := s.store.Metrics.QueryHistory(r.Context(), pubkey, metric, from, to, bucket)
 	if err != nil {
-		writeError(w, http.StatusInternalServerError, err.Error())
+		s.serverError(w, "failed to query node history", err)
 		return
 	}
 	if points == nil {
@@ -181,6 +181,7 @@ func (s *Server) handlePollNode(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	if err := poller.PollNow(r.Context(), pubkey); err != nil {
+		s.log.Error("manual node poll", "error", err)
 		writeError(w, http.StatusBadGateway, err.Error())
 		return
 	}

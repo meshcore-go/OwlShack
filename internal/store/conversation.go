@@ -1,7 +1,10 @@
 package store
 
 import (
+	"context"
 	"database/sql"
+	"errors"
+	"fmt"
 	"time"
 )
 
@@ -30,11 +33,11 @@ type ContactInfo struct {
 	Name      string
 }
 
-func (r *ConversationRepo) List(companionID int64, channelNames []string, contacts []ContactInfo) ([]Conversation, error) {
+func (r *ConversationRepo) List(ctx context.Context, companionID int64, channelNames []string, contacts []ContactInfo) ([]Conversation, error) {
 	convos := make([]Conversation, 0)
 
 	for _, ch := range channelNames {
-		conv, err := r.channelConversation(companionID, ch)
+		conv, err := r.channelConversation(ctx, companionID, ch)
 		if err != nil {
 			return nil, err
 		}
@@ -42,7 +45,7 @@ func (r *ConversationRepo) List(companionID int64, channelNames []string, contac
 	}
 
 	for _, ct := range contacts {
-		conv, err := r.contactConversation(companionID, ct)
+		conv, err := r.contactConversation(ctx, companionID, ct)
 		if err != nil {
 			return nil, err
 		}
@@ -52,7 +55,7 @@ func (r *ConversationRepo) List(companionID int64, channelNames []string, contac
 	return convos, nil
 }
 
-func (r *ConversationRepo) channelConversation(companionID int64, channel string) (*Conversation, error) {
+func (r *ConversationRepo) channelConversation(ctx context.Context, companionID int64, channel string) (*Conversation, error) {
 	conv := &Conversation{
 		ID:   "channel:" + channel,
 		Type: "channel",
@@ -61,7 +64,7 @@ func (r *ConversationRepo) channelConversation(companionID int64, channel string
 
 	var text, sender, direction sql.NullString
 	var ts sql.NullTime
-	err := r.db.QueryRow(`
+	err := r.db.QueryRowContext(ctx, `
 		SELECT text, sender, direction, timestamp
 		FROM messages
 		WHERE companion_id = ? AND channel = ?
@@ -77,32 +80,35 @@ func (r *ConversationRepo) channelConversation(companionID int64, channel string
 			Timestamp: ts.Time,
 		}
 		conv.LastActive = ts.Time
-	} else if err != nil && err != sql.ErrNoRows {
-		return nil, err
+	} else if err != nil && !errors.Is(err, sql.ErrNoRows) {
+		return nil, fmt.Errorf("querying last channel message: %w", err)
 	}
 
 	var lastReadID int64
-	_ = r.db.QueryRow(`
+	err = r.db.QueryRowContext(ctx, `
 		SELECT last_read_id FROM conversation_reads
 		WHERE companion_id = ? AND conversation_id = ?`,
 		companionID, "channel:"+channel,
 	).Scan(&lastReadID)
+	if err != nil && !errors.Is(err, sql.ErrNoRows) {
+		return nil, fmt.Errorf("reading channel last_read_id: %w", err)
+	}
 
 	var unread int
-	err = r.db.QueryRow(`
+	err = r.db.QueryRowContext(ctx, `
 		SELECT COUNT(*) FROM messages
 		WHERE companion_id = ? AND channel = ? AND id > ? AND direction = 'rx'`,
 		companionID, channel, lastReadID,
 	).Scan(&unread)
 	if err != nil {
-		return nil, err
+		return nil, fmt.Errorf("counting unread channel messages: %w", err)
 	}
 	conv.UnreadCount = unread
 
 	return conv, nil
 }
 
-func (r *ConversationRepo) contactConversation(companionID int64, ct ContactInfo) (*Conversation, error) {
+func (r *ConversationRepo) contactConversation(ctx context.Context, companionID int64, ct ContactInfo) (*Conversation, error) {
 	channelKey := "dm:" + ct.PubKeyHex
 	conv := &Conversation{
 		ID:   "contact:" + ct.PubKeyHex,
@@ -112,7 +118,7 @@ func (r *ConversationRepo) contactConversation(companionID int64, ct ContactInfo
 
 	var text, sender, direction sql.NullString
 	var ts sql.NullTime
-	err := r.db.QueryRow(`
+	err := r.db.QueryRowContext(ctx, `
 		SELECT text, sender, direction, timestamp
 		FROM messages
 		WHERE companion_id = ? AND channel = ?
@@ -128,38 +134,44 @@ func (r *ConversationRepo) contactConversation(companionID int64, ct ContactInfo
 			Timestamp: ts.Time,
 		}
 		conv.LastActive = ts.Time
-	} else if err != nil && err != sql.ErrNoRows {
-		return nil, err
+	} else if err != nil && !errors.Is(err, sql.ErrNoRows) {
+		return nil, fmt.Errorf("querying last contact message: %w", err)
 	}
 
 	var lastReadID int64
-	_ = r.db.QueryRow(`
+	err = r.db.QueryRowContext(ctx, `
 		SELECT last_read_id FROM conversation_reads
 		WHERE companion_id = ? AND conversation_id = ?`,
 		companionID, "contact:"+ct.PubKeyHex,
 	).Scan(&lastReadID)
+	if err != nil && !errors.Is(err, sql.ErrNoRows) {
+		return nil, fmt.Errorf("reading contact last_read_id: %w", err)
+	}
 
 	var unread int
-	err = r.db.QueryRow(`
+	err = r.db.QueryRowContext(ctx, `
 		SELECT COUNT(*) FROM messages
 		WHERE companion_id = ? AND channel = ? AND id > ? AND direction = 'rx'`,
 		companionID, channelKey, lastReadID,
 	).Scan(&unread)
 	if err != nil {
-		return nil, err
+		return nil, fmt.Errorf("counting unread contact messages: %w", err)
 	}
 	conv.UnreadCount = unread
 
 	return conv, nil
 }
 
-func (r *ConversationRepo) MarkRead(companionID int64, conversationID string, lastReadID int64) error {
-	_, err := r.db.Exec(`
+func (r *ConversationRepo) MarkRead(ctx context.Context, companionID int64, conversationID string, lastReadID int64) error {
+	_, err := r.db.ExecContext(ctx, `
 		INSERT INTO conversation_reads (companion_id, conversation_id, last_read_id)
 		VALUES (?, ?, ?)
 		ON CONFLICT (companion_id, conversation_id)
 		DO UPDATE SET last_read_id = MAX(excluded.last_read_id, conversation_reads.last_read_id)`,
 		companionID, conversationID, lastReadID,
 	)
-	return err
+	if err != nil {
+		return fmt.Errorf("marking conversation read: %w", err)
+	}
+	return nil
 }

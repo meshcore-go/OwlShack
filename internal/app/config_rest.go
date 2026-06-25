@@ -1,6 +1,8 @@
 package app
 
 import (
+	"context"
+
 	"github.com/meshcore-go/meshcore-bot/internal/api"
 	"github.com/meshcore-go/meshcore-bot/internal/config"
 	"github.com/meshcore-go/meshcore-bot/internal/store"
@@ -13,10 +15,10 @@ import (
 
 // configMutate is the shared write transaction: snapshot → apply → validate →
 // persist → reload, serialized on the store's writer goroutine.
-func (b *backend) configMutate(apply func(*configRows), persist func(*store.Store) error) error {
+func (b *backend) configMutate(ctx context.Context, apply func(*configRows), persist func(*store.Store) error) error {
 	var resultErr error
 	b.db.WriteSync(func() {
-		rows, err := loadConfigRows(b.db)
+		rows, err := loadConfigRows(ctx, b.db)
 		if err != nil {
 			resultErr = err
 			return
@@ -56,10 +58,10 @@ func or[T any](p, d *T) *T {
 	return d
 }
 
-func (b *backend) SaveSettings(in api.SettingsInput) error {
+func (b *backend) SaveSettings(ctx context.Context, in api.SettingsInput) error {
 	def := config.DefaultConfig()
 	var row store.Settings
-	return b.configMutate(
+	return b.configMutate(ctx,
 		func(rows *configRows) {
 			ct := "kiss"
 			if in.ConnectionType != nil && *in.ConnectionType != "" {
@@ -86,11 +88,11 @@ func (b *backend) SaveSettings(in api.SettingsInput) error {
 			}
 			rows.settings = &row
 		},
-		func(st *store.Store) error { return st.Settings.Set(&row) },
+		func(st *store.Store) error { return st.Settings.Set(ctx, &row) },
 	)
 }
 
-func (b *backend) SaveMqtt(in api.MqttInput) error {
+func (b *backend) SaveMqtt(ctx context.Context, in api.MqttInput) error {
 	row := store.MqttSettings{
 		Enabled:         in.Enabled,
 		NodeCompanionID: in.NodeCompanionID,
@@ -99,15 +101,15 @@ func (b *backend) SaveMqtt(in api.MqttInput) error {
 		Owner:           in.Owner,
 		Email:           in.Email,
 	}
-	return b.configMutate(
+	return b.configMutate(ctx,
 		func(rows *configRows) { rows.mqtt = &row },
-		func(st *store.Store) error { return st.Mqtt.Set(&row) },
+		func(st *store.Store) error { return st.Mqtt.Set(ctx, &row) },
 	)
 }
 
-func (b *backend) SaveBroker(in api.BrokerInput) (int64, error) {
+func (b *backend) SaveBroker(ctx context.Context, in api.BrokerInput) (int64, error) {
 	var row store.Broker
-	err := b.configMutate(
+	err := b.configMutate(ctx,
 		func(rows *configRows) {
 			row = store.Broker{
 				ID: in.ID, Name: in.Name, Enabled: in.Enabled, Dedup: in.Dedup,
@@ -139,24 +141,24 @@ func (b *backend) SaveBroker(in api.BrokerInput) (int64, error) {
 		},
 		func(st *store.Store) error {
 			if row.ID == 0 {
-				return st.Brokers.Create(&row)
+				return st.Brokers.Create(ctx, &row)
 			}
-			return st.Brokers.Update(&row)
+			return st.Brokers.Update(ctx, &row)
 		},
 	)
 	return row.ID, err
 }
 
-func (b *backend) DeleteBroker(id int64) error {
-	return b.configMutate(
+func (b *backend) DeleteBroker(ctx context.Context, id int64) error {
+	return b.configMutate(ctx,
 		func(rows *configRows) {
 			rows.brokers = filterOut(rows.brokers, func(x store.Broker) bool { return x.ID == id })
 		},
-		func(st *store.Store) error { return st.Brokers.Delete(id) },
+		func(st *store.Store) error { return st.Brokers.Delete(ctx, id) },
 	)
 }
 
-func (b *backend) SaveCompanion(in api.CompanionInput) (int64, error) {
+func (b *backend) SaveCompanion(ctx context.Context, in api.CompanionInput) (int64, error) {
 	// Resolve the key up front so a generation failure surfaces before the tx.
 	key := ""
 	if in.PrivateKey != nil {
@@ -172,7 +174,7 @@ func (b *backend) SaveCompanion(in api.CompanionInput) (int64, error) {
 
 	var row store.Companion
 	var newPublic *store.CompanionChannel
-	err := b.configMutate(
+	err := b.configMutate(ctx,
 		func(rows *configRows) {
 			row = store.Companion{
 				ID: in.ID, Name: in.Name,
@@ -204,20 +206,20 @@ func (b *backend) SaveCompanion(in api.CompanionInput) (int64, error) {
 		},
 		func(st *store.Store) error {
 			if row.ID != 0 {
-				return st.Companions.Update(&row)
+				return st.Companions.Update(ctx, &row)
 			}
-			if err := st.Companions.Create(&row); err != nil {
+			if err := st.Companions.Create(ctx, &row); err != nil {
 				return err
 			}
 			newPublic.CompanionID = row.ID
-			return st.Channels.Create(newPublic)
+			return st.Channels.Create(ctx, newPublic)
 		},
 	)
 	return row.ID, err
 }
 
-func (b *backend) DeleteCompanion(id int64) error {
-	return b.configMutate(
+func (b *backend) DeleteCompanion(ctx context.Context, id int64) error {
+	return b.configMutate(ctx,
 		func(rows *configRows) {
 			rows.companions = filterOut(rows.companions, func(c store.Companion) bool { return c.ID == id })
 			rows.channels = filterOut(rows.channels, func(c store.CompanionChannel) bool { return c.CompanionID == id })
@@ -226,13 +228,13 @@ func (b *backend) DeleteCompanion(id int64) error {
 				rows.mqtt.NodeCompanionID = nil
 			}
 		},
-		func(st *store.Store) error { return st.Companions.Delete(id) }, // cascade clears children
+		func(st *store.Store) error { return st.Companions.Delete(ctx, id) }, // cascade clears children
 	)
 }
 
-func (b *backend) SaveChannel(in api.ChannelInput) (int64, error) {
+func (b *backend) SaveChannel(ctx context.Context, in api.ChannelInput) (int64, error) {
 	var row store.CompanionChannel
-	err := b.configMutate(
+	err := b.configMutate(ctx,
 		func(rows *configRows) {
 			row = store.CompanionChannel{ID: in.ID, CompanionID: in.CompanionID, Name: in.Name}
 			switch {
@@ -260,31 +262,31 @@ func (b *backend) SaveChannel(in api.ChannelInput) (int64, error) {
 		},
 		func(st *store.Store) error {
 			if row.ID == 0 {
-				return st.Channels.Create(&row)
+				return st.Channels.Create(ctx, &row)
 			}
-			return st.Channels.Update(&row)
+			return st.Channels.Update(ctx, &row)
 		},
 	)
 	return row.ID, err
 }
 
-func (b *backend) DeleteChannel(id int64) error {
-	return b.configMutate(
+func (b *backend) DeleteChannel(ctx context.Context, id int64) error {
+	return b.configMutate(ctx,
 		func(rows *configRows) {
 			rows.channels = filterOut(rows.channels, func(c store.CompanionChannel) bool { return c.ID == id })
 		},
-		func(st *store.Store) error { return st.Channels.Delete(id) }, // cascade clears trigger links
+		func(st *store.Store) error { return st.Channels.Delete(ctx, id) }, // cascade clears trigger links
 	)
 }
 
-func (b *backend) SaveTrigger(in api.TriggerInput) (int64, error) {
+func (b *backend) SaveTrigger(ctx context.Context, in api.TriggerInput) (int64, error) {
 	row := store.Trigger{
 		ID: in.ID, CompanionID: in.CompanionID, Type: in.Type, Template: in.Template,
 		CharLimitBehaviour: in.CharLimitBehaviour, MatchPatterns: in.Match, Contacts: in.Contacts,
 		RetryTimeout: in.RetryTimeout, MaxRetries: in.MaxRetries, PathHashSize: in.PathHashSize,
 		Schedule: in.Schedule, ChannelIDs: in.ChannelIDs,
 	}
-	err := b.configMutate(
+	err := b.configMutate(ctx,
 		func(rows *configRows) {
 			if in.ID == 0 {
 				rows.triggers = append(rows.triggers, row)
@@ -298,19 +300,19 @@ func (b *backend) SaveTrigger(in api.TriggerInput) (int64, error) {
 		},
 		func(st *store.Store) error {
 			if row.ID == 0 {
-				return st.Triggers.Create(&row)
+				return st.Triggers.Create(ctx, &row)
 			}
-			return st.Triggers.Update(&row)
+			return st.Triggers.Update(ctx, &row)
 		},
 	)
 	return row.ID, err
 }
 
-func (b *backend) DeleteTrigger(id int64) error {
-	return b.configMutate(
+func (b *backend) DeleteTrigger(ctx context.Context, id int64) error {
+	return b.configMutate(ctx,
 		func(rows *configRows) {
 			rows.triggers = filterOut(rows.triggers, func(t store.Trigger) bool { return t.ID == id })
 		},
-		func(st *store.Store) error { return st.Triggers.Delete(id) },
+		func(st *store.Store) error { return st.Triggers.Delete(ctx, id) },
 	)
 }

@@ -59,6 +59,7 @@ func (s *Server) handleSendTrace(w http.ResponseWriter, r *http.Request) {
 
 	tag, err := sender(pathBytes, req.PathHashSize)
 	if err != nil {
+		s.log.Error("trace send", "error", err)
 		writeError(w, http.StatusInternalServerError, err.Error())
 		return
 	}

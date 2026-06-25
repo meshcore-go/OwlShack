@@ -48,6 +48,7 @@ func (s *Server) handleSendAdvert(w http.ResponseWriter, r *http.Request) {
 	}
 
 	if err := sender(flood); err != nil {
+		s.log.Error("advert send", "error", err)
 		writeError(w, http.StatusInternalServerError, err.Error())
 		return
 	}
