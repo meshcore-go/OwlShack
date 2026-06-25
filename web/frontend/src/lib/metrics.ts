@@ -113,10 +113,6 @@ export function metricLabel(key: string): string {
   return metricDef(key).label;
 }
 
-export function metricKind(key: string): MetricKind {
-  return metricDef(key).kind;
-}
-
 export function formatMetric(key: string, v: number): string {
   return metricDef(key).format(v);
 }

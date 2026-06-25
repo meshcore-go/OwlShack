@@ -261,32 +261,15 @@ func (c *Config) ApplyDefaults() {
 	}
 }
 
-func UnmarshalConfigJson(data []byte) (*Config, error) {
+func unmarshalConfig(data []byte, fn func([]byte, any) error) (*Config, error) {
 	var cfg Config
-	err := json.Unmarshal(data, &cfg)
-	if err != nil {
+	if err := fn(data, &cfg); err != nil {
 		return nil, err
 	}
 	cfg.ApplyDefaults()
 	return &cfg, nil
 }
 
-func UnmarshalConfigYaml(data []byte) (*Config, error) {
-	var cfg Config
-	err := yaml.Unmarshal(data, &cfg)
-	if err != nil {
-		return nil, err
-	}
-	cfg.ApplyDefaults()
-	return &cfg, nil
-}
-
-func UnmarshalConfigToml(data []byte) (*Config, error) {
-	var cfg Config
-	err := toml.Unmarshal(data, &cfg)
-	if err != nil {
-		return nil, err
-	}
-	cfg.ApplyDefaults()
-	return &cfg, nil
-}
+func UnmarshalConfigJson(data []byte) (*Config, error) { return unmarshalConfig(data, json.Unmarshal) }
+func UnmarshalConfigYaml(data []byte) (*Config, error) { return unmarshalConfig(data, yaml.Unmarshal) }
+func UnmarshalConfigToml(data []byte) (*Config, error) { return unmarshalConfig(data, toml.Unmarshal) }
