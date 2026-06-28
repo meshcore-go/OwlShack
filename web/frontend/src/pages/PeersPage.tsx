@@ -161,7 +161,7 @@ export function PeersPage() {
         if (!q) return true;
         return (
           (p.name || "").toLowerCase().includes(q) ||
-          (p.type || "").toLowerCase().includes(q)
+          (p.pubkey || "").toLowerCase().includes(q)
         );
       })
       .sort(
@@ -252,7 +252,7 @@ export function PeersPage() {
             <Search className="absolute left-3 top-1/2 -translate-y-1/2 size-3.5 text-muted-foreground/60" />
             <Input
               type="search"
-              placeholder="search name or type…"
+              placeholder="search name or pubkey…"
               value={search}
               onChange={(e: React.ChangeEvent<HTMLInputElement>) =>
                 setSearch(e.target.value)
