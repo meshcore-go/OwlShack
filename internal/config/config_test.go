@@ -126,13 +126,18 @@ func TestConfig_Validate(t *testing.T) {
 			wantErr: true,
 		},
 		{
-			// Config.Validate reaches channel validation through the trigger's
-			// referenced channels (trig.Validate -> ch.Validate). The companion's
-			// standalone Channels list is NOT validated here (see suspected bug
-			// note), so the bad key must live on a trigger channel to be caught.
 			name: "trigger channel with non-hex private key",
 			mutate: func(c *Config) {
 				(*(*c.Companions[0].Triggers)[0].Channels)[0].PrivateKey = "nothex!!"
+			},
+			wantErr: true,
+		},
+		{
+			// A bad standalone channel key (not referenced by any trigger) must
+			// also be rejected — it still fails companion construction.
+			name: "standalone channel with non-hex private key",
+			mutate: func(c *Config) {
+				(*c.Companions[0].Channels)[0].PrivateKey = "nothex!!"
 			},
 			wantErr: true,
 		},

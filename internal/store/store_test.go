@@ -480,31 +480,25 @@ func TestPeerRepo_GetByPubKeyMissing(t *testing.T) {
 }
 
 // TestPeerRepo_OutPathSemantics covers the OutPath contract through the DB
-// round-trip: nil = path unknown, []byte{} = direct neighbour (0 hops),
-// non-empty = multi-hop.
-//
-// IMPORTANT OBSERVED BEHAVIOR (see suspected-bug report): SQLite + modernc
-// reads a stored zero-length BLOB back as a Go nil, so the in-memory
-// distinction between nil ("unknown") and []byte{} ("direct neighbour") is
-// LOST across persistence — both read back as nil. The "direct neighbour"
-// case below asserts wantLen 0 via wantNilAfterRT to document this; if the
-// driver/storage ever preserves empty-vs-nil, flip wantNilAfterRT to false.
+// round-trip: nil = path unknown (flood), []byte{} = direct neighbour (0 hops,
+// direct route), non-empty = multi-hop. All three must survive persistence —
+// scanOutPath reads the column as nullable so a stored zero-length BLOB comes
+// back as a non-nil empty slice, not nil (which would make a restored direct
+// neighbour flood).
 func TestPeerRepo_OutPathSemantics(t *testing.T) {
 	t.Parallel()
 	st := newTestStore(t)
 
 	tests := []struct {
-		name string
-		path []byte
-		size uint8
-		// wantNilAfterRT: does the value read back as Go nil?
-		wantNilAfterRT bool
-		wantLen        int
+		name    string
+		path    []byte
+		size    uint8
+		wantNil bool // unknown path reads back as nil; known paths (incl. empty) do not
+		wantLen int
 	}{
-		{name: "unknown (nil)", path: nil, size: 0, wantNilAfterRT: true},
-		// Empty slice persists as a zero-length BLOB but reads back as nil.
-		{name: "direct neighbour (empty)", path: []byte{}, size: 0, wantNilAfterRT: true},
-		{name: "multi-hop", path: []byte{0x01, 0x02, 0x03}, size: 1, wantNilAfterRT: false, wantLen: 3},
+		{name: "unknown (nil)", path: nil, size: 0, wantNil: true},
+		{name: "direct neighbour (empty)", path: []byte{}, size: 0, wantNil: false, wantLen: 0},
+		{name: "multi-hop", path: []byte{0x01, 0x02, 0x03}, size: 1, wantNil: false, wantLen: 3},
 	}
 
 	for i, tt := range tests {
@@ -524,7 +518,7 @@ func TestPeerRepo_OutPathSemantics(t *testing.T) {
 			if err != nil {
 				t.Fatalf("GetByPubKey: %v", err)
 			}
-			if tt.wantNilAfterRT {
+			if tt.wantNil {
 				if got.OutPath != nil {
 					t.Errorf("OutPath = %v, want nil after round-trip", got.OutPath)
 				}
