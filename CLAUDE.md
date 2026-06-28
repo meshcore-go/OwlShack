@@ -769,7 +769,6 @@ Messages have a `status` column: `NULL` (rx/legacy), `"sending"`, `"delivered"`,
 - No automated tests for the frontend; Playwright is ad-hoc against the running binary.
 - Login timeout is identical for "wrong password" vs "unreachable" — would be nice to differentiate.
 - **MQTT packet SNR format**: [`internal/mqtt/format.go`](./internal/mqtt/format.go) — `pkt.SNR` (real-dB float32) was formatted with `%d`, emitting literal `%!d(float32=…)` to the feed and failing `go vet`/CI. Now `%.2f` (a sane default that unbreaks CI); **confirm the exact representation the LetsMesh/CoreScope schema expects** (integer? quarter-dB?) and adjust if needed.
-- **DMs flood direct neighbours (pending a meshcore-go release).** The OutPath contract is `nil`=unknown→flood, `[]byte{}`=direct neighbour (0 hops), non-empty=multi-hop. The repeater client (`routeForPeer`) and companion ACKs honour it. The library `node.SendTextMessage` ([`../meshcore-go/node/node.go`](../meshcore-go) `isDirect := len(path) > 0`) still collapses `nil` and `[]byte{}` together, so a DM to a 0-hop neighbour floods needlessly. Fix is one line (`path != nil`) but lives in meshcore-go — ships only after a new release + `go.mod` bump (CI builds the pinned release, not the local `go.work` checkout).
 
 ---
 
