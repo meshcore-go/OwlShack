@@ -103,17 +103,19 @@ func (r *PeerRepo) GetByPubKey(ctx context.Context, pubkey []byte) (*Peer, error
 	var feat1, feat2, lastAdvertTS int64
 	var snr sql.NullFloat64
 	var rssi sql.NullInt64
+	var outPath sql.NullString
 	err := r.db.QueryRowContext(ctx, `
 		SELECT pubkey, name, type, lat, lon, feat1, feat2, out_path, out_path_hash_size, last_advert_ts, last_seen, snr, rssi
 		FROM discovered_peers WHERE pubkey = ?`, pubkey,
 	).Scan(&p.PubKey, &p.Name, &p.Type, &p.Lat, &p.Lon,
-		&feat1, &feat2, &p.OutPath, &p.OutPathHashSize, &lastAdvertTS, &p.LastSeen, &snr, &rssi)
+		&feat1, &feat2, &outPath, &p.OutPathHashSize, &lastAdvertTS, &p.LastSeen, &snr, &rssi)
 	if errors.Is(err, sql.ErrNoRows) {
 		return nil, nil
 	}
 	if err != nil {
 		return nil, fmt.Errorf("getting peer by pubkey: %w", err)
 	}
+	p.OutPath = scanOutPath(outPath)
 	p.Feat1 = uint16(feat1)
 	p.Feat2 = uint16(feat2)
 	p.LastAdvertTS = uint32(lastAdvertTS)
@@ -147,13 +149,15 @@ func scanPeers(rows *sql.Rows) ([]Peer, error) {
 		var snr sql.NullFloat64
 		var rssi sql.NullInt64
 		var lastAdvertTS int64
+		var outPath sql.NullString
 		if err := rows.Scan(
 			&p.PubKey, &p.Name, &p.Type, &p.Lat, &p.Lon,
-			&feat1, &feat2, &p.OutPath, &p.OutPathHashSize, &lastAdvertTS,
+			&feat1, &feat2, &outPath, &p.OutPathHashSize, &lastAdvertTS,
 			&p.LastSeen, &snr, &rssi,
 		); err != nil {
 			return nil, err
 		}
+		p.OutPath = scanOutPath(outPath)
 		p.Feat1 = uint16(feat1)
 		p.Feat2 = uint16(feat2)
 		p.LastAdvertTS = uint32(lastAdvertTS)
@@ -168,6 +172,17 @@ func scanPeers(rows *sql.Rows) ([]Peer, error) {
 		peers = append(peers, p)
 	}
 	return peers, rows.Err()
+}
+
+// scanOutPath preserves the nil(unknown) vs empty(direct neighbour) distinction
+// a plain []byte scan loses: the driver hands back both NULL and a zero-length
+// blob as nil, but routeForPeer floods on nil and routes direct on a non-nil
+// empty path, so collapsing them makes a restored direct neighbour flood.
+func scanOutPath(ns sql.NullString) []byte {
+	if !ns.Valid {
+		return nil
+	}
+	return []byte(ns.String)
 }
 
 func (r *PeerRepo) LookupByHash(ctx context.Context, hash []byte) ([]string, error) {
