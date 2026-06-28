@@ -174,6 +174,15 @@ func (c *Config) Validate() error {
 				}
 			}
 		}
+		// Validate the companion's own channels too, not just trigger-referenced
+		// ones: a bad standalone channel key still fails companion construction.
+		if comp.Channels != nil {
+			for j, ch := range *comp.Channels {
+				if err := ch.Validate(); err != nil {
+					return fmt.Errorf("companion %q channel[%d] %q: %w", comp.Name, j, ch.Name, err)
+				}
+			}
+		}
 	}
 
 	if c.Mqtt != nil {
