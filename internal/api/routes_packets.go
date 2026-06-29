@@ -6,6 +6,7 @@ import (
 	"strconv"
 	"time"
 
+	"github.com/meshcore-go/meshcore-bot/internal/store"
 	meshcore "github.com/meshcore-go/meshcore-go"
 )
 
@@ -17,7 +18,16 @@ func (s *Server) handleListPackets(w http.ResponseWriter, r *http.Request) {
 		limit = 100
 	}
 
-	packets, err := s.store.Packets.List(r.Context(), limit, offset)
+	var filter store.PacketFilter
+	if pt := r.URL.Query().Get("payloadType"); pt != "" {
+		if n, err := strconv.ParseUint(pt, 10, 8); err == nil {
+			v := uint8(n)
+			filter.PayloadType = &v
+		}
+	}
+	filter.Search = r.URL.Query().Get("q")
+
+	packets, err := s.store.Packets.List(r.Context(), limit, offset, filter)
 	if err != nil {
 		s.serverError(w, "failed to list packets", err)
 		return
@@ -33,6 +43,7 @@ func (s *Server) handleListPackets(w http.ResponseWriter, r *http.Request) {
 		Route        string   `json:"route,omitempty"`
 		PathHashSize *uint8   `json:"pathHashSize,omitempty"`
 		Hops         *uint8   `json:"hops,omitempty"`
+		Path         string   `json:"path,omitempty"`
 		PacketHash   string   `json:"packetHash,omitempty"`
 		Summary      string   `json:"summary,omitempty"`
 		SNR          *float64 `json:"snr,omitempty"`
@@ -58,7 +69,7 @@ func (s *Server) handleListPackets(w http.ResponseWriter, r *http.Request) {
 			phc := pkt.PathHashCount()
 			j.PathHashSize = &phs
 			j.Hops = &phc
-			j.PacketHash = PacketHash(pkt)
+			j.PacketHash, j.Path = store.PacketFieldsFromPkt(pkt)
 			j.Summary = PacketSummary(pkt, s.ChannelLookup())
 		}
 

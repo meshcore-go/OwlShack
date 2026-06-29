@@ -1,7 +1,6 @@
 package api
 
 import (
-	"encoding/hex"
 	"fmt"
 
 	meshcore "github.com/meshcore-go/meshcore-go"
@@ -86,9 +85,4 @@ func PacketSummary(pkt *meshcore.Packet, channels ChannelLookup) string {
 	default:
 		return fmt.Sprintf("Unknown type %d (%d bytes)", pkt.PayloadType(), len(pkt.Payload))
 	}
-}
-
-func PacketHash(pkt *meshcore.Packet) string {
-	h := pkt.PacketHash()
-	return hex.EncodeToString(h[:])
 }

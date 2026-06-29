@@ -39,6 +39,9 @@ func wirePacketLogger(mux *node.RadioMux, db *store.Store, srv *api.Server) {
 			SNR:         snrPtr,
 			RSSI:        rssiPtr,
 		}
+		if err == nil {
+			rec.PacketHash, rec.Path = store.PacketFieldsFromPkt(pkt)
+		}
 
 		db.WriteAsync(func() {
 			if insertErr := db.Packets.Insert(context.Background(), rec); insertErr != nil {
@@ -64,6 +67,9 @@ func wirePacketLogger(mux *node.RadioMux, db *store.Store, srv *api.Server) {
 			Raw:         data,
 			RouteType:   routeType,
 			PayloadType: payloadType,
+		}
+		if err == nil {
+			rec.PacketHash, rec.Path = store.PacketFieldsFromPkt(pkt)
 		}
 
 		db.WriteAsync(func() {
@@ -101,8 +107,7 @@ func packetBroadcastMsg(direction string, receivedAt time.Time, data []byte, pkt
 	msg["route"] = pkt.RouteTypeString()
 	msg["pathHashSize"] = pkt.PathHashSize()
 	msg["hops"] = pkt.PathHashCount()
-	ph := pkt.PacketHash()
-	msg["packetHash"] = hex.EncodeToString(ph[:])
+	msg["packetHash"], msg["path"] = store.PacketFieldsFromPkt(pkt)
 	msg["summary"] = api.PacketSummary(pkt, channels)
 	return msg
 }
