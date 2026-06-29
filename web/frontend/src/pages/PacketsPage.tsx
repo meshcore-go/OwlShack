@@ -1,8 +1,9 @@
-import { useCallback, useMemo, useRef, useState } from "react";
-import { CircleDashed, RefreshCw } from "lucide-react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { CircleDashed, RefreshCw, Search } from "lucide-react";
 import { useWebSocket } from "@/hooks/useWebSocket";
 import { useApiList } from "@/hooks/useApiList";
 import { Button } from "@/components/ui/button";
+import { Input } from "@/components/ui/input";
 import { Skeleton } from "@/components/ui/skeleton";
 import { LoadErrorAlert } from "@/components/LoadErrorAlert";
 import {
@@ -35,6 +36,7 @@ interface Packet {
   route?: string;
   pathHashSize?: number;
   hops?: number;
+  path?: string;
   packetHash?: string;
   summary?: string;
   snr?: number;
@@ -85,7 +87,34 @@ function dirGlyph(direction: string): string {
 const MIN_SIDEBAR_WIDTH = 300;
 const DEFAULT_SIDEBAR_WIDTH = 480;
 
+// Cap on server-side filtered results pulled into the UI at once. A broad
+// type filter (e.g. Advert) can match thousands of the ~10k stored rows; this
+// bounds the payload and the client-side grouping cost. Surfaced in the UI
+// when hit so it doesn't read as "this is all there is".
+const FILTER_LIMIT = 500;
+
 const NO_PACKETS: Packet[] = [];
+
+// buildGroups collapses observations sharing a packet hash into one group,
+// newest first. Shared by the live stream and the filtered result set.
+function buildGroups(packets: Packet[]): PacketGroup[] {
+  const map = new Map<string, PacketGroup>();
+  for (const p of packets) {
+    const k = packetKey(p);
+    const ts = new Date(p.receivedAt).getTime();
+    const existing = map.get(k);
+    if (!existing) {
+      map.set(k, { key: k, latest: p, latestTs: ts, observations: [p] });
+    } else {
+      existing.observations.push(p);
+      if (ts > existing.latestTs) {
+        existing.latest = p;
+        existing.latestTs = ts;
+      }
+    }
+  }
+  return Array.from(map.values()).sort((a, b) => b.latestTs - a.latestTs);
+}
 
 export function PacketsPage() {
   const {
@@ -95,14 +124,38 @@ export function PacketsPage() {
     error,
     reload,
   } = useApiList<Packet>("/api/packets?limit=100", "Failed to load packets");
-  const packets = items ?? NO_PACKETS;
+  const livePackets = items ?? NO_PACKETS;
   const [selectedKey, setSelectedKey] = useState<string | null>(null);
+  const [search, setSearch] = useState("");
+  const [typeFilter, setTypeFilter] = useState<number | "ALL">("ALL");
   const [sidebarWidth, setSidebarWidth] = useState(DEFAULT_SIDEBAR_WIDTH);
   const draggingRef = useRef(false);
   // Read by onResizeStart so the drag handler stays referentially stable —
   // listing sidebarWidth as a dep would rebuild it on every drag pixel.
   const sidebarWidthRef = useRef(DEFAULT_SIDEBAR_WIDTH);
   sidebarWidthRef.current = sidebarWidth;
+
+  // Debounce the search box so each keystroke doesn't fire a server query.
+  const [debouncedSearch, setDebouncedSearch] = useState("");
+  useEffect(() => {
+    const t = setTimeout(() => setDebouncedSearch(search.trim()), 300);
+    return () => clearTimeout(t);
+  }, [search]);
+
+  const filtering = typeFilter !== "ALL" || debouncedSearch !== "";
+
+  // When a filter/search is active, query the server across ALL stored history
+  // (the live buffer only holds the last 200), capped at FILTER_LIMIT. The
+  // payload hash and hop-path are indexed columns, so this is a cheap DB query.
+  const filterUrl = filtering
+    ? `/api/packets?limit=${FILTER_LIMIT}` +
+      (typeFilter !== "ALL" ? `&payloadType=${typeFilter}` : "") +
+      (debouncedSearch ? `&q=${encodeURIComponent(debouncedSearch)}` : "")
+    : null;
+  const { items: filteredItems, loading: filterLoading } = useApiList<Packet>(
+    filterUrl,
+    "Failed to search packets",
+  );
 
   const onWsMessage = useCallback(
     (topic: string, data: unknown) => {
@@ -115,24 +168,31 @@ export function PacketsPage() {
 
   const { connected } = useWebSocket(["packets"], onWsMessage);
 
-  const groups = useMemo<PacketGroup[]>(() => {
-    const map = new Map<string, PacketGroup>();
-    for (const p of packets) {
-      const k = packetKey(p);
-      const ts = new Date(p.receivedAt).getTime();
-      const existing = map.get(k);
-      if (!existing) {
-        map.set(k, { key: k, latest: p, latestTs: ts, observations: [p] });
-      } else {
-        existing.observations.push(p);
-        if (ts > existing.latestTs) {
-          existing.latest = p;
-          existing.latestTs = ts;
-        }
-      }
+  // Pills are derived from the live buffer so they stay stable while a search
+  // narrows results; the live stream is also what we render when unfiltered.
+  const liveGroups = useMemo(() => buildGroups(livePackets), [livePackets]);
+  const typeFilters = useMemo(() => {
+    const counts = new Map<number, number>();
+    for (const g of liveGroups) {
+      const pt = g.latest.payloadType;
+      if (pt == null) continue;
+      counts.set(pt, (counts.get(pt) ?? 0) + 1);
     }
-    return Array.from(map.values()).sort((a, b) => b.latestTs - a.latestTs);
-  }, [packets]);
+    return Array.from(counts.entries()).sort((a, b) => a[0] - b[0]);
+  }, [liveGroups]);
+
+  const filteredGroups = useMemo(
+    () => buildGroups(filteredItems ?? NO_PACKETS),
+    [filteredItems],
+  );
+  const groups = filtering ? filteredGroups : liveGroups;
+  const capped = filtering && (filteredItems?.length ?? 0) >= FILTER_LIMIT;
+
+  const emptyMsg = filterLoading
+    ? "Searching…"
+    : filtering
+      ? "No packets match the filter."
+      : "Awaiting packets…";
 
   const selected = useMemo(() => {
     if (!selectedKey) return null;
@@ -161,8 +221,8 @@ export function PacketsPage() {
     window.addEventListener("mouseup", onUp);
   }, []);
 
-  const totalPackets = packets.length;
-  const groupCount = groups.length;
+  const totalPackets = livePackets.length;
+  const liveGroupCount = liveGroups.length;
 
   return (
     <div className="space-y-4">
@@ -170,7 +230,9 @@ export function PacketsPage() {
         title="Packets"
         meta={
           <span className="font-mono text-sm text-muted-foreground tabular-nums">
-            {groupCount} unique · {totalPackets} obs
+            {filtering
+              ? `${groups.length}${capped ? "+" : ""} match${groups.length === 1 ? "" : "es"}${filterLoading ? " · …" : ""}`
+              : `${liveGroupCount} unique · ${totalPackets} obs`}
           </span>
         }
         actions={
@@ -193,23 +255,73 @@ export function PacketsPage() {
 
       {!loading && !error && (
         <section className="panel overflow-hidden">
-          <div className="flex items-center justify-between px-4 py-3 border-b border-border">
+          <div className="flex flex-col gap-3 px-4 py-3 border-b border-border sm:flex-row sm:items-center sm:justify-between">
             <div className="space-y-0.5">
-              <span className="label-overline block">Live · last 200</span>
+              <span className="label-overline block">
+                {filtering ? "History · filtered" : "Live · last 200"}
+              </span>
               <h2 className="font-mono text-sm uppercase tracking-widest">
                 Packet stream
               </h2>
             </div>
-            <span className="font-mono text-[10px] uppercase tracking-[0.12em] text-muted-foreground">
-              grouped by hash
-            </span>
+            <div className="relative w-full sm:w-72">
+              <Search className="absolute left-3 top-1/2 -translate-y-1/2 size-3.5 text-muted-foreground/60" />
+              <Input
+                type="search"
+                placeholder="search hash or path…"
+                value={search}
+                onChange={(e: React.ChangeEvent<HTMLInputElement>) =>
+                  setSearch(e.target.value)
+                }
+                className="pl-9 font-mono text-xs"
+              />
+            </div>
+          </div>
+
+          <div className="flex flex-wrap gap-1 px-4 py-3 border-b border-border">
+            <button
+              type="button"
+              onClick={() => setTypeFilter("ALL")}
+              className={cn(
+                "inline-flex items-center gap-1.5 px-2 py-1 border font-mono text-[10px] uppercase tracking-[0.12em] transition-colors",
+                typeFilter === "ALL"
+                  ? "border-primary/50 bg-primary/10 text-primary"
+                  : "border-border bg-transparent text-muted-foreground hover:text-foreground",
+              )}
+            >
+              ALL
+              <span className="tabular-nums text-muted-foreground/60">
+                {liveGroupCount}
+              </span>
+            </button>
+            {typeFilters.map(([pt, count]) => {
+              const active = typeFilter === pt;
+              return (
+                <button
+                  key={pt}
+                  type="button"
+                  onClick={() => setTypeFilter(pt)}
+                  className={cn(
+                    "inline-flex items-center gap-1.5 px-2 py-1 border font-mono text-[10px] uppercase tracking-[0.12em] transition-colors",
+                    active
+                      ? "border-primary/50 bg-primary/10 text-primary"
+                      : "border-border bg-transparent text-muted-foreground hover:text-foreground",
+                  )}
+                >
+                  {payloadLabel(pt)}
+                  <span className="tabular-nums text-muted-foreground/60">
+                    {count}
+                  </span>
+                </button>
+              );
+            })}
           </div>
           {/* Mobile: compact list */}
           <div className="sm:hidden divide-y divide-border/60">
             {groups.length === 0 ? (
               <div className="px-6 py-12 text-center text-sm text-muted-foreground/60">
                 <CircleDashed className="size-6 mx-auto mb-2 text-muted-foreground/40" />
-                Awaiting packets…
+                {emptyMsg}
               </div>
             ) : (
               groups.map((g) => {
@@ -304,7 +416,7 @@ export function PacketsPage() {
                     className="text-center py-12 text-sm text-muted-foreground/60"
                   >
                     <CircleDashed className="size-6 mx-auto mb-2 text-muted-foreground/40" />
-                    Awaiting packets…
+                    {emptyMsg}
                   </TableCell>
                 </TableRow>
               ) : (
@@ -526,6 +638,15 @@ function PacketDetail({
             <dt className="label-overline">Path Size</dt>
             <dd className="tabular-nums">
               {p.pathHashSize != null ? `${p.pathHashSize}B` : "—"}
+            </dd>
+
+            <dt className="label-overline">Path</dt>
+            <dd className="tabular-nums break-all">
+              {p.path ? (
+                p.path
+              ) : (
+                <span className="text-muted-foreground/60">—</span>
+              )}
             </dd>
 
             <dt className="label-overline">Hops</dt>
