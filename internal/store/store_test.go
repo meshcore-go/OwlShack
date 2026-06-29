@@ -7,6 +7,8 @@ import (
 	"path/filepath"
 	"testing"
 	"time"
+
+	meshcore "github.com/meshcore-go/meshcore-go"
 )
 
 // newTestStore opens a fresh temp-file SQLite store for one test. Each test
@@ -725,8 +727,57 @@ func idsOf(ms []Message) []int64 {
 	return out
 }
 
-// TestStore_MigrateUserVersion confirms Open ran migrateV1 and stamped the
-// schema version.
+// TestPacketRepo_ListFilter covers the server-side payload-type and hash/path
+// search added for the Packets page. packet_hash/path are derived from raw
+// bytes on insert, so the raw packets here are hand-built with known hop paths.
+func TestPacketRepo_ListFilter(t *testing.T) {
+	t.Parallel()
+	st := newTestStore(t)
+	ctx := t.Context()
+
+	// pathLenByte 0x02 = hashSize 1, hashCount 2 → a 2-byte hop path follows.
+	mk := func(payloadType uint8, path ...byte) *PacketRecord {
+		raw := []byte{meshcore.MakeHeader(meshcore.RouteTypeFlood, payloadType, 0), 0x02}
+		raw = append(raw, path...)
+		raw = append(raw, 0xDE, 0xAD) // payload
+		pt := payloadType
+		return &PacketRecord{ReceivedAt: time.Now(), Direction: "rx", Raw: raw, PayloadType: &pt}
+	}
+	if err := st.Packets.Insert(ctx, mk(4, 0xAA, 0xBB)); err != nil { // advert, path aabb
+		t.Fatal(err)
+	}
+	if err := st.Packets.Insert(ctx, mk(3, 0xCC, 0xDD)); err != nil { // ack, path ccdd
+		t.Fatal(err)
+	}
+
+	count := func(f PacketFilter) int {
+		got, err := st.Packets.List(ctx, 100, 0, f)
+		if err != nil {
+			t.Fatal(err)
+		}
+		return len(got)
+	}
+
+	if n := count(PacketFilter{}); n != 2 {
+		t.Errorf("no filter: got %d, want 2", n)
+	}
+	advert := uint8(4)
+	if n := count(PacketFilter{PayloadType: &advert}); n != 1 {
+		t.Errorf("payloadType=4: got %d, want 1", n)
+	}
+	if n := count(PacketFilter{Search: "AABB"}); n != 1 { // case-insensitive
+		t.Errorf("search aabb: got %d, want 1", n)
+	}
+	if n := count(PacketFilter{Search: "ccdd"}); n != 1 {
+		t.Errorf("search ccdd: got %d, want 1", n)
+	}
+	if n := count(PacketFilter{Search: "ffff"}); n != 0 {
+		t.Errorf("search ffff: got %d, want 0", n)
+	}
+}
+
+// TestStore_MigrateUserVersion confirms Open ran every migration and stamped
+// the schema version to the migration count.
 func TestStore_MigrateUserVersion(t *testing.T) {
 	t.Parallel()
 	st := newTestStore(t)
@@ -734,8 +785,8 @@ func TestStore_MigrateUserVersion(t *testing.T) {
 	if err := st.db.QueryRowContext(t.Context(), "PRAGMA user_version").Scan(&v); err != nil {
 		t.Fatalf("reading user_version: %v", err)
 	}
-	if v != 1 {
-		t.Errorf("user_version = %d, want 1", v)
+	if v != 4 {
+		t.Errorf("user_version = %d, want 4", v)
 	}
 }
 

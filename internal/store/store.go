@@ -154,8 +154,17 @@ func (s *Store) migrate(ctx context.Context) error {
 		return fmt.Errorf("reading schema version: %w", err)
 	}
 
+	// migrateV1 squashed the original v1–v3 incremental migrations into one
+	// baseline. Fresh DBs created since the squash sit at user_version 1, but
+	// DBs that predate it are already at 2 or 3 with the identical schema. A new
+	// migration must therefore be appended past that gap (version > 3) so it
+	// runs exactly once on both old and fresh DBs; migrateNoop fills the
+	// squashed-away slots that pre-squash DBs already counted.
 	migrations := []func(context.Context, *sql.DB) error{
-		migrateV1,
+		migrateV1,   // user_version 1
+		migrateNoop, // 2 — squashed into migrateV1
+		migrateNoop, // 3 — squashed into migrateV1
+		migrateV2,   // 4 — indexed packet_hash/path columns
 	}
 
 	for i := version; i < len(migrations); i++ {
@@ -398,4 +407,76 @@ func migrateV1(ctx context.Context, db *sql.DB) error {
 		CREATE INDEX IF NOT EXISTS idx_trigger_channels_trigger ON trigger_channels(trigger_id);
 	`)
 	return err
+}
+
+// migrateNoop is a placeholder for a migration slot that migrateV1 already
+// covers (see the squash note in migrate). It keeps later migrations at the
+// version index pre-squash DBs expect.
+func migrateNoop(context.Context, *sql.DB) error { return nil }
+
+// migrateV2 adds the indexed packet_hash and path columns so the Packets page
+// can filter/search across all stored history server-side, and backfills them
+// for rows inserted before the columns existed.
+func migrateV2(ctx context.Context, db *sql.DB) error {
+	// Everything runs in one transaction (SQLite DDL is transactional) so a
+	// failure mid-backfill rolls back the ADD COLUMNs too, keeping the
+	// migration atomic and safe to re-run.
+	tx, err := db.BeginTx(ctx, nil)
+	if err != nil {
+		return fmt.Errorf("begin migration: %w", err)
+	}
+	defer tx.Rollback()
+
+	if _, err := tx.ExecContext(ctx, `
+		ALTER TABLE packets ADD COLUMN packet_hash TEXT NOT NULL DEFAULT '';
+		ALTER TABLE packets ADD COLUMN path TEXT NOT NULL DEFAULT '';
+	`); err != nil {
+		return fmt.Errorf("adding packet columns: %w", err)
+	}
+
+	rows, err := tx.QueryContext(ctx, "SELECT id, raw FROM packets")
+	if err != nil {
+		return fmt.Errorf("reading packets for backfill: %w", err)
+	}
+	type row struct {
+		id  int64
+		raw []byte
+	}
+	var batch []row
+	for rows.Next() {
+		var rr row
+		if err := rows.Scan(&rr.id, &rr.raw); err != nil {
+			rows.Close()
+			return fmt.Errorf("scanning packet for backfill: %w", err)
+		}
+		batch = append(batch, rr)
+	}
+	rows.Close()
+	if err := rows.Err(); err != nil {
+		return fmt.Errorf("iterating packets for backfill: %w", err)
+	}
+
+	for _, rr := range batch {
+		packetHash, path := derivePacketFields(rr.raw)
+		if packetHash == "" && path == "" {
+			continue // unparseable row; leave the '' defaults
+		}
+		if _, err := tx.ExecContext(ctx,
+			"UPDATE packets SET packet_hash = ?, path = ? WHERE id = ?",
+			packetHash, path, rr.id); err != nil {
+			return fmt.Errorf("backfilling packet %d: %w", rr.id, err)
+		}
+	}
+
+	if _, err := tx.ExecContext(ctx, `
+		CREATE INDEX IF NOT EXISTS idx_packets_packet_hash ON packets(packet_hash);
+		CREATE INDEX IF NOT EXISTS idx_packets_path ON packets(path);
+	`); err != nil {
+		return fmt.Errorf("indexing packet columns: %w", err)
+	}
+
+	if err := tx.Commit(); err != nil {
+		return fmt.Errorf("commit backfill: %w", err)
+	}
+	return nil
 }
