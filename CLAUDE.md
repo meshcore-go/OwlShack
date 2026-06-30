@@ -311,6 +311,7 @@ GET  /api/config/triggers[?companionId=N]
 POST /api/config/triggers              PUT|DELETE /api/config/triggers/{id}
 
 GET  /api/nodes/monitored
+GET  /api/nodes/neighbor-links                               (repeater-to-repeater SNR topology, last 24h, both ends pre-resolved)
 GET  /api/nodes/{pubkey}/metrics
 GET  /api/nodes/{pubkey}/history?metric=&from=&to=&bucket=
 POST /api/nodes/{pubkey}/poll                                (on-demand poll; 502 on failure)

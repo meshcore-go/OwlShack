@@ -185,6 +185,35 @@ func scanOutPath(ns sql.NullString) []byte {
 	return []byte(ns.String)
 }
 
+// FindByPrefix resolves a pubkey prefix (e.g. the 6-byte neighbour prefix the
+// firmware reports) to a full peer record, so callers get lat/lon/type/name in
+// one query. Returns nil, nil if no peer matches. Prefix collisions just
+// return the first row — an accepted, pre-existing risk shared with
+// LookupByHash (e.g. repeater ACL prefix resolution).
+func (r *PeerRepo) FindByPrefix(ctx context.Context, prefix []byte) (*Peer, error) {
+	if len(prefix) == 0 {
+		return nil, nil
+	}
+	rows, err := r.db.QueryContext(ctx, `
+		SELECT pubkey, name, type, lat, lon, feat1, feat2, out_path, out_path_hash_size, last_advert_ts, last_seen, snr, rssi
+		FROM discovered_peers
+		WHERE substr(pubkey, 1, ?) = ?
+		LIMIT 1`, len(prefix), prefix)
+	if err != nil {
+		return nil, fmt.Errorf("querying peer by prefix: %w", err)
+	}
+	defer rows.Close()
+
+	peers, err := scanPeers(rows)
+	if err != nil {
+		return nil, err
+	}
+	if len(peers) == 0 {
+		return nil, nil
+	}
+	return &peers[0], nil
+}
+
 func (r *PeerRepo) LookupByHash(ctx context.Context, hash []byte) ([]string, error) {
 	if len(hash) == 0 {
 		return nil, nil

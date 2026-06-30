@@ -8,6 +8,7 @@ import (
 	"slices"
 	"strconv"
 	"strings"
+	"time"
 
 	"github.com/meshcore-go/meshcore-bot/internal/monitor"
 	"github.com/meshcore-go/meshcore-bot/internal/store"
@@ -111,6 +112,117 @@ func (s *Server) handleListMonitoredNodes(w http.ResponseWriter, r *http.Request
 			return c
 		}
 		return strings.Compare(a.PubKey, b.PubKey)
+	})
+	writeJSON(w, http.StatusOK, out)
+}
+
+// neighborLinkFreshness bounds how old a neighbour sample can be and still
+// count as a "current" link on the map. The default poll interval is 6h, so
+// 24h tolerates a few missed/retried cycles before a link is considered gone.
+const neighborLinkFreshness = 24 * time.Hour
+
+// handleListNeighborLinks returns the current repeater-to-repeater neighbour
+// topology, with both ends pre-resolved to name/lat/lon so the frontend can
+// draw map lines without further lookups. Each monitored repeater reports its
+// own one-way view of a neighbour's SNR; when two monitored repeaters see each
+// other, the two directional samples are merged into a single entry carrying
+// both SNR values. Links missing a resolvable, located peer on either end are
+// omitted (nothing useful to draw).
+func (s *Server) handleListNeighborLinks(w http.ResponseWriter, r *http.Request) {
+	since := time.Now().Add(-neighborLinkFreshness).Unix()
+	rows, err := s.store.Metrics.ListLatestNeighbors(r.Context(), since)
+	if err != nil {
+		s.serverError(w, "failed to query neighbor links", err)
+		return
+	}
+
+	type neighborLinkJSON struct {
+		APubKey string   `json:"aPubkey"`
+		AName   string   `json:"aName"`
+		ALat    int32    `json:"aLat"`
+		ALon    int32    `json:"aLon"`
+		BPubKey string   `json:"bPubkey"`
+		BName   string   `json:"bName"`
+		BLat    int32    `json:"bLat"`
+		BLon    int32    `json:"bLon"`
+		SNRAtoB *float64 `json:"snrAtoB,omitempty"`
+		SNRBtoA *float64 `json:"snrBtoA,omitempty"`
+		TS      int64    `json:"ts"`
+	}
+
+	hasLocation := func(p *store.Peer) bool { return p.Lat != 0 || p.Lon != 0 }
+
+	links := make(map[string]*neighborLinkJSON)
+	for _, n := range rows {
+		from, err := s.store.Peers.GetByPubKey(r.Context(), n.Pubkey)
+		if err != nil {
+			s.serverError(w, "failed to resolve neighbor link observer", err)
+			return
+		}
+		if from == nil || !hasLocation(from) {
+			continue
+		}
+		to, err := s.store.Peers.FindByPrefix(r.Context(), n.NeighborPubkey)
+		if err != nil {
+			s.serverError(w, "failed to resolve neighbor link peer", err)
+			return
+		}
+		if to == nil || !hasLocation(to) {
+			continue
+		}
+
+		fromHex := hex.EncodeToString(from.PubKey)
+		toHex := hex.EncodeToString(to.PubKey)
+		if fromHex == toHex {
+			continue // can't happen, but guard against a degenerate self-link
+		}
+
+		aHex, bHex := fromHex, toHex
+		aPeer, bPeer := from, to
+		fromIsA := true
+		if bHex < aHex {
+			aHex, bHex = bHex, aHex
+			aPeer, bPeer = bPeer, aPeer
+			fromIsA = false
+		}
+		key := aHex + "|" + bHex
+
+		link, ok := links[key]
+		if !ok {
+			link = &neighborLinkJSON{
+				APubKey: aHex,
+				AName:   aPeer.Name,
+				ALat:    aPeer.Lat,
+				ALon:    aPeer.Lon,
+				BPubKey: bHex,
+				BName:   bPeer.Name,
+				BLat:    bPeer.Lat,
+				BLon:    bPeer.Lon,
+			}
+			links[key] = link
+		}
+		if n.TS > link.TS {
+			link.TS = n.TS
+		}
+		if fromIsA {
+			link.SNRAtoB = n.SNR
+		} else {
+			link.SNRBtoA = n.SNR
+		}
+	}
+
+	out := make([]neighborLinkJSON, 0, len(links))
+	for _, l := range links {
+		out = append(out, *l)
+	}
+	slices.SortFunc(out, func(a, b neighborLinkJSON) int {
+		if c := strings.Compare(strings.ToLower(a.AName), strings.ToLower(b.AName)); c != 0 {
+			return c
+		}
+		if c := strings.Compare(strings.ToLower(a.BName), strings.ToLower(b.BName)); c != 0 {
+			return c
+		}
+		return strings.Compare(a.APubKey, b.APubKey)
 	})
 	writeJSON(w, http.StatusOK, out)
 }

@@ -291,6 +291,49 @@ func (r *MetricsRepo) RecordNeighbors(ctx context.Context, neighbors []Neighbor)
 	return nil
 }
 
+// ListLatestNeighbors returns the most recent neighbour SNR sample for every
+// (pubkey, neighbor_pubkey) pair observed since sinceTS (unix seconds). The
+// table's PK is (ts, pubkey, neighbor_pubkey), so "latest" is computed per
+// pair via a MAX(ts) self-join rather than relying on the PK. Pairs whose
+// newest sample is older than sinceTS are excluded entirely (a stale link is
+// indistinguishable from no link).
+func (r *MetricsRepo) ListLatestNeighbors(ctx context.Context, sinceTS int64) ([]Neighbor, error) {
+	rows, err := r.db.QueryContext(ctx, `
+		SELECT n.pubkey, n.neighbor_pubkey, n.ts, n.snr
+		FROM node_neighbors n
+		JOIN (
+			SELECT pubkey, neighbor_pubkey, MAX(ts) AS max_ts
+			FROM node_neighbors
+			WHERE ts >= ?
+			GROUP BY pubkey, neighbor_pubkey
+		) latest
+		  ON n.pubkey = latest.pubkey
+		 AND n.neighbor_pubkey = latest.neighbor_pubkey
+		 AND n.ts = latest.max_ts`, sinceTS)
+	if err != nil {
+		return nil, fmt.Errorf("querying latest neighbors: %w", err)
+	}
+	defer rows.Close()
+
+	var out []Neighbor
+	for rows.Next() {
+		var n Neighbor
+		var snr sql.NullFloat64
+		if err := rows.Scan(&n.Pubkey, &n.NeighborPubkey, &n.TS, &snr); err != nil {
+			return nil, fmt.Errorf("scanning neighbor row: %w", err)
+		}
+		if snr.Valid {
+			v := snr.Float64
+			n.SNR = &v
+		}
+		out = append(out, n)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("iterating latest neighbors: %w", err)
+	}
+	return out, nil
+}
+
 // PruneMetrics deletes time-series rows older than the given unix-seconds
 // cutoff, bounding raw storage growth. Returns the number of rows removed.
 // Call inside WriteAsync/WriteSync.
