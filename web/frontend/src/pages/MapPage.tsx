@@ -16,6 +16,7 @@ import { InlineConfirm } from "@/components/InlineConfirm";
 import { PeerDetailSheet } from "@/components/PeerDetailSheet";
 import { deletePeers, deletedPeersMessage } from "@/lib/peerApi";
 import { themeTileLayer, useThemeTiles } from "@/lib/leaflet";
+import { snrFill } from "@/components/SignalStrength";
 import { cn } from "@/lib/utils";
 
 interface Peer {
@@ -29,12 +30,30 @@ interface Peer {
   rssi: number | null;
 }
 
+interface NeighborLink {
+  aPubkey: string;
+  aName: string;
+  aLat: number;
+  aLon: number;
+  bPubkey: string;
+  bName: string;
+  bLat: number;
+  bLon: number;
+  snrAtoB?: number;
+  snrBtoA?: number;
+  ts: number;
+}
+
 const TYPE_FILTERS = ["CHAT", "REPEATER", "ROOM", "SENSOR", "NONE"] as const;
 
 function isPeer(value: unknown): value is Peer {
   if (!value || typeof value !== "object") return false;
   const v = value as Record<string, unknown>;
   return typeof v.pubkey === "string" && typeof v.name === "string";
+}
+
+function wrapLon(lon: number): number {
+  return ((lon + 180) % 360 + 360) % 360 - 180;
 }
 
 function dotIcon(color: string): L.DivIcon {
@@ -81,6 +100,12 @@ export function MapPage() {
   const companions = useCompanions();
   const { selectPeer, sheetProps } = usePeerDetailSheet(peers);
 
+  const [showLinks, setShowLinks] = useState(false);
+  const { items: links } = useApiList<NeighborLink>(
+    showLinks ? "/api/nodes/neighbor-links" : null,
+    "Failed to load neighbor links",
+  );
+
   const [searchParams] = useSearchParams();
   const focus = useMemo(() => {
     const la = parseFloat(searchParams.get("lat") ?? "");
@@ -95,6 +120,7 @@ export function MapPage() {
   const tileLayerRef = useRef<L.TileLayer | null>(null);
   const markersRef = useRef<Map<string, L.Marker>>(new Map());
   const focusMarkerRef = useRef<L.Marker | null>(null);
+  const linksLayerRef = useRef<L.LayerGroup | null>(null);
   const fittedRef = useRef(false);
 
   const handleMessage = useCallback(
@@ -133,12 +159,14 @@ export function MapPage() {
       attributionControl: true,
     });
     tileLayerRef.current = themeTileLayer().addTo(map);
+    linksLayerRef.current = L.layerGroup().addTo(map);
     mapRef.current = map;
 
     return () => {
       map.remove();
       mapRef.current = null;
       tileLayerRef.current = null;
+      linksLayerRef.current = null;
       markersRef.current.clear();
       focusMarkerRef.current = null;
       fittedRef.current = false;
@@ -224,7 +252,7 @@ export function MapPage() {
     // Add or update markers
     for (const p of visible) {
       const lat = p.lat / 1e6;
-      const lon = p.lon / 1e6;
+      const lon = wrapLon(p.lon / 1e6);
       const icon = PEER_ICONS[p.type] || PEER_ICONS.NONE;
       const existing = markers.get(p.pubkey);
       if (existing) {
@@ -243,7 +271,7 @@ export function MapPage() {
     // Auto-fit on first load
     if (!fittedRef.current && visible.length > 0) {
       const bounds = L.latLngBounds(
-        visible.map((p) => [p.lat / 1e6, p.lon / 1e6] as [number, number]),
+        visible.map((p) => [p.lat / 1e6, wrapLon(p.lon / 1e6)] as [number, number]),
       );
       if (bounds.isValid()) {
         map.fitBounds(bounds, { padding: [40, 40], maxZoom: 12 });
@@ -251,6 +279,80 @@ export function MapPage() {
       }
     }
   }, [visible]);
+
+  // Redraw neighbor-link lines whenever the data or the toggle changes. Full
+  // clear-and-redraw (not incremental) since links are cheap to rebuild and
+  // there's no per-link identity worth diffing against.
+  useEffect(() => {
+    const layer = linksLayerRef.current;
+    if (!layer) return;
+    layer.clearLayers();
+    if (!showLinks || !links) return;
+
+    // Three stagger positions along the line (35 / 50 / 65 %). Cycling by
+    // index means parallel lines sharing a common endpoint — the most common
+    // overlap case — get labels at visually distinct distances from that node.
+    const STAGGER = [0.35, 0.5, 0.65] as const;
+
+    links.forEach((l, i) => {
+      const a: [number, number] = [l.aLat / 1e6, wrapLon(l.aLon / 1e6)];
+      const b: [number, number] = [l.bLat / 1e6, wrapLon(l.bLon / 1e6)];
+      const worstSnr = Math.min(
+        l.snrAtoB ?? Infinity,
+        l.snrBtoA ?? Infinity,
+      );
+
+      // Mercator-corrected screen-space angle so the label aligns with the
+      // rendered line regardless of latitude.
+      const cosLat = Math.cos(((a[0] + b[0]) / 2) * (Math.PI / 180));
+      const dxScreen = (b[1] - a[1]) * cosLat;
+      const dyScreen = -(b[0] - a[0]); // screen Y is inverted vs latitude
+      let angleDeg = Math.atan2(dyScreen, dxScreen) * (180 / Math.PI);
+
+      // Keep text readable: if the line runs "right to left" the label would
+      // render upside-down, so flip 180°. Track the flip so we can swap the
+      // directional arrows to stay geographically correct.
+      let flipped = false;
+      if (angleDeg > 90 || angleDeg < -90) {
+        angleDeg += angleDeg > 0 ? -180 : 180;
+        flipped = true;
+      }
+
+      // After a flip the label's local "→" points toward A, not B, so swap.
+      const snrFwd = flipped ? l.snrBtoA : l.snrAtoB;
+      const snrBwd = flipped ? l.snrAtoB : l.snrBtoA;
+
+      let rows: string;
+      if (snrFwd != null && snrBwd != null) {
+        rows = `<div>→ ${snrFwd.toFixed(1)} dB</div><div>← ${snrBwd.toFixed(1)} dB</div>`;
+      } else if (snrFwd != null) {
+        rows = `<div>→ ${snrFwd.toFixed(1)} dB</div>`;
+      } else {
+        rows = `<div>← ${(snrBwd ?? 0).toFixed(1)} dB</div>`;
+      }
+
+      L.polyline([a, b], {
+        color: snrFill(worstSnr),
+        weight: 2,
+        opacity: 0.7,
+        interactive: false,
+      }).addTo(layer);
+
+      const t = STAGGER[i % 3];
+      const labelLat = a[0] + (b[0] - a[0]) * t;
+      const labelLon = wrapLon(a[1] + (b[1] - a[1]) * t);
+
+      L.marker([labelLat, labelLon], {
+        icon: L.divIcon({
+          className: "",
+          html: `<div class="meshcore-link-label" style="transform:translate(-50%,-50%) rotate(${angleDeg.toFixed(1)}deg)">${rows}</div>`,
+          iconSize: [0, 0],
+          iconAnchor: [0, 0],
+        }),
+        interactive: false,
+      }).addTo(layer);
+    });
+  }, [links, showLinks]);
 
   const toggleType = useCallback((type: string) => {
     setHidden((prev) => {
@@ -323,6 +425,16 @@ export function MapPage() {
               </button>
             );
           })}
+          <button
+            type="button"
+            onClick={() => setShowLinks((v) => !v)}
+            className={cn(
+              "ml-1 inline-flex items-center gap-1.5 border border-border bg-card px-2 py-1 pl-3 font-mono text-[10px] uppercase tracking-[0.12em] transition-all hover:border-foreground/40 border-l-2",
+              showLinks ? "border-primary/60 text-primary" : "text-muted-foreground",
+            )}
+          >
+            links
+          </button>
           <div className="ml-auto flex items-center gap-3">
             {visible.length > 0 &&
               (clearing ? (

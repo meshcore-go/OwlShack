@@ -161,6 +161,7 @@ func (s *Server) routes() {
 	s.mux.HandleFunc("GET /api/companions/{name}/rooms/{pubkey}/session", s.handleRepeaterSession)
 	s.mux.HandleFunc("DELETE /api/companions/{name}/rooms/{pubkey}/session", s.handleRepeaterLogout)
 	s.mux.HandleFunc("GET /api/nodes/monitored", s.handleListMonitoredNodes)
+	s.mux.HandleFunc("GET /api/nodes/neighbor-links", s.handleListNeighborLinks)
 	s.mux.HandleFunc("GET /api/nodes/{pubkey}/metrics", s.handleListNodeMetricNames)
 	s.mux.HandleFunc("GET /api/nodes/{pubkey}/history", s.handleNodeHistory)
 	s.mux.HandleFunc("POST /api/nodes/{pubkey}/poll", s.handlePollNode)
