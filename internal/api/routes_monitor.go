@@ -150,8 +150,6 @@ func (s *Server) handleListNeighborLinks(w http.ResponseWriter, r *http.Request)
 		TS      int64    `json:"ts"`
 	}
 
-	hasLocation := func(p *store.Peer) bool { return p.Lat != 0 || p.Lon != 0 }
-
 	links := make(map[string]*neighborLinkJSON)
 	for _, n := range rows {
 		from, err := s.store.Peers.GetByPubKey(r.Context(), n.Pubkey)
@@ -159,7 +157,7 @@ func (s *Server) handleListNeighborLinks(w http.ResponseWriter, r *http.Request)
 			s.serverError(w, "failed to resolve neighbor link observer", err)
 			return
 		}
-		if from == nil || !hasLocation(from) {
+		if from == nil || !from.HasLocation() {
 			continue
 		}
 		to, err := s.store.Peers.FindByPrefix(r.Context(), n.NeighborPubkey)
@@ -167,7 +165,7 @@ func (s *Server) handleListNeighborLinks(w http.ResponseWriter, r *http.Request)
 			s.serverError(w, "failed to resolve neighbor link peer", err)
 			return
 		}
-		if to == nil || !hasLocation(to) {
+		if to == nil || !to.HasLocation() {
 			continue
 		}
 
@@ -204,10 +202,13 @@ func (s *Server) handleListNeighborLinks(w http.ResponseWriter, r *http.Request)
 		if n.TS > link.TS {
 			link.TS = n.TS
 		}
+		// n.SNR is the SNR at which the observer (`from`) last heard the
+		// neighbour (`to`) — i.e. the to→from direction. So an A observation
+		// is the B→A link, and a B observation is the A→B link.
 		if fromIsA {
-			link.SNRAtoB = n.SNR
-		} else {
 			link.SNRBtoA = n.SNR
+		} else {
+			link.SNRAtoB = n.SNR
 		}
 	}
 

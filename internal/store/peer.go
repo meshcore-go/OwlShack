@@ -24,6 +24,10 @@ type Peer struct {
 	RSSI            *int8
 }
 
+// HasLocation reports whether the peer carries a usable geolocation. Lat/Lon of
+// 0,0 is the codebase's "unknown" sentinel (null island), not a real fix.
+func (p *Peer) HasLocation() bool { return p.Lat != 0 || p.Lon != 0 }
+
 type PeerRepo struct {
 	db *sql.DB
 }
@@ -185,20 +189,42 @@ func scanOutPath(ns sql.NullString) []byte {
 	return []byte(ns.String)
 }
 
+// prefixUpperBound returns the smallest byte string strictly greater than every
+// value starting with prefix, for a half-open range scan. nil means no upper
+// bound exists (prefix is all 0xFF).
+func prefixUpperBound(prefix []byte) []byte {
+	upper := append([]byte(nil), prefix...)
+	for i := len(upper) - 1; i >= 0; i-- {
+		if upper[i] != 0xFF {
+			upper[i]++
+			return upper[:i+1]
+		}
+	}
+	return nil
+}
+
 // FindByPrefix resolves a pubkey prefix (e.g. the 6-byte neighbour prefix the
 // firmware reports) to a full peer record, so callers get lat/lon/type/name in
 // one query. Returns nil, nil if no peer matches. Prefix collisions just
 // return the first row — an accepted, pre-existing risk shared with
 // LookupByHash (e.g. repeater ACL prefix resolution).
+//
+// Expressed as a half-open range (pubkey >= prefix AND pubkey < upper) rather
+// than substr(pubkey,1,n)=prefix so the query rides the pubkey PRIMARY KEY
+// index instead of scanning the whole table on every call.
 func (r *PeerRepo) FindByPrefix(ctx context.Context, prefix []byte) (*Peer, error) {
 	if len(prefix) == 0 {
 		return nil, nil
 	}
-	rows, err := r.db.QueryContext(ctx, `
-		SELECT pubkey, name, type, lat, lon, feat1, feat2, out_path, out_path_hash_size, last_advert_ts, last_seen, snr, rssi
-		FROM discovered_peers
-		WHERE substr(pubkey, 1, ?) = ?
-		LIMIT 1`, len(prefix), prefix)
+	var rows *sql.Rows
+	var err error
+	const cols = `SELECT pubkey, name, type, lat, lon, feat1, feat2, out_path, out_path_hash_size, last_advert_ts, last_seen, snr, rssi FROM discovered_peers`
+	if upper := prefixUpperBound(prefix); upper != nil {
+		rows, err = r.db.QueryContext(ctx, cols+` WHERE pubkey >= ? AND pubkey < ? LIMIT 1`, prefix, upper)
+	} else {
+		// prefix is all 0xFF: no upper bound exists, just match the tail.
+		rows, err = r.db.QueryContext(ctx, cols+` WHERE pubkey >= ? LIMIT 1`, prefix)
+	}
 	if err != nil {
 		return nil, fmt.Errorf("querying peer by prefix: %w", err)
 	}

@@ -292,24 +292,16 @@ func (r *MetricsRepo) RecordNeighbors(ctx context.Context, neighbors []Neighbor)
 }
 
 // ListLatestNeighbors returns the most recent neighbour SNR sample for every
-// (pubkey, neighbor_pubkey) pair observed since sinceTS (unix seconds). The
-// table's PK is (ts, pubkey, neighbor_pubkey), so "latest" is computed per
-// pair via a MAX(ts) self-join rather than relying on the PK. Pairs whose
-// newest sample is older than sinceTS are excluded entirely (a stale link is
-// indistinguishable from no link).
+// (pubkey, neighbor_pubkey) pair observed since sinceTS (unix seconds). Pairs
+// whose newest sample is older than sinceTS are excluded entirely (a stale link
+// is indistinguishable from no link). MAX(ts) picks the latest row per pair;
+// SQLite's bare-column rule guarantees snr comes from that same row.
 func (r *MetricsRepo) ListLatestNeighbors(ctx context.Context, sinceTS int64) ([]Neighbor, error) {
 	rows, err := r.db.QueryContext(ctx, `
-		SELECT n.pubkey, n.neighbor_pubkey, n.ts, n.snr
-		FROM node_neighbors n
-		JOIN (
-			SELECT pubkey, neighbor_pubkey, MAX(ts) AS max_ts
-			FROM node_neighbors
-			WHERE ts >= ?
-			GROUP BY pubkey, neighbor_pubkey
-		) latest
-		  ON n.pubkey = latest.pubkey
-		 AND n.neighbor_pubkey = latest.neighbor_pubkey
-		 AND n.ts = latest.max_ts`, sinceTS)
+		SELECT pubkey, neighbor_pubkey, MAX(ts) AS ts, snr
+		FROM node_neighbors
+		WHERE ts >= ?
+		GROUP BY pubkey, neighbor_pubkey`, sinceTS)
 	if err != nil {
 		return nil, fmt.Errorf("querying latest neighbors: %w", err)
 	}

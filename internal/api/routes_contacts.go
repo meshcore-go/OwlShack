@@ -200,7 +200,7 @@ func (s *Server) handleAddContact(w http.ResponseWriter, r *http.Request) {
 		// contact added from a heard peer has location/path/feat immediately
 		// rather than waiting for the next advert.
 		if existing != nil {
-			hasLoc := existing.Lat != 0 || existing.Lon != 0
+			hasLoc := existing.HasLocation()
 			_ = s.store.Contacts.RefreshFromAdvert(
 				r.Context(), pubkey, existing.Name, existing.Type,
 				existing.Lat, existing.Lon, existing.Feat1, existing.Feat2,

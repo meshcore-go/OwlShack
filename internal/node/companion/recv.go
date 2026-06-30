@@ -349,7 +349,7 @@ func (c *Companion) registerPacketHandlers() {
 			// discovered_peers), so this is what refreshes them on re-advert.
 			// Location only updates when the advert carries one ("advert wins"
 			// over a hand-set location, but a no-GPS advert leaves it alone).
-			hasLoc := p.Lat != 0 || p.Lon != 0
+			hasLoc := p.HasLocation()
 			if err := c.store.Contacts.RefreshFromAdvert(
 				c.runCtx, p.PubKey, appData.Name, appData.Type,
 				p.Lat, p.Lon, p.Feat1, p.Feat2, p.LastSeen, p.LastAdvertTS, hasLoc,
