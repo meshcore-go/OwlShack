@@ -128,7 +128,7 @@ export function TrackMap({
     <div className={cn("relative", className)} style={{ height }}>
       <div ref={containerRef} className="absolute inset-0" />
       {altMin !== undefined && altMax !== undefined && altMax > altMin && (
-        <div className="absolute bottom-2 left-2 z-[500] flex items-center gap-1.5 border border-border bg-card/85 px-2 py-1 font-mono text-[9px] uppercase tracking-widest text-muted-foreground backdrop-blur-sm">
+        <div className="absolute bottom-2 left-2 z-500 flex items-center gap-1.5 border border-border bg-card/85 px-2 py-1 font-mono text-[9px] uppercase tracking-widest text-muted-foreground backdrop-blur-sm">
           <span className="tabular-nums">{altMin.toFixed(0)}m</span>
           <span
             className="h-1.5 w-16 rounded-sm"

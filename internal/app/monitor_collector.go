@@ -118,6 +118,7 @@ func newContactLister(reg *companionRegistry, db *store.Store) monitor.ListerFun
 					Kind:         kind,
 					IntervalSecs: ct.Metadata.MonitorIntervalSecs,
 					RetrySecs:    ct.Metadata.MonitorRetrySecs,
+					MaxRetries:   ct.Metadata.MonitorMaxRetries,
 					Probes:       ct.Metadata.MonitorProbes,
 				})
 			}

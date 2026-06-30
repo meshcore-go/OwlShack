@@ -462,7 +462,7 @@ export function MapPage() {
 
         <div
           ref={containerRef}
-          className="h-[calc(100vh-260px)] min-h-[420px] w-full"
+          className="h-[calc(100vh-260px)] min-h-105 w-full"
         />
       </section>
 

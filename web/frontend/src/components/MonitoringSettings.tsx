@@ -21,6 +21,7 @@ export interface MonitorMetadata {
   monitorIntervalSecs?: number;
   monitorProbes?: string[];
   monitorRetrySecs?: number;
+  monitorMaxRetries?: number;
 }
 
 const INTERVAL_OPTS: { value: string; label: string }[] = [
@@ -40,6 +41,15 @@ const RETRY_OPTS: { value: string; label: string }[] = [
   { value: "300", label: "5 min" },
   { value: "900", label: "15 min" },
   { value: "1800", label: "30 min" },
+];
+
+const MAX_RETRIES_OPTS: { value: string; label: string }[] = [
+  { value: "0", label: "Default (3)" },
+  { value: "1", label: "1" },
+  { value: "2", label: "2" },
+  { value: "3", label: "3" },
+  { value: "5", label: "5" },
+  { value: "10", label: "10" },
 ];
 
 const PROBES = [
@@ -95,6 +105,7 @@ export function MonitoringSettings({
   const [enabled, setEnabled] = useState(false);
   const [intervalSecs, setIntervalSecs] = useState("0");
   const [retrySecs, setRetrySecs] = useState("0");
+  const [maxRetries, setMaxRetries] = useState("0");
   const [password, setPassword] = useState("");
   const [showPw, setShowPw] = useState(false);
   const [probes, setProbes] = useState<Record<ProbeKey, boolean>>(initialProbes());
@@ -105,6 +116,7 @@ export function MonitoringSettings({
     setEnabled(!!m.monitor);
     setIntervalSecs(String(m.monitorIntervalSecs ?? 0));
     setRetrySecs(String(m.monitorRetrySecs ?? 0));
+    setMaxRetries(String(m.monitorMaxRetries ?? 0));
     setPassword(m.repeaterPassword ?? "");
     setProbes(initialProbes(m.monitorProbes));
     setLoaded(true);
@@ -143,6 +155,7 @@ export function MonitoringSettings({
       monitor: enabled,
       monitorIntervalSecs: Number(intervalSecs),
       monitorRetrySecs: Number(retrySecs),
+      monitorMaxRetries: Number(maxRetries),
     };
     if (kind === "repeater") {
       const enabledProbes = (Object.keys(probes) as ProbeKey[]).filter((k) => probes[k]);
@@ -175,7 +188,7 @@ export function MonitoringSettings({
     } finally {
       setSaving(false);
     }
-  }, [base, kind, password, enabled, intervalSecs, retrySecs, probes, companionName, pubkey, onSaved]);
+  }, [base, kind, password, enabled, intervalSecs, retrySecs, maxRetries, probes, companionName, pubkey, onSaved]);
 
   return (
     <div className={cn("panel", className)}>
@@ -212,12 +225,22 @@ export function MonitoringSettings({
             onChange={setIntervalSecs}
           />
           <SelectField
-            label="Retry after failure"
+            label="Retry delay"
             value={retrySecs}
             options={RETRY_OPTS}
             onChange={setRetrySecs}
           />
+          <SelectField
+            label="Max retries"
+            value={maxRetries}
+            options={MAX_RETRIES_OPTS}
+            onChange={setMaxRetries}
+          />
         </div>
+        <p className="font-mono text-[10px] text-muted-foreground/60 -mt-2">
+          After a failed poll, re-attempt up to Max retries times at the Retry
+          delay, then resume the normal Fetch interval.
+        </p>
 
         {kind === "repeater" ? (
           <>
