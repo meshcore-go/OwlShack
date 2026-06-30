@@ -54,6 +54,10 @@ const (
 	// (common right after restart, before paths are re-learned) shouldn't blank
 	// a node for hours.
 	retryInterval = 5 * time.Minute
+	// defaultMaxRetries bounds consecutive fast re-attempts after a failed poll
+	// before the node falls back to its normal interval, so a permanently
+	// unreachable node isn't polled on the retry cadence forever.
+	defaultMaxRetries = 3
 )
 
 // DefaultIntervalSecs is defaultInterval in seconds. Exported so the API can
@@ -75,6 +79,7 @@ type Target struct {
 	Kind         string   // selects the Collector ("repeater", "sensor", …)
 	IntervalSecs int64    // per-node cadence; 0 = use defaultInterval
 	RetrySecs    int64    // re-attempt delay after a failed poll; 0 = default
+	MaxRetries   int      // consecutive failed re-attempts before normal cadence; 0 = default
 	Probes       []string // request bundles to run; nil/empty = all
 }
 
@@ -134,6 +139,7 @@ type Service struct {
 	mu         sync.RWMutex
 	collectors map[string]Collector
 	nextDue    map[string]time.Time // keyed by pubkey hex
+	failures   map[string]int       // consecutive failed polls, keyed by pubkey hex
 
 	// pollMu serializes the actual collector round-trips so a manual PollNow
 	// can't run concurrently with a scheduled poll (which would put two RF
@@ -153,7 +159,42 @@ func New(st *store.Store, bc Broadcaster, lister Lister, log *slog.Logger) *Serv
 		lister:     lister,
 		collectors: make(map[string]Collector),
 		nextDue:    make(map[string]time.Time),
+		failures:   make(map[string]int),
 	}
+}
+
+// rescheduleAfter sets the node's next due time following a poll. A failed poll
+// re-attempts at retryDelay up to maxRetries consecutive times, then falls back
+// to the normal interval (resetting the counter) so an unreachable node isn't
+// polled on the short retry cadence forever. A success clears the counter.
+func (s *Service) rescheduleAfter(key string, t Target, ok bool) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	interval := defaultInterval
+	if t.IntervalSecs > 0 {
+		interval = time.Duration(t.IntervalSecs) * time.Second
+	}
+	if ok {
+		delete(s.failures, key)
+	} else {
+		s.failures[key]++
+		maxRetries := defaultMaxRetries
+		if t.MaxRetries > 0 {
+			maxRetries = t.MaxRetries
+		}
+		if s.failures[key] <= maxRetries {
+			interval = retryInterval
+			if t.RetrySecs > 0 {
+				interval = time.Duration(t.RetrySecs) * time.Second
+			}
+		} else {
+			s.log.Info("monitor giving up after consecutive failures, resuming normal interval",
+				"pubkey", key[:12], "failures", s.failures[key], "next", interval)
+			delete(s.failures, key)
+		}
+	}
+	s.nextDue[key] = time.Now().Add(interval)
 }
 
 // Targets returns the current monitor target set from the lister — the nodes
@@ -225,19 +266,7 @@ func (s *Service) runCycle(ctx context.Context) {
 		ok := s.poll(ctx, t) == nil
 		s.pollMu.Unlock()
 
-		interval := defaultInterval
-		if t.IntervalSecs > 0 {
-			interval = time.Duration(t.IntervalSecs) * time.Second
-		}
-		if !ok {
-			interval = retryInterval
-			if t.RetrySecs > 0 {
-				interval = time.Duration(t.RetrySecs) * time.Second
-			}
-		}
-		s.mu.Lock()
-		s.nextDue[key] = time.Now().Add(interval)
-		s.mu.Unlock()
+		s.rescheduleAfter(key, t, ok)
 	}
 }
 
@@ -363,21 +392,7 @@ func (s *Service) PollNow(ctx context.Context, pubkey []byte) error {
 	}
 
 	pollErr := s.poll(ctx, *target)
-
-	interval := defaultInterval
-	if target.IntervalSecs > 0 {
-		interval = time.Duration(target.IntervalSecs) * time.Second
-	}
-	if pollErr != nil {
-		interval = retryInterval
-		if target.RetrySecs > 0 {
-			interval = time.Duration(target.RetrySecs) * time.Second
-		}
-	}
-	s.mu.Lock()
-	s.nextDue[key] = time.Now().Add(interval)
-	s.mu.Unlock()
-
+	s.rescheduleAfter(key, *target, pollErr == nil)
 	return pollErr
 }
 

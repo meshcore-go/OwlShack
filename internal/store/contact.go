@@ -27,6 +27,11 @@ type ContactMetadata struct {
 	// MonitorRetrySecs overrides how soon to re-attempt after a failed poll.
 	// 0 = use the poller's built-in default.
 	MonitorRetrySecs int64 `json:"monitorRetrySecs,omitempty"`
+	// MonitorMaxRetries bounds how many consecutive failed polls re-attempt at
+	// the retry cadence before the node falls back to its normal interval (so an
+	// unreachable node isn't polled forever on the short retry delay). 0 = use
+	// the poller's built-in default.
+	MonitorMaxRetries int `json:"monitorMaxRetries,omitempty"`
 }
 
 type Contact struct {
