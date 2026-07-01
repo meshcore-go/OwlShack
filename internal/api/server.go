@@ -285,9 +285,17 @@ func (s *Server) spaHandler() http.Handler {
 			writeError(w, http.StatusNotFound, "not found")
 			return
 		}
+		// /assets/* are content-hashed => immutable. Everything else (index,
+		// manifest, sw.js, icons) is no-cache so the browser's PWA update check
+		// always revalidates: embed.FS files have no Last-Modified/ETag, so
+		// otherwise a changed manifest can sit stale in its heuristic cache.
+		if strings.HasPrefix(r.URL.Path, "/assets/") {
+			w.Header().Set("Cache-Control", "public, max-age=31536000, immutable")
+		} else {
+			w.Header().Set("Cache-Control", "no-cache")
+		}
 		f, err := s.assets.Open(r.URL.Path[1:])
 		if err != nil {
-			w.Header().Set("Cache-Control", "no-cache, no-store, must-revalidate")
 			r.URL.Path = "/"
 			fileServer.ServeHTTP(w, r)
 			return
