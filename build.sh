@@ -21,6 +21,11 @@ npm ci                  # lockfile-exact + reproducible (matches CI); use `npm i
 npm run build
 popd >/dev/null
 
+# Stamp the build version into the embedded SW so its bytes change every release:
+# that's what triggers the browser's SW update (and the reload toast) and rotates
+# the cache name. App freshness is already handled by hashed /assets/ URLs.
+sed -i "s/__BUILD_VERSION__/${VERSION}/" web/frontend/dist/sw.js
+
 echo ">> Building backend -> ${OUTPUT} (version ${VERSION})"
 go mod download
 CGO_ENABLED=0 go build \

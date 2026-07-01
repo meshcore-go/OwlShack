@@ -1,31 +1,28 @@
-// OwlShack service worker — installability + light load resilience only.
+// OwlShack service worker — installability only. This is a live WebSocket ops
+// console: nothing useful shows offline, so we don't precache the app. The
+// strategy only avoids ever serving a stale build; each fetch branch below
+// carries its own rule.
 //
-// This is a live, WebSocket-driven ops console: there is nothing useful to show
-// fully offline, so we deliberately do NOT precache the whole app or try to be
-// an offline app. The strategy is tuned to never serve a stale build or stale
-// data:
-//   - navigations  -> network-first (always the fresh app when online; the
-//                     cached shell is only a last-resort offline fallback)
-//   - /assets/*     -> cache-first (Vite content-hashes these, so they're
-//                     immutable; a new build = new URLs = cache miss)
-//   - everything else (incl. /api/* + WS, manifest, icons, fonts) is left
-//     alone: a pure network passthrough. The app is served by a local Go
-//     binary, so caching those buys nothing and only risks staleness/growth.
-//
-// Bump VERSION only when changing THIS FILE's logic (it drops the old cache on
-// activate). App/asset freshness does not depend on it — hashed /assets/ URLs
-// change per build and navigations are network-first.
-const VERSION = "v1";
+// VERSION is the build version, stamped into dist/sw.js by build.sh (replacing
+// __BUILD_VERSION__). Changing every release is the point: a byte-identical
+// sw.js is never re-installed, so this is what triggers the update toast. It
+// also names the cache (old caches dropped on activate). A plain `vite build`
+// leaves the literal token — harmless.
+const VERSION = "__BUILD_VERSION__";
 const CACHE = `owlshack-${VERSION}`;
 const SHELL = "/";
 
 self.addEventListener("install", (event) => {
-  // Activate this SW immediately rather than waiting for all tabs to close.
-  self.skipWaiting();
-  // Warm the app-shell so a first-load-then-offline still renders.
+  // No skipWaiting: an update stays "waiting" until the user accepts the toast
+  // (the message listener below triggers it). First install still activates.
   event.waitUntil(
-    caches.open(CACHE).then((c) => c.add(SHELL)).catch(() => {}),
+    caches.open(CACHE).then((c) => c.add(SHELL)).catch(() => {}), // warm shell
   );
+});
+
+self.addEventListener("message", (event) => {
+  // Sent by registerSW.ts when the user clicks "reload" on the update toast.
+  if (event.data === "SKIP_WAITING") self.skipWaiting();
 });
 
 self.addEventListener("activate", (event) => {
@@ -74,7 +71,6 @@ self.addEventListener("fetch", (event) => {
     return;
   }
 
-  // Everything else (manifest, icons, fonts, sw.js): no respondWith → the
-  // browser fetches normally. They're tiny and served locally; not worth
-  // caching, and leaving them uncached avoids unbounded cache growth.
+  // Everything else (manifest, icons, fonts, sw.js): no respondWith → browser
+  // fetches normally. Tiny + local, and staying uncached avoids cache growth.
 });
