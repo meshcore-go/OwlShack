@@ -13,6 +13,7 @@ import {
   SelectValue,
 } from "@/components/ui/select";
 import { cn } from "@/lib/utils";
+import { RETRY_OPTS, MAX_RETRIES_OPTS } from "@/lib/monitorOptions";
 
 export interface MonitorMetadata {
   isRepeater?: boolean;
@@ -33,23 +34,6 @@ const INTERVAL_OPTS: { value: string; label: string }[] = [
   { value: "21600", label: "6 hours" },
   { value: "43200", label: "12 hours" },
   { value: "86400", label: "24 hours" },
-];
-
-const RETRY_OPTS: { value: string; label: string }[] = [
-  { value: "0", label: "Default (5m)" },
-  { value: "60", label: "1 min" },
-  { value: "300", label: "5 min" },
-  { value: "900", label: "15 min" },
-  { value: "1800", label: "30 min" },
-];
-
-const MAX_RETRIES_OPTS: { value: string; label: string }[] = [
-  { value: "0", label: "Default (3)" },
-  { value: "1", label: "1" },
-  { value: "2", label: "2" },
-  { value: "3", label: "3" },
-  { value: "5", label: "5" },
-  { value: "10", label: "10" },
 ];
 
 const PROBES = [

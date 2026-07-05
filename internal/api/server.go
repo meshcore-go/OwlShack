@@ -62,12 +62,13 @@ type RepeaterOps struct {
 }
 
 type Server struct {
-	store  *store.Store
-	hub    *Hub
-	mux    *http.ServeMux
-	log    *slog.Logger
-	assets fs.FS
-	poller NodePoller
+	store     *store.Store
+	hub       *Hub
+	mux       *http.ServeMux
+	log       *slog.Logger
+	assets    fs.FS
+	poller    NodePoller
+	sigTester SignalTester
 
 	mu      sync.RWMutex
 	backend Backend
@@ -165,6 +166,16 @@ func (s *Server) routes() {
 	s.mux.HandleFunc("GET /api/nodes/{pubkey}/metrics", s.handleListNodeMetricNames)
 	s.mux.HandleFunc("GET /api/nodes/{pubkey}/history", s.handleNodeHistory)
 	s.mux.HandleFunc("POST /api/nodes/{pubkey}/poll", s.handlePollNode)
+	s.mux.HandleFunc("POST /api/companions/{name}/signal-tests", s.handleStartSignalTest)
+	s.mux.HandleFunc("GET /api/signal-tests", s.handleListSignalTests)
+	s.mux.HandleFunc("GET /api/signal-tests/{id}", s.handleGetSignalTest)
+	s.mux.HandleFunc("POST /api/signal-tests/{id}/cancel", s.handleCancelSignalTest)
+	s.mux.HandleFunc("PATCH /api/signal-tests/{id}", s.handleUpdateSignalTest)
+	s.mux.HandleFunc("DELETE /api/signal-tests/{id}", s.handleDeleteSignalTest)
+	s.mux.HandleFunc("GET /api/links", s.handleListLinks)
+	s.mux.HandleFunc("POST /api/companions/{name}/links", s.handleAddLink)
+	s.mux.HandleFunc("PATCH /api/links/{id}", s.handleUpdateLink)
+	s.mux.HandleFunc("DELETE /api/links/{id}", s.handleDeleteLink)
 	s.mux.HandleFunc("GET /api/ws", s.handleWebSocket)
 
 	s.mux.Handle("/", s.spaHandler())
@@ -205,6 +216,21 @@ func (s *Server) pollerRef() NodePoller {
 	s.mu.RLock()
 	defer s.mu.RUnlock()
 	return s.poller
+}
+
+// SetSignalTester installs the signal-test runner. Like SetPoller, it's a
+// long-lived service set once at startup (not swapped on reload), guarded by
+// the same lock for consistency with concurrent request handling.
+func (s *Server) SetSignalTester(t SignalTester) {
+	s.mu.Lock()
+	s.sigTester = t
+	s.mu.Unlock()
+}
+
+func (s *Server) signalTesterRef() SignalTester {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	return s.sigTester
 }
 
 // The accessors below adapt the backend into the small func types the handlers

@@ -1,6 +1,12 @@
 import { useCallback, useEffect, useMemo, useState, type MouseEvent } from "react";
 import { Link } from "react-router-dom";
-import { AlertTriangle, ArrowUpRight, CircleDashed, RefreshCw } from "lucide-react";
+import {
+  AlertTriangle,
+  ArrowUpRight,
+  CircleDashed,
+  Link2,
+  RefreshCw,
+} from "lucide-react";
 import { useWebSocket } from "@/hooks/useWebSocket";
 import { PageHeader } from "@/components/PageHeader";
 import { ConnectionPill } from "@/components/StatusIndicator";
@@ -11,6 +17,8 @@ import { Skeleton } from "@/components/ui/skeleton";
 import { cn } from "@/lib/utils";
 import { pollNode } from "@/lib/nodesApi";
 import { formatSecsAgo } from "@/lib/format";
+import { filterMetrics, hopDirectionLabel, type NamedPeer } from "@/lib/linkPath";
+import type { LinkMonitorInfo } from "@/components/LinkMonitorSettings";
 
 interface MonitoredNode {
   pubkey: string;
@@ -54,6 +62,8 @@ export function MonitoringPage() {
   const [nodes, setNodes] = useState<MonitoredNode[]>([]);
   const [history, setHistory] = useState<Record<string, NodeHistory>>({});
   const [loading, setLoading] = useState(true);
+  const [links, setLinks] = useState<LinkMonitorInfo[]>([]);
+  const [peers, setPeers] = useState<NamedPeer[]>([]);
 
   // Fetch a recent window of each sparkline metric the node actually reports.
   const loadHistories = useCallback((list: MonitoredNode[]) => {
@@ -94,6 +104,43 @@ export function MonitoringPage() {
   useEffect(() => {
     load();
   }, [load]);
+
+  // Only needed to resolve link-monitor hop labels ("A → B" instead of "SNR
+  // hop N") — cheap, so fetched unconditionally rather than gating on
+  // whether any card is currently a link.
+  useEffect(() => {
+    fetch("/api/links")
+      .then((r) => (r.ok ? r.json() : []))
+      .then((data: LinkMonitorInfo[]) => setLinks(data || []))
+      .catch(() => {});
+    fetch("/api/peers")
+      .then((r) => (r.ok ? r.json() : []))
+      .then((data: NamedPeer[]) => setPeers(data || []))
+      .catch(() => {});
+  }, []);
+
+  const linkDisplayByPubkey = useMemo(() => {
+    const linksByKey = new Map(links.map((l) => [l.key.toLowerCase(), l]));
+    const map = new Map<
+      string,
+      {
+        hopLabel: (hop: number) => string;
+        ignoreFirstHop: boolean;
+        hideLastSnr: boolean;
+      }
+    >();
+    for (const n of nodes) {
+      if (n.kind !== "link") continue;
+      const l = linksByKey.get(n.pubkey.toLowerCase());
+      if (!l) continue;
+      map.set(n.pubkey, {
+        hopLabel: hopDirectionLabel(l.path, l.pathHashSize, peers),
+        ignoreFirstHop: l.ignoreFirstHop,
+        hideLastSnr: l.hideLastSnr,
+      });
+    }
+    return map;
+  }, [nodes, links, peers]);
 
   const onWs = useCallback((topic: string, payload: unknown) => {
     if (topic !== "metrics" || !payload) return;
@@ -173,7 +220,12 @@ export function MonitoringPage() {
       ) : (
         <section className="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-3 gap-4">
           {sortedNodes.map((n) => (
-            <NodeCard key={n.pubkey} node={n} history={history[n.pubkey]} />
+            <NodeCard
+              key={n.pubkey}
+              node={n}
+              history={history[n.pubkey]}
+              linkDisplay={linkDisplayByPubkey.get(n.pubkey)}
+            />
           ))}
         </section>
       )}
@@ -200,9 +252,15 @@ function EmptyState() {
 function NodeCard({
   node,
   history,
+  linkDisplay,
 }: {
   node: MonitoredNode;
   history?: NodeHistory;
+  linkDisplay?: {
+    hopLabel: (hop: number) => string;
+    ignoreFirstHop: boolean;
+    hideLastSnr: boolean;
+  };
 }) {
   const ageSecs = node.lastOkTs ? nowSecs() - node.lastOkTs : -1;
   // Never polled: enrolled (toggle on) but the scheduler hasn't reached it yet.
@@ -240,7 +298,12 @@ function NodeCard({
     >
       <header className="flex items-center justify-between gap-2 px-3 py-2.5 border-b border-border">
         <div className="min-w-0">
-          <div className="font-mono text-sm font-semibold truncate">{label}</div>
+          <div className="font-mono text-sm font-semibold truncate flex items-center gap-1.5">
+            {node.kind === "link" && (
+              <Link2 className="size-3 text-muted-foreground/60 shrink-0" />
+            )}
+            <span className="truncate">{label}</span>
+          </div>
           <code className="font-mono text-[10px] text-muted-foreground/60">
             {node.pubkey.slice(0, 12)} · {node.kind || "node"}
           </code>
@@ -266,7 +329,15 @@ function NodeCard({
           <span className="font-mono text-xs wrap-break-word">{node.lastError}</span>
         </div>
       ) : (
-        <NodeStatGrid metrics={node.metrics || {}} history={history} />
+        <NodeStatGrid
+          metrics={filterMetrics(
+            node.metrics || {},
+            !!linkDisplay?.ignoreFirstHop,
+            !!linkDisplay?.hideLastSnr,
+          )}
+          history={history}
+          hopLabel={linkDisplay?.hopLabel}
+        />
       )}
 
       <footer className="flex items-center justify-between px-3 py-2 border-t border-border font-mono text-[10px] uppercase tracking-widest text-muted-foreground">

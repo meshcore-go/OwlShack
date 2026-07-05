@@ -96,9 +96,20 @@ func (s *Server) handleListMonitoredNodes(w http.ResponseWriter, r *http.Request
 				}
 			}
 		}
-		// node_state only learns the name from a successful poll; fall back to
-		// the discovered-peers table so an unpolled node isn't nameless.
-		if n.Name == "" {
+		// A link's display name is its saved label — always read live, never
+		// from node_state.name. node_state.name is only a snapshot of what the
+		// collector saw *at poll time*, so preferring it (like a repeater's
+		// advertised name) would make a rename invisible until the next
+		// scheduled poll overwrites it — up to a full interval later.
+		if t.Kind == "link" {
+			if lm, err := s.store.LinkMonitors.GetByKey(r.Context(), t.Pubkey); err == nil && lm != nil && lm.Label != "" {
+				n.Name = lm.Label
+			} else if n.Name == "" {
+				n.Name = "link"
+			}
+		} else if n.Name == "" {
+			// node_state only learns the name from a successful poll; fall back
+			// to the discovered-peers table so an unpolled node isn't nameless.
 			if p, err := s.store.Peers.GetByPubKey(r.Context(), t.Pubkey); err == nil && p != nil {
 				n.Name = p.Name
 			}

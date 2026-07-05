@@ -3,15 +3,22 @@ import {
   ArrowDown,
   ArrowUp,
   Check,
+  ChevronDown,
+  ChevronRight,
   CircleDashed,
+  GitCompare,
+  Link2,
+  Pencil,
   Plus,
   Radio,
   Send,
+  Square,
   Trash2,
   X,
 } from "lucide-react";
 import { toast } from "sonner";
 import { useWebSocket } from "@/hooks/useWebSocket";
+import { useApiList } from "@/hooks/useApiList";
 import { Button } from "@/components/ui/button";
 import { LoadErrorAlert } from "@/components/LoadErrorAlert";
 import { SectionTitle } from "@/components/SectionTitle";
@@ -25,11 +32,26 @@ import {
   SelectValue,
 } from "@/components/ui/select";
 import { Input } from "@/components/ui/input";
+import {
+  Dialog,
+  DialogContent,
+  DialogHeader,
+  DialogTitle,
+} from "@/components/ui/dialog";
+import { InlineConfirm } from "@/components/InlineConfirm";
+import { SignalTestStats } from "@/components/SignalTestStats";
 import { PageHeader } from "@/components/PageHeader";
 import { ConnectionPill } from "@/components/StatusIndicator";
 import { SignalStrength } from "@/components/SignalStrength";
-import { truncateMid } from "@/lib/format";
+import { truncateMid, formatDateTime } from "@/lib/format";
 import { cn } from "@/lib/utils";
+import {
+  signalTestApi,
+  computeStats,
+  type SignalTestDetail,
+  type SignalTestSummary,
+  type SignalTestWsMessage,
+} from "@/lib/signalTestApi";
 
 interface Companion {
   name: string;
@@ -76,6 +98,40 @@ const TRACE_TIMEOUT_MS = 5000;
 
 const HEX_RE = /^[0-9a-f]+$/i;
 
+function hexToHopHashes(pathHex: string, hashSize: number): string[] {
+  const step = hashSize * 2;
+  if (step <= 0) return [];
+  const out: string[] = [];
+  for (let i = 0; i + step <= pathHex.length; i += step) {
+    out.push(pathHex.slice(i, i + step).toLowerCase());
+  }
+  return out;
+}
+
+function buildPeerByHash(peers: Peer[], hashSize: number): Map<string, Peer> {
+  const map = new Map<string, Peer>();
+  for (const p of peers) {
+    const k = p.pubkey.slice(0, hashSize * 2).toLowerCase();
+    if (!map.has(k)) map.set(k, p);
+  }
+  return map;
+}
+
+// hopLabelFor resolves a 1-indexed hop number to "N. <repeater name or hash>"
+// for an arbitrary saved/live test path — independent of the builder's
+// current hashSize, so it works for a test built earlier with a different
+// setting.
+function hopLabelFor(pathHex: string, hashSize: number, peers: Peer[]) {
+  const hashes = hexToHopHashes(pathHex, hashSize);
+  const byHash = buildPeerByHash(peers, hashSize);
+  return (hop: number) => {
+    const hash = hashes[hop - 1];
+    if (!hash) return `Hop ${hop}`;
+    const peer = byHash.get(hash);
+    return `${hop}. ${peer?.name || hash}`;
+  };
+}
+
 export function TracesPage() {
   const [companions, setCompanions] = useState<Companion[]>([]);
   const [peers, setPeers] = useState<Peer[]>([]);
@@ -98,6 +154,32 @@ export function TracesPage() {
   const [waitError, setWaitError] = useState<string | null>(null);
   const [tickNow, setTickNow] = useState(Date.now());
   const timeoutRef = useRef<number | null>(null);
+
+  // Signal test mode — single | test toggle, run params, live progress.
+  const [runMode, setRunMode] = useState<"single" | "test">("single");
+  const [testCount, setTestCount] = useState(20);
+  const [testIntervalSecs, setTestIntervalSecs] = useState(30);
+  const [testLabel, setTestLabel] = useState("");
+  const [starting, setStarting] = useState(false);
+  const [addingLink, setAddingLink] = useState(false);
+  const [activeTest, setActiveTest] = useState<SignalTestDetail | null>(null);
+  const activeTestIdRef = useRef<number | null>(null);
+  activeTestIdRef.current = activeTest?.id ?? null;
+
+  const testsUrl = companionName
+    ? `/api/signal-tests?companion=${encodeURIComponent(companionName)}`
+    : null;
+  const {
+    items: savedTests,
+    setItems: setSavedTests,
+    loading: testsLoading,
+    reload: reloadTests,
+  } = useApiList<SignalTestSummary>(testsUrl, "Failed to load signal tests");
+  const reloadTestsRef = useRef(reloadTests);
+  reloadTestsRef.current = reloadTests;
+
+  const [compareIds, setCompareIds] = useState<Set<number>>(new Set());
+  const [compareOpen, setCompareOpen] = useState(false);
   // Updated each render to the number of hops in the path we sent, so the WS
   // handler can tell a partial echo from the final packet without re-creating
   // the callback whenever the path changes.
@@ -135,6 +217,40 @@ export function TracesPage() {
             next[idx] = { ...next[idx], ...p };
             return next;
           });
+        }
+        return;
+      }
+      if (topic === "signaltest" && data) {
+        const msg = data as SignalTestWsMessage;
+        if (msg.testId !== activeTestIdRef.current) return;
+        if (msg.action === "run") {
+          setActiveTest((prev) =>
+            prev && prev.id === msg.testId
+              ? {
+                  ...prev,
+                  runsDone: prev.runsDone + 1,
+                  okCount: prev.okCount + (msg.ok ? 1 : 0),
+                  runs: [
+                    ...prev.runs,
+                    {
+                      seq: msg.seq,
+                      sentAt: msg.sentAt,
+                      ok: msg.ok,
+                      hopSNRs: msg.hopSNRs || [],
+                      snr: msg.snr,
+                      elapsedMs: msg.elapsedMs,
+                    },
+                  ],
+                }
+              : prev,
+          );
+        } else if (msg.action === "status") {
+          setActiveTest((prev) =>
+            prev && prev.id === msg.testId
+              ? { ...prev, status: msg.status, finishedAt: msg.finishedAt }
+              : prev,
+          );
+          reloadTestsRef.current();
         }
         return;
       }
@@ -183,7 +299,25 @@ export function TracesPage() {
     [armTimeout],
   );
 
-  const { connected } = useWebSocket(["traces", "peers"], onWsMessage);
+  const { connected } = useWebSocket(
+    ["traces", "peers", "signaltest"],
+    onWsMessage,
+  );
+
+  // A running test is server-side; clear the local view when switching
+  // companions and resume tracking it (if one is running) once the saved
+  // list for the new companion has loaded.
+  useEffect(() => {
+    setActiveTest(null);
+  }, [companionName]);
+
+  useEffect(() => {
+    if (!savedTests || activeTest) return;
+    const running = savedTests.find((t) => t.status === "running");
+    if (!running) return;
+    signalTestApi.get(running.id).then(setActiveTest).catch(() => {});
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [savedTests]);
 
   useEffect(() => {
     if (activeTag == null) return;
@@ -372,6 +506,113 @@ export function TracesPage() {
     }
   };
 
+  const startTest = async () => {
+    if (!companionName) {
+      toast.error("Select a companion first");
+      return;
+    }
+    if (mode === "manual" && !computedPathHex) {
+      toast.error("Path is empty");
+      return;
+    }
+    if (!pathHexValid) {
+      toast.error("Path is not valid hex for the selected hash size");
+      return;
+    }
+    if (testCount < 1 || testCount > 1000) {
+      toast.error("Count must be between 1 and 1000");
+      return;
+    }
+    if (testIntervalSecs < 5 || testIntervalSecs > 3600) {
+      toast.error("Interval must be between 5 and 3600 seconds");
+      return;
+    }
+
+    setStarting(true);
+    try {
+      const { id } = await signalTestApi.start(companionName, {
+        path: computedPathHex,
+        pathHashSize: hashSize,
+        count: testCount,
+        intervalSecs: testIntervalSecs,
+        label: testLabel || undefined,
+      });
+      const detail = await signalTestApi.get(id);
+      setActiveTest(detail);
+      reloadTests();
+      toast.success(`Signal test started · ${testCount} runs`);
+    } catch (err) {
+      toast.error(`Failed to start test: ${(err as Error).message}`);
+    } finally {
+      setStarting(false);
+    }
+  };
+
+  const addLinkMonitor = async () => {
+    if (!companionName) {
+      toast.error("Select a companion first");
+      return;
+    }
+    if (mode === "manual" && !computedPathHex) {
+      toast.error("Path is empty");
+      return;
+    }
+    if (!pathHexValid) {
+      toast.error("Path is not valid hex for the selected hash size");
+      return;
+    }
+    setAddingLink(true);
+    try {
+      const res = await fetch(
+        `/api/companions/${encodeURIComponent(companionName)}/links`,
+        {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({
+            path: computedPathHex,
+            pathHashSize: hashSize,
+            label: testLabel || undefined,
+          }),
+        },
+      );
+      if (!res.ok) {
+        let msg = `HTTP ${res.status}`;
+        try {
+          const data = await res.json();
+          if (data && typeof data.error === "string") msg = data.error;
+        } catch {
+          // ignore
+        }
+        toast.error(`Failed to add link monitor: ${msg}`);
+        return;
+      }
+      toast.success("Path added to Monitoring — polled on a schedule");
+    } catch (err) {
+      toast.error(`Failed to add link monitor: ${(err as Error).message}`);
+    } finally {
+      setAddingLink(false);
+    }
+  };
+
+  const cancelActiveTest = async () => {
+    if (!activeTest) return;
+    try {
+      await signalTestApi.cancel(activeTest.id);
+      toast.success("Test cancelled");
+    } catch (err) {
+      toast.error(`Cancel failed: ${(err as Error).message}`);
+    }
+  };
+
+  const toggleCompare = (id: number) => {
+    setCompareIds((prev) => {
+      const next = new Set(prev);
+      if (next.has(id)) next.delete(id);
+      else next.add(id);
+      return next;
+    });
+  };
+
   const isWaiting = activeTag != null && waitStartedAt != null;
   const remainingMs =
     isWaiting && deadlineAt != null ? Math.max(0, deadlineAt - tickNow) : 0;
@@ -446,19 +687,35 @@ export function TracesPage() {
                   </div>
                 </div>
 
-                <div className="flex items-center gap-1 border border-border bg-muted/30 p-0.5 w-fit">
-                  <ModeToggle
-                    active={mode === "select"}
-                    onClick={() => setMode("select")}
-                  >
-                    pick
-                  </ModeToggle>
-                  <ModeToggle
-                    active={mode === "manual"}
-                    onClick={() => setMode("manual")}
-                  >
-                    manual hex
-                  </ModeToggle>
+                <div className="flex items-center gap-4">
+                  <div className="flex items-center gap-1 border border-border bg-muted/30 p-0.5 w-fit">
+                    <ModeToggle
+                      active={runMode === "single"}
+                      onClick={() => setRunMode("single")}
+                    >
+                      single
+                    </ModeToggle>
+                    <ModeToggle
+                      active={runMode === "test"}
+                      onClick={() => setRunMode("test")}
+                    >
+                      signal test
+                    </ModeToggle>
+                  </div>
+                  <div className="flex items-center gap-1 border border-border bg-muted/30 p-0.5 w-fit">
+                    <ModeToggle
+                      active={mode === "select"}
+                      onClick={() => setMode("select")}
+                    >
+                      pick
+                    </ModeToggle>
+                    <ModeToggle
+                      active={mode === "manual"}
+                      onClick={() => setMode("manual")}
+                    >
+                      manual hex
+                    </ModeToggle>
+                  </div>
                 </div>
 
                 {mode === "select" ? (
@@ -648,6 +905,60 @@ export function TracesPage() {
                   </div>
                 )}
 
+                {runMode === "test" && (
+                  <div className="grid grid-cols-1 sm:grid-cols-3 gap-4 pt-2 border-t border-border">
+                    <div className="space-y-1.5">
+                      <label className="label-overline block">Count</label>
+                      <Input
+                        type="number"
+                        min={1}
+                        max={1000}
+                        value={testCount}
+                        onChange={(e: React.ChangeEvent<HTMLInputElement>) =>
+                          setTestCount(Number(e.target.value) || 1)
+                        }
+                        className="h-8 rounded-none font-mono text-xs tabular-nums"
+                      />
+                    </div>
+                    <div className="space-y-1.5">
+                      <label className="label-overline block">Interval</label>
+                      <Select
+                        value={String(testIntervalSecs)}
+                        onValueChange={(v) => setTestIntervalSecs(Number(v))}
+                      >
+                        <SelectTrigger className="w-full h-8 font-mono text-xs uppercase tracking-[0.06em] rounded-none">
+                          <SelectValue />
+                        </SelectTrigger>
+                        <SelectContent className="rounded-none font-mono text-xs">
+                          {[10, 15, 30, 60, 120].map((s) => (
+                            <SelectItem key={s} value={String(s)}>
+                              {s}s
+                            </SelectItem>
+                          ))}
+                        </SelectContent>
+                      </Select>
+                    </div>
+                    <div className="space-y-1.5">
+                      <label className="label-overline block">
+                        Label (optional)
+                      </label>
+                      <Input
+                        value={testLabel}
+                        onChange={(e: React.ChangeEvent<HTMLInputElement>) =>
+                          setTestLabel(e.target.value)
+                        }
+                        placeholder="e.g. new antenna"
+                        className="h-8 rounded-none font-mono text-xs"
+                      />
+                    </div>
+                    <p className="sm:col-span-3 font-mono text-[10px] text-muted-foreground/60">
+                      {testCount} traces every {testIntervalSecs}s · runs
+                      ~{Math.round((testCount * testIntervalSecs) / 60)} min ·
+                      be gentle with airtime on a shared channel
+                    </p>
+                  </div>
+                )}
+
                 <div className="pt-2 border-t border-border space-y-3">
                   <div className="flex items-center justify-between gap-3">
                     <div className="space-y-0.5 min-w-0 flex-1">
@@ -660,19 +971,57 @@ export function TracesPage() {
                         )}
                       </code>
                     </div>
-                    <Button
-                      onClick={sendTrace}
-                      disabled={
-                        isWaiting ||
-                        !companionName ||
-                        !pathHexValid ||
-                        (mode === "manual" && !computedPathHex)
-                      }
-                      className="rounded-none font-mono uppercase tracking-widest gap-2"
-                    >
-                      <Send className="size-3.5" />
-                      {isWaiting ? "waiting…" : "send trace"}
-                    </Button>
+                    {runMode === "single" ? (
+                      <Button
+                        onClick={sendTrace}
+                        disabled={
+                          isWaiting ||
+                          !companionName ||
+                          !pathHexValid ||
+                          (mode === "manual" && !computedPathHex)
+                        }
+                        className="rounded-none font-mono uppercase tracking-widest gap-2"
+                      >
+                        <Send className="size-3.5" />
+                        {isWaiting ? "waiting…" : "send trace"}
+                      </Button>
+                    ) : (
+                      <div className="flex items-center gap-2 shrink-0">
+                        <Button
+                          variant="outline"
+                          onClick={addLinkMonitor}
+                          disabled={
+                            addingLink ||
+                            !companionName ||
+                            !pathHexValid ||
+                            (mode === "manual" && !computedPathHex)
+                          }
+                          title="Poll this path continuously on a schedule"
+                          className="rounded-none font-mono uppercase tracking-widest gap-2"
+                        >
+                          <Link2 className="size-3.5" />
+                          {addingLink ? "adding…" : "monitor path"}
+                        </Button>
+                        <Button
+                          onClick={startTest}
+                          disabled={
+                            starting ||
+                            activeTest?.status === "running" ||
+                            !companionName ||
+                            !pathHexValid ||
+                            (mode === "manual" && !computedPathHex)
+                          }
+                          className="rounded-none font-mono uppercase tracking-widest gap-2"
+                        >
+                          <Send className="size-3.5" />
+                          {activeTest?.status === "running"
+                            ? "test running…"
+                            : starting
+                              ? "starting…"
+                              : "start test"}
+                        </Button>
+                      </div>
+                    )}
                   </div>
                 </div>
               </div>
@@ -680,50 +1029,137 @@ export function TracesPage() {
           </div>
 
           <div className="lg:col-span-2 space-y-6">
-            <div className="panel">
-              <SectionTitle
-                eyebrow={
-                  isWaiting
-                    ? "Awaiting · live"
-                    : result
-                      ? "Result"
-                      : "Result · idle"
-                }
-                title="Trace timeline"
-                trailing={
-                  isWaiting && (
-                    <span className="font-mono text-[10px] tabular-nums text-primary">
-                      {(remainingMs / 1000).toFixed(1)}s
-                    </span>
-                  )
-                }
-              />
-              <div className="px-4 py-4">
-                {!result && !isWaiting && !waitError && (
-                  <div className="text-center py-10">
-                    <CircleDashed className="size-6 mx-auto mb-2 text-muted-foreground/40" />
-                    <p className="text-sm text-muted-foreground/60">
-                      No trace sent yet
-                    </p>
-                  </div>
-                )}
+            {runMode === "single" ? (
+              <div className="panel">
+                <SectionTitle
+                  eyebrow={
+                    isWaiting
+                      ? "Awaiting · live"
+                      : result
+                        ? "Result"
+                        : "Result · idle"
+                  }
+                  title="Trace timeline"
+                  trailing={
+                    isWaiting && (
+                      <span className="font-mono text-[10px] tabular-nums text-primary">
+                        {(remainingMs / 1000).toFixed(1)}s
+                      </span>
+                    )
+                  }
+                />
+                <div className="px-4 py-4">
+                  {!result && !isWaiting && !waitError && (
+                    <div className="text-center py-10">
+                      <CircleDashed className="size-6 mx-auto mb-2 text-muted-foreground/40" />
+                      <p className="text-sm text-muted-foreground/60">
+                        No trace sent yet
+                      </p>
+                    </div>
+                  )}
 
-                {(isWaiting || result || waitError) && (
-                  <TraceTimeline
-                    isWaiting={isWaiting}
-                    waitError={waitError}
-                    result={result}
-                    companionName={companionName}
-                    routeHashes={routeHashes}
-                    liveSNRs={liveSNRs}
-                    peerByHash={peerByHash}
-                  />
-                )}
+                  {(isWaiting || result || waitError) && (
+                    <TraceTimeline
+                      isWaiting={isWaiting}
+                      waitError={waitError}
+                      result={result}
+                      companionName={companionName}
+                      routeHashes={routeHashes}
+                      liveSNRs={liveSNRs}
+                      peerByHash={peerByHash}
+                    />
+                  )}
+                </div>
               </div>
-            </div>
+            ) : (
+              <div className="panel">
+                <SectionTitle
+                  eyebrow={
+                    activeTest
+                      ? `Test #${activeTest.id} · ${activeTest.status}`
+                      : "Signal test · idle"
+                  }
+                  title="Live progress"
+                  trailing={
+                    activeTest?.status === "running" && (
+                      <Button
+                        variant="outline"
+                        size="xs"
+                        onClick={cancelActiveTest}
+                        className="rounded-none font-mono uppercase tracking-widest gap-1"
+                      >
+                        <Square className="size-3" /> cancel
+                      </Button>
+                    )
+                  }
+                />
+                <div className="px-4 py-4">
+                  {!activeTest ? (
+                    <div className="text-center py-10">
+                      <CircleDashed className="size-6 mx-auto mb-2 text-muted-foreground/40" />
+                      <p className="text-sm text-muted-foreground/60">
+                        No test running
+                      </p>
+                    </div>
+                  ) : (
+                    <div className="space-y-3">
+                      <div className="flex items-center justify-between font-mono text-[11px] tabular-nums text-muted-foreground">
+                        <span>
+                          {activeTest.runs.length}/{activeTest.count} runs
+                        </span>
+                        <span>{activeTest.okCount} ok</span>
+                      </div>
+                      <SignalTestStats
+                        stats={computeStats(activeTest.runs)}
+                        hopLabel={hopLabelFor(
+                          activeTest.path,
+                          activeTest.pathHashSize,
+                          peers,
+                        )}
+                      />
+                    </div>
+                  )}
+                </div>
+              </div>
+            )}
           </div>
         </section>
       )}
+
+      {!loading && !error && (
+        <SavedTestsPanel
+          tests={savedTests}
+          loading={testsLoading}
+          peers={peers}
+          compareIds={compareIds}
+          onToggleCompare={toggleCompare}
+          onCompare={() => setCompareOpen(true)}
+          onRenamed={(id, label) =>
+            setSavedTests(
+              (prev) =>
+                prev?.map((t) => (t.id === id ? { ...t, label } : t)) ?? prev,
+            )
+          }
+          onDeleted={(id) => {
+            setSavedTests(
+              (prev) => prev?.filter((t) => t.id !== id) ?? prev,
+            );
+            setCompareIds((prev) => {
+              if (!prev.has(id)) return prev;
+              const next = new Set(prev);
+              next.delete(id);
+              return next;
+            });
+          }}
+        />
+      )}
+
+      <CompareDialog
+        open={compareOpen}
+        onOpenChange={setCompareOpen}
+        testIds={Array.from(compareIds)}
+        tests={savedTests ?? []}
+      />
     </div>
   );
 }
@@ -919,6 +1355,378 @@ function TraceTimeline({
         </li>
       ))}
     </ol>
+  );
+}
+
+function SavedTestsPanel({
+  tests,
+  loading,
+  peers,
+  compareIds,
+  onToggleCompare,
+  onCompare,
+  onRenamed,
+  onDeleted,
+}: {
+  tests: SignalTestSummary[] | null;
+  loading: boolean;
+  peers: Peer[];
+  compareIds: Set<number>;
+  onToggleCompare: (id: number) => void;
+  onCompare: () => void;
+  onRenamed: (id: number, label: string) => void;
+  onDeleted: (id: number) => void;
+}) {
+  return (
+    <section className="panel">
+      <SectionTitle
+        eyebrow="Signal tests · saved"
+        title="Test history"
+        trailing={
+          compareIds.size > 1 && (
+            <Button
+              variant="outline"
+              size="xs"
+              onClick={onCompare}
+              className="rounded-none font-mono uppercase tracking-widest gap-1"
+            >
+              <GitCompare className="size-3" /> compare ({compareIds.size})
+            </Button>
+          )
+        }
+      />
+      {loading && !tests ? (
+        <div className="px-4 py-6 space-y-2">
+          <Skeleton className="h-8" />
+          <Skeleton className="h-8" />
+        </div>
+      ) : !tests || tests.length === 0 ? (
+        <div className="px-4 py-8 text-center text-sm text-muted-foreground/60">
+          No saved tests yet · run a signal test above to see results here
+        </div>
+      ) : (
+        <div className="divide-y divide-border/60">
+          {tests.map((t) => (
+            <SavedTestRow
+              key={t.id}
+              test={t}
+              peers={peers}
+              selected={compareIds.has(t.id)}
+              onToggleSelect={() => onToggleCompare(t.id)}
+              onRenamed={(label) => onRenamed(t.id, label)}
+              onDeleted={() => onDeleted(t.id)}
+            />
+          ))}
+        </div>
+      )}
+    </section>
+  );
+}
+
+function StatusPill({ status }: { status: SignalTestSummary["status"] }) {
+  const styles: Record<string, string> = {
+    running: "border-primary/40 bg-primary/10 text-primary",
+    done: "border-success/40 bg-success/10 text-success",
+    cancelled: "border-border bg-muted/40 text-muted-foreground",
+    interrupted: "border-destructive/40 bg-destructive/10 text-destructive",
+  };
+  return (
+    <span
+      className={cn(
+        "px-1.5 py-0.5 border font-mono text-[9px] uppercase tracking-[0.1em] w-24 text-center shrink-0",
+        styles[status] || styles.cancelled,
+      )}
+    >
+      {status}
+    </span>
+  );
+}
+
+function SavedTestRow({
+  test,
+  peers,
+  selected,
+  onToggleSelect,
+  onRenamed,
+  onDeleted,
+}: {
+  test: SignalTestSummary;
+  peers: Peer[];
+  selected: boolean;
+  onToggleSelect: () => void;
+  onRenamed: (label: string) => void;
+  onDeleted: () => void;
+}) {
+  const [expanded, setExpanded] = useState(false);
+  const [detail, setDetail] = useState<SignalTestDetail | null>(null);
+  const [detailLoading, setDetailLoading] = useState(false);
+  const [confirmingDelete, setConfirmingDelete] = useState(false);
+  const [renaming, setRenaming] = useState(false);
+  const [labelDraft, setLabelDraft] = useState(test.label);
+
+  const toggleExpanded = () => {
+    const next = !expanded;
+    setExpanded(next);
+    if (next && !detail) {
+      setDetailLoading(true);
+      signalTestApi
+        .get(test.id)
+        .then(setDetail)
+        .catch(() => toast.error("Failed to load test detail"))
+        .finally(() => setDetailLoading(false));
+    }
+  };
+
+  const saveLabel = async () => {
+    try {
+      await signalTestApi.update(test.id, { label: labelDraft });
+      onRenamed(labelDraft);
+      setRenaming(false);
+    } catch (err) {
+      toast.error(`Rename failed: ${(err as Error).message}`);
+    }
+  };
+
+  const doDelete = async () => {
+    try {
+      await signalTestApi.remove(test.id);
+      onDeleted();
+    } catch (err) {
+      toast.error(`Delete failed: ${(err as Error).message}`);
+    }
+  };
+
+  const hopCount =
+    test.pathHashSize > 0
+      ? test.path.length / (test.pathHashSize * 2)
+      : 0;
+  const successPct =
+    test.runsDone > 0 ? Math.round((test.okCount / test.runsDone) * 100) : 0;
+
+  return (
+    <div>
+      <div className="flex items-center gap-3 px-4 py-2.5">
+        <input
+          type="checkbox"
+          checked={selected}
+          onChange={onToggleSelect}
+          className="size-3.5 accent-primary shrink-0"
+          aria-label="Select for compare"
+        />
+        <button
+          type="button"
+          onClick={toggleExpanded}
+          className="text-muted-foreground/60 hover:text-foreground shrink-0"
+          aria-label={expanded ? "collapse" : "expand"}
+        >
+          {expanded ? (
+            <ChevronDown className="size-3.5" />
+          ) : (
+            <ChevronRight className="size-3.5" />
+          )}
+        </button>
+        <div className="min-w-0 flex-1">
+          {renaming ? (
+            <div className="flex items-center gap-2">
+              <Input
+                value={labelDraft}
+                onChange={(e: React.ChangeEvent<HTMLInputElement>) =>
+                  setLabelDraft(e.target.value)
+                }
+                className="h-7 rounded-none font-mono text-xs"
+                autoFocus
+              />
+              <Button
+                size="xs"
+                onClick={saveLabel}
+                className="rounded-none font-mono uppercase tracking-widest"
+              >
+                <Check className="size-3" />
+              </Button>
+              <Button
+                variant="ghost"
+                size="xs"
+                onClick={() => {
+                  setLabelDraft(test.label);
+                  setRenaming(false);
+                }}
+                className="rounded-none font-mono uppercase tracking-widest"
+              >
+                <X className="size-3" />
+              </Button>
+            </div>
+          ) : (
+            <div className="flex items-center gap-2">
+              <span className="text-sm font-medium truncate">
+                {test.label || `Test #${test.id}`}
+              </span>
+              <button
+                type="button"
+                onClick={() => setRenaming(true)}
+                className="text-muted-foreground/40 hover:text-primary shrink-0"
+                aria-label="rename"
+              >
+                <Pencil className="size-3" />
+              </button>
+            </div>
+          )}
+          <div className="font-mono text-[10px] text-muted-foreground tabular-nums">
+            {formatDateTime(test.startedAt * 1000)} · {hopCount} hops ·{" "}
+            {test.intervalSecs}s interval
+          </div>
+        </div>
+        <StatusPill status={test.status} />
+        <span className="font-mono text-xs tabular-nums text-muted-foreground w-16 text-right shrink-0">
+          {test.runsDone}/{test.count}
+        </span>
+        <span className="font-mono text-xs tabular-nums text-muted-foreground w-12 text-right shrink-0">
+          {successPct}%
+        </span>
+        <InlineConfirm
+          confirming={confirmingDelete}
+          onAskRemove={() => setConfirmingDelete(true)}
+          onCancel={() => setConfirmingDelete(false)}
+          onConfirm={doDelete}
+          iconOnly
+          ariaLabel="Delete test"
+        />
+      </div>
+      {expanded && (
+        <div className="px-4 pb-4 pl-11">
+          {detailLoading || !detail ? (
+            <Skeleton className="h-24" />
+          ) : (
+            <SignalTestStats
+              stats={detail.stats}
+              hopLabel={hopLabelFor(detail.path, detail.pathHashSize, peers)}
+            />
+          )}
+        </div>
+      )}
+    </div>
+  );
+}
+
+function CompareDialog({
+  open,
+  onOpenChange,
+  testIds,
+  tests,
+}: {
+  open: boolean;
+  onOpenChange: (open: boolean) => void;
+  testIds: number[];
+  tests: SignalTestSummary[];
+}) {
+  const [details, setDetails] = useState<Record<number, SignalTestDetail>>(
+    {},
+  );
+  const [loading, setLoading] = useState(false);
+  const idsKey = testIds.join(",");
+
+  useEffect(() => {
+    if (!open || testIds.length === 0) return;
+    setLoading(true);
+    Promise.all(testIds.map((id) => signalTestApi.get(id)))
+      .then((list) => {
+        const map: Record<number, SignalTestDetail> = {};
+        list.forEach((d) => {
+          map[d.id] = d;
+        });
+        setDetails(map);
+      })
+      .catch(() => toast.error("Failed to load test comparison"))
+      .finally(() => setLoading(false));
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [open, idsKey]);
+
+  const maxHop = Math.max(
+    0,
+    ...testIds.map((id) => details[id]?.stats.perHop.length ?? 0),
+  );
+
+  return (
+    <Dialog open={open} onOpenChange={onOpenChange}>
+      <DialogContent className="rounded-none border-border bg-card max-w-3xl">
+        <DialogHeader>
+          <DialogTitle className="font-mono uppercase tracking-[0.08em] text-sm">
+            Compare tests
+          </DialogTitle>
+        </DialogHeader>
+        {loading ? (
+          <Skeleton className="h-40" />
+        ) : (
+          <div className="overflow-x-auto">
+            <table className="w-full font-mono text-[11px] border border-border">
+              <thead>
+                <tr className="bg-muted/40 text-muted-foreground/70 uppercase tracking-[0.08em]">
+                  <th className="text-left px-2 py-1 font-normal">Metric</th>
+                  {testIds.map((id) => (
+                    <th key={id} className="text-right px-2 py-1 font-normal">
+                      {tests.find((t) => t.id === id)?.label || `#${id}`}
+                    </th>
+                  ))}
+                </tr>
+              </thead>
+              <tbody className="divide-y divide-border/60">
+                <tr>
+                  <td className="px-2 py-1 text-muted-foreground/70">
+                    Success rate
+                  </td>
+                  {testIds.map((id) => (
+                    <td
+                      key={id}
+                      className="px-2 py-1 text-right tabular-nums"
+                    >
+                      {details[id]
+                        ? `${(details[id].stats.successRate * 100).toFixed(0)}%`
+                        : "—"}
+                    </td>
+                  ))}
+                </tr>
+                <tr>
+                  <td className="px-2 py-1 text-muted-foreground/70">
+                    Timeouts
+                  </td>
+                  {testIds.map((id) => (
+                    <td
+                      key={id}
+                      className="px-2 py-1 text-right tabular-nums"
+                    >
+                      {details[id]?.stats.timeouts ?? "—"}
+                    </td>
+                  ))}
+                </tr>
+                {Array.from({ length: maxHop }, (_, i) => i + 1).map(
+                  (hop) => (
+                    <tr key={hop}>
+                      <td className="px-2 py-1 text-muted-foreground/70">
+                        Hop {hop}
+                      </td>
+                      {testIds.map((id) => {
+                        const h = details[id]?.stats.perHop.find(
+                          (x) => x.hop === hop,
+                        );
+                        return (
+                          <td
+                            key={id}
+                            className="px-2 py-1 text-right tabular-nums"
+                          >
+                            {h
+                              ? `${h.mean.toFixed(1)}±${h.stddev.toFixed(1)} (${h.min.toFixed(1)}…${h.max.toFixed(1)})`
+                              : "—"}
+                          </td>
+                        );
+                      })}
+                    </tr>
+                  ),
+                )}
+              </tbody>
+            </table>
+          </div>
+        )}
+      </DialogContent>
+    </Dialog>
   );
 }
 

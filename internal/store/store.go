@@ -33,6 +33,8 @@ type Store struct {
 	Companions     *CompanionRepo
 	Channels       *ChannelRepo
 	Triggers       *TriggerRepo
+	SignalTests    *SignalTestRepo
+	LinkMonitors   *LinkMonitorRepo
 
 	writerCh   chan func()
 	writerDone chan struct{}
@@ -76,6 +78,8 @@ func Open(ctx context.Context, path string) (*Store, error) {
 		Companions:     &CompanionRepo{db: db},
 		Channels:       &ChannelRepo{db: db},
 		Triggers:       &TriggerRepo{db: db},
+		SignalTests:    &SignalTestRepo{db: db},
+		LinkMonitors:   &LinkMonitorRepo{db: db},
 		writerCh:       make(chan func(), writerQueueDepth),
 		writerDone:     make(chan struct{}),
 	}
@@ -165,6 +169,10 @@ func (s *Store) migrate(ctx context.Context) error {
 		migrateNoop, // 2 — squashed into migrateV1
 		migrateNoop, // 3 — squashed into migrateV1
 		migrateV2,   // 4 — indexed packet_hash/path columns
+		migrateV3,   // 5 — signal_tests, signal_test_runs, link_monitors
+		migrateV4,   // 6 — idempotent repair pass 1 (see ensureLinkMonitorColumns)
+		migrateV5,   // 7 — idempotent repair pass 2, catches DBs already at version 6
+		migrateV6,   // 8 — idempotent repair pass 3, catches DBs already at version 7
 	}
 
 	for i := version; i < len(migrations); i++ {
@@ -479,4 +487,137 @@ func migrateV2(ctx context.Context, db *sql.DB) error {
 		return fmt.Errorf("commit backfill: %w", err)
 	}
 	return nil
+}
+
+// migrateV3 adds storage for the signal-test runner (repeatable trace runs
+// with saved per-hop stats) and for link monitors (a monitored path, polled
+// by the existing node-monitoring engine under a synthetic pubkey — see
+// LinkMonitorRepo). signal_test_runs is never pruned by PruneMetrics; rows
+// are bounded per test and removed by deleting the parent test.
+func migrateV3(ctx context.Context, db *sql.DB) error {
+	_, err := db.ExecContext(ctx, `
+		CREATE TABLE IF NOT EXISTS signal_tests (
+			id             INTEGER PRIMARY KEY AUTOINCREMENT,
+			companion_id   INTEGER NOT NULL REFERENCES companions(id) ON DELETE CASCADE,
+			label          TEXT    NOT NULL DEFAULT '',
+			notes          TEXT    NOT NULL DEFAULT '',
+			path           BLOB    NOT NULL,
+			path_hash_size INTEGER NOT NULL DEFAULT 1,
+			count          INTEGER NOT NULL,
+			interval_secs  INTEGER NOT NULL,
+			status         TEXT    NOT NULL DEFAULT 'running',
+			started_at     INTEGER NOT NULL,
+			finished_at    INTEGER NOT NULL DEFAULT 0
+		);
+
+		CREATE TABLE IF NOT EXISTS signal_test_runs (
+			id         INTEGER PRIMARY KEY AUTOINCREMENT,
+			test_id    INTEGER NOT NULL REFERENCES signal_tests(id) ON DELETE CASCADE,
+			seq        INTEGER NOT NULL,
+			sent_at    INTEGER NOT NULL,
+			ok         INTEGER NOT NULL DEFAULT 0,
+			hop_snrs   TEXT    NOT NULL DEFAULT '[]',
+			snr        REAL,
+			elapsed_ms INTEGER NOT NULL DEFAULT 0
+		);
+		CREATE INDEX IF NOT EXISTS idx_signal_test_runs_test ON signal_test_runs(test_id, seq);
+
+		CREATE TABLE IF NOT EXISTS link_monitors (
+			id               INTEGER PRIMARY KEY AUTOINCREMENT,
+			key              BLOB    NOT NULL UNIQUE,
+			companion_id     INTEGER NOT NULL REFERENCES companions(id) ON DELETE CASCADE,
+			label            TEXT    NOT NULL DEFAULT '',
+			path             BLOB    NOT NULL,
+			path_hash_size   INTEGER NOT NULL DEFAULT 1,
+			interval_secs    INTEGER NOT NULL DEFAULT 900,
+			enabled          INTEGER NOT NULL DEFAULT 1,
+			-- ignore_first_hop hides the "you → <first node>" hop from the UI: that
+			-- leg is a local companion-to-base-station radio link that's normally
+			-- rock solid, so its SNR is noise the user doesn't want cluttering the
+			-- charts. Display-only — the collector still records it.
+			ignore_first_hop INTEGER NOT NULL DEFAULT 0,
+			-- retry_secs/max_retries override the node-monitoring poller's
+			-- failed-poll retry cadence (internal/monitor.retryInterval/
+			-- defaultMaxRetries) for this link; 0 means "use the poller default".
+			retry_secs       INTEGER NOT NULL DEFAULT 0,
+			max_retries      INTEGER NOT NULL DEFAULT 0,
+			-- hide_last_snr hides the "SNR" tile/chart (the local radio's RX SNR
+			-- of the final returning packet): for an out-and-back path that's the
+			-- same physical leg as the first hop (the return trip is relayed back
+			-- through that same nearby node), so it's exactly as static and
+			-- uninteresting as ignore_first_hop's reading, for the same reason.
+			-- Display-only — the collector still records it.
+			hide_last_snr    INTEGER NOT NULL DEFAULT 0
+		);
+	`)
+	if err != nil {
+		return fmt.Errorf("creating signal test / link monitor tables: %w", err)
+	}
+	return nil
+}
+
+// ensureLinkMonitorColumns idempotently adds any of link_monitors'
+// ignore_first_hop/retry_secs/max_retries/hide_last_snr columns that are
+// missing (checked via PRAGMA table_info, so it's a safe no-op once they're
+// all present). Those columns are part of migrateV3's CREATE TABLE for any
+// database created fresh, but this feature was developed across several
+// local iterations before it shipped, so a database that already ran an
+// earlier migrateV3 — without these columns, or with only some of them
+// added by a since-removed migrateV4 — needs to catch up without losing its
+// data.
+func ensureLinkMonitorColumns(ctx context.Context, db *sql.DB) error {
+	rows, err := db.QueryContext(ctx, `PRAGMA table_info(link_monitors)`)
+	if err != nil {
+		return fmt.Errorf("inspecting link_monitors columns: %w", err)
+	}
+	existing := make(map[string]bool)
+	for rows.Next() {
+		var cid, notnull, pk int
+		var name, ctype string
+		var dflt sql.NullString
+		if err := rows.Scan(&cid, &name, &ctype, &notnull, &dflt, &pk); err != nil {
+			rows.Close()
+			return fmt.Errorf("scanning link_monitors column info: %w", err)
+		}
+		existing[name] = true
+	}
+	if err := rows.Err(); err != nil {
+		return fmt.Errorf("iterating link_monitors column info: %w", err)
+	}
+	rows.Close()
+
+	for _, col := range []string{"ignore_first_hop", "retry_secs", "max_retries", "hide_last_snr"} {
+		if existing[col] {
+			continue
+		}
+		if _, err := db.ExecContext(ctx, fmt.Sprintf(`ALTER TABLE link_monitors ADD COLUMN %s INTEGER NOT NULL DEFAULT 0`, col)); err != nil {
+			return fmt.Errorf("adding link_monitors.%s: %w", col, err)
+		}
+	}
+	return nil
+}
+
+func migrateV4(ctx context.Context, db *sql.DB) error {
+	return ensureLinkMonitorColumns(ctx, db)
+}
+
+// migrateV5 re-runs the same idempotent check as migrateV4. It exists solely
+// to reach databases that already sit at user_version 6 from an earlier,
+// since-removed migrateV4 (which only ever added ignore_first_hop): the
+// migration loop only runs entries at or past a database's current version,
+// so a repair landing at index 5 (version 6) would be silently skipped by a
+// database that's already there. Bumping the target to 7 guarantees at
+// least one repair pass runs no matter which of this feature's in-progress
+// local schema states a database is coming from.
+func migrateV5(ctx context.Context, db *sql.DB) error {
+	return ensureLinkMonitorColumns(ctx, db)
+}
+
+// migrateV6 re-runs ensureLinkMonitorColumns once more, for the same reason
+// as migrateV5: hide_last_snr was added to the column set after some local
+// databases had already reached user_version 7 via migrateV4/migrateV5, so
+// without a repair pass landing at (or past) version 7 those databases would
+// never pick it up.
+func migrateV6(ctx context.Context, db *sql.DB) error {
+	return ensureLinkMonitorColumns(ctx, db)
 }

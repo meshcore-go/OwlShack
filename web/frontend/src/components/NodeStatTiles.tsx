@@ -53,7 +53,10 @@ export function StatTile({
 }) {
   return (
     <div className={cn("bg-card px-3 py-2.5 flex flex-col gap-1 min-w-0", className)}>
-      <span className="font-mono text-[9px] uppercase tracking-[0.12em] text-muted-foreground/70 truncate">
+      <span
+        title={label}
+        className="font-mono text-[9px] uppercase tracking-[0.12em] text-muted-foreground/70 truncate"
+      >
         {label}
       </span>
       {content ?? (
@@ -117,10 +120,26 @@ function metricKeysOfType(m: Record<string, number>, base: string): string[] {
     .sort((a, b) => channelOf(a) - channelOf(b));
 }
 
+// hopSNRKeys returns a link monitor's "snr_hopN" keys, sorted by hop number.
+function hopSNRKeys(m: Record<string, number>): string[] {
+  return Object.keys(m)
+    .filter((k) => /^snr_hop\d+$/.test(k))
+    .sort(
+      (a, b) =>
+        parseInt(a.slice("snr_hop".length), 10) -
+        parseInt(b.slice("snr_hop".length), 10),
+    );
+}
+
 // nodeTiles maps a metrics snapshot to the ordered tiles shown on a node, in the
 // reference dashboard's layout: battery, signal, then optional sensor tiles
-// (only rendered when the reading exists).
-export function nodeTiles(m: Record<string, number>): TileSpec[] {
+// (only rendered when the reading exists). hopLabel, when supplied (link
+// monitors only), resolves a hop number to "<source> → <destination>" using
+// the link's actual path/peer names instead of the generic "SNR hop N".
+export function nodeTiles(
+  m: Record<string, number>,
+  hopLabel?: (hop: number) => string,
+): TileSpec[] {
   const tiles: TileSpec[] = [];
 
   // Battery: repeaters report millivolts via status (battery_mv); companions /
@@ -147,6 +166,25 @@ export function nodeTiles(m: Record<string, number>): TileSpec[] {
     tiles.push({ key: "rssi", label: "RSSI", value: `${Math.round(m.last_rssi)}`, unit: "dBm", band: rssiBand(m.last_rssi), metric: "last_rssi" });
   if (m.last_snr !== undefined)
     tiles.push({ key: "snr", label: "SNR", value: m.last_snr.toFixed(1), unit: "dB", band: snrBand(m.last_snr), metric: "last_snr" });
+
+  // Link monitoring (a saved trace path, polled on a schedule): delivery flag,
+  // one tile per hop's SNR, and round-trip time. Absent for node monitors.
+  if (m.success !== undefined)
+    tiles.push({
+      key: "success",
+      label: "Delivery",
+      value: m.success >= 1 ? "OK" : "LOST",
+      band: m.success >= 1 ? "good" : "bad",
+      metric: "success",
+    });
+  for (const k of hopSNRKeys(m)) {
+    const hopNum = parseInt(k.slice("snr_hop".length), 10);
+    const label = hopLabel ? hopLabel(hopNum) : metricDef(k).label;
+    tiles.push({ key: k, label, value: m[k].toFixed(1), unit: "dB", band: snrBand(m[k]), metric: k });
+  }
+  if (m.elapsed_ms !== undefined)
+    tiles.push({ key: "elapsed_ms", label: "RTT", value: `${Math.round(m.elapsed_ms)}`, unit: "ms", metric: "elapsed_ms" });
+
   if (m.noise_floor !== undefined)
     tiles.push({ key: "noise", label: "Noise floor", value: `${Math.round(m.noise_floor)}`, unit: "dBm", metric: "noise_floor" });
   if (m.uptime !== undefined)
@@ -227,12 +265,17 @@ export function NodeStatGrid({
   metrics,
   className,
   history,
+  hopLabel,
 }: {
   metrics: Record<string, number>;
   className?: string;
   history?: Record<string, SeriesPoint[]>;
+  hopLabel?: (hop: number) => string;
 }) {
-  const tiles = useMemo(() => nodeTiles(metrics), [metrics]);
+  const tiles = useMemo(
+    () => nodeTiles(metrics, hopLabel),
+    [metrics, hopLabel],
+  );
   if (tiles.length === 0) {
     return (
       <div className="px-3 py-6 text-center">
