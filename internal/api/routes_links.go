@@ -156,21 +156,15 @@ func (s *Server) handleAddLink(w http.ResponseWriter, r *http.Request) {
 	}
 
 	lm := &store.LinkMonitor{
-		Key:          linkMonitorKey(companionID, req.PathHashSize, pathBytes),
-		CompanionID:  companionID,
-		Label:        req.Label,
-		Path:         pathBytes,
-		PathHashSize: int(req.PathHashSize),
-		IntervalSecs: intervalSecs,
-		Enabled:      true,
-		RetrySecs:    req.RetrySecs,
-		MaxRetries:   req.MaxRetries,
-		// Both default on for a new link: the "you → first node" hop and the
-		// final-leg "SNR" reading are the same local companion-to-base-station
-		// radio link, which is normally rock solid and just clutters the
-		// charts — most users will want it hidden from the start rather than
-		// discovering the toggle after the fact. Still just a display default;
-		// either can be flipped back off in the link's settings.
+		Key:            linkMonitorKey(companionID, req.PathHashSize, pathBytes),
+		CompanionID:    companionID,
+		Label:          req.Label,
+		Path:           pathBytes,
+		PathHashSize:   int(req.PathHashSize),
+		IntervalSecs:   intervalSecs,
+		Enabled:        true,
+		RetrySecs:      req.RetrySecs,
+		MaxRetries:     req.MaxRetries,
 		IgnoreFirstHop: true,
 		HideLastSnr:    true,
 	}

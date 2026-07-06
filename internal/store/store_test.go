@@ -785,8 +785,8 @@ func TestStore_MigrateUserVersion(t *testing.T) {
 	if err := st.db.QueryRowContext(t.Context(), "PRAGMA user_version").Scan(&v); err != nil {
 		t.Fatalf("reading user_version: %v", err)
 	}
-	if v != 4 {
-		t.Errorf("user_version = %d, want 4", v)
+	if v != 5 {
+		t.Errorf("user_version = %d, want 5", v)
 	}
 }
 
