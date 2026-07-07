@@ -200,6 +200,16 @@ func (c *Companion) SendTrace(path []byte, pathHashSize uint8) (uint32, error) {
 	}
 	auth := binary.LittleEndian.Uint32(authBytes[:])
 
+	if err := c.sendTracePacket(tag, auth, path, pathHashSize); err != nil {
+		return 0, err
+	}
+	return tag, nil
+}
+
+// sendTracePacket builds and transmits a Trace packet for an already-chosen
+// tag/auth pair. Split out of SendTrace so RunTrace (trace.go) can register
+// its result waiter under the tag before the packet hits the radio.
+func (c *Companion) sendTracePacket(tag, auth uint32, path []byte, pathHashSize uint8) error {
 	var flags byte
 	switch pathHashSize {
 	case 1:
@@ -219,7 +229,7 @@ func (c *Companion) SendTrace(path []byte, pathHashSize uint8) (uint32, error) {
 
 	payload, err := trace.ToBytes()
 	if err != nil {
-		return 0, fmt.Errorf("encoding trace: %w", err)
+		return fmt.Errorf("encoding trace: %w", err)
 	}
 
 	pkt := meshcore.Packet{
@@ -229,11 +239,11 @@ func (c *Companion) SendTrace(path []byte, pathHashSize uint8) (uint32, error) {
 	}
 
 	if err := c.node.SendPacket(&pkt); err != nil {
-		return 0, fmt.Errorf("sending trace: %w", err)
+		return fmt.Errorf("sending trace: %w", err)
 	}
 
 	c.log.Debug("trace sent", "tag", fmt.Sprintf("%08x", tag), "hops", len(path)/int(pathHashSize), "pathHashSize", pathHashSize)
-	return tag, nil
+	return nil
 }
 
 func (c *Companion) findChannel(name string) *meshcore.ChannelEntry {

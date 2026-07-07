@@ -665,6 +665,13 @@ func (c *Companion) registerPacketHandlers() {
 			hopSNRs = append(hopSNRs, float64(int8(b))/4.0)
 		}
 
+		var snrPtr *float64
+		if pkt.HasSignalInfo {
+			snr := float64(pkt.SNR)
+			snrPtr = &snr
+		}
+		c.notifyTraceWaiter(tr.Tag, traceEcho{hops: hops, pathHex: pathHexes, hopSNRs: hopSNRs, snr: snrPtr})
+
 		if c.hub != nil {
 			wsMsg := map[string]any{
 				"companion": c.cfg.Name,

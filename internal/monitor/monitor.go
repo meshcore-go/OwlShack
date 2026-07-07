@@ -66,6 +66,12 @@ const (
 // in a single place.
 const DefaultIntervalSecs = int64(defaultInterval / time.Second)
 
+// DefaultRetrySecs/DefaultMaxRetries are retryInterval/defaultMaxRetries in
+// seconds/count, exported so the API can validate per-node retry overrides
+// against the poller's actual defaults without duplicating the values.
+const DefaultRetrySecs = int64(retryInterval / time.Second)
+const DefaultMaxRetries = defaultMaxRetries
+
 // Broadcaster is the subset of *api.Hub the monitor needs. Declared here so the
 // package stays decoupled and unit-testable.
 type Broadcaster interface {
@@ -79,7 +85,7 @@ type Target struct {
 	Kind         string   // selects the Collector ("repeater", "sensor", …)
 	IntervalSecs int64    // per-node cadence; 0 = use defaultInterval
 	RetrySecs    int64    // re-attempt delay after a failed poll; 0 = default
-	MaxRetries   int      // consecutive failed re-attempts before normal cadence; 0 = default
+	MaxRetries   int      // consecutive failed re-attempts before normal cadence; 0 = default, <0 = no retries
 	Probes       []string // request bundles to run; nil/empty = all
 }
 
@@ -116,6 +122,10 @@ type CollectResult struct {
 	Readings []Reading
 	// Neighbors are optional neighbour SNR samples (topology over time).
 	Neighbors []NeighborSample
+	// RetryFailure marks a poll that got valid data (persisted normally) but
+	// should still count as a failed poll for retry scheduling — e.g. a link
+	// monitor's trace timed out (no reply is itself a measurement).
+	RetryFailure bool
 }
 
 // Collector knows how to poll one kind of node and report its current readings.
@@ -179,8 +189,14 @@ func (s *Service) rescheduleAfter(key string, t Target, ok bool) {
 		delete(s.failures, key)
 	} else {
 		s.failures[key]++
+		// MaxRetries resolution: 0 = poller default; negative (the UI's
+		// "None" option sends -1) = explicitly no retries, so any failure
+		// goes straight back to the normal interval instead of a fast
+		// re-attempt.
 		maxRetries := defaultMaxRetries
-		if t.MaxRetries > 0 {
+		if t.MaxRetries < 0 {
+			maxRetries = 0
+		} else if t.MaxRetries > 0 {
 			maxRetries = t.MaxRetries
 		}
 		if s.failures[key] <= maxRetries {
@@ -189,8 +205,10 @@ func (s *Service) rescheduleAfter(key string, t Target, ok bool) {
 				interval = time.Duration(t.RetrySecs) * time.Second
 			}
 		} else {
-			s.log.Info("monitor giving up after consecutive failures, resuming normal interval",
-				"pubkey", key[:12], "failures", s.failures[key], "next", interval)
+			if maxRetries > 0 {
+				s.log.Info("monitor giving up after consecutive failures, resuming normal interval",
+					"pubkey", key[:12], "failures", s.failures[key], "next", interval)
+			}
 			delete(s.failures, key)
 		}
 	}
@@ -202,6 +220,15 @@ func (s *Service) rescheduleAfter(key string, t Target, ok bool) {
 // nodes, so a freshly enrolled node shows up before its first poll completes.
 func (s *Service) Targets(ctx context.Context) ([]Target, error) {
 	return s.lister.Targets(ctx)
+}
+
+// AirtimeLock exposes the poll mutex so other radio-driving services (the
+// signal-test runner) can serialize their own RF round-trips against monitor
+// polls, one operation at a time, instead of contending for airtime. Callers
+// must lock/unlock per-operation, not for an extended duration — holding it
+// for a whole multi-minute test would starve scheduled polls.
+func (s *Service) AirtimeLock() *sync.Mutex {
+	return &s.pollMu
 }
 
 // RegisterCollector wires a Collector for the given node kind (e.g. "repeater").
@@ -263,17 +290,18 @@ func (s *Service) runCycle(ctx context.Context) {
 		first = false
 
 		s.pollMu.Lock()
-		ok := s.poll(ctx, t) == nil
+		retryFailure, err := s.poll(ctx, t)
 		s.pollMu.Unlock()
 
-		s.rescheduleAfter(key, t, ok)
+		s.rescheduleAfter(key, t, err == nil && !retryFailure)
 	}
 }
 
-// poll runs one Collector call and persists/broadcasts the result. It returns
-// nil when the poll succeeded; the scheduler retries on a non-nil error and a
-// manual PollNow surfaces it to the caller. Callers must hold s.pollMu.
-func (s *Service) poll(ctx context.Context, t Target) error {
+// poll runs one Collector call and persists/broadcasts the result. err is
+// non-nil only when the poll itself failed (no data to persist). retryFailure
+// is set separately: true when the poll got data but CollectResult.RetryFailure
+// still wants it treated as a failure for retry scheduling. Callers must hold s.pollMu.
+func (s *Service) poll(ctx context.Context, t Target) (retryFailure bool, err error) {
 	s.mu.RLock()
 	collector := s.collectors[t.Kind]
 	s.mu.RUnlock()
@@ -290,7 +318,7 @@ func (s *Service) poll(ctx context.Context, t Target) error {
 		state.LastError = "no collector registered for kind " + t.Kind
 		s.log.Debug("no collector for target", "kind", t.Kind, "pubkey", hex.EncodeToString(t.Pubkey))
 		s.persistState(state)
-		return fmt.Errorf("%s", state.LastError)
+		return false, fmt.Errorf("%s", state.LastError)
 	}
 
 	reqCtx, cancel := context.WithTimeout(ctx, requestTimeout)
@@ -300,7 +328,7 @@ func (s *Service) poll(ctx context.Context, t Target) error {
 		state.LastError = err.Error()
 		s.log.Warn("monitor poll failed", "kind", t.Kind, "pubkey", hex.EncodeToString(t.Pubkey), "error", err)
 		s.persistState(state)
-		return err
+		return false, err
 	}
 
 	state.LastOkTS = pollTS
@@ -359,7 +387,7 @@ func (s *Service) poll(ctx context.Context, t Target) error {
 			"metrics":     snapshot,
 		})
 	}
-	return nil
+	return res.RetryFailure, nil
 }
 
 // PollNow performs an immediate, out-of-band poll of a single node, bypassing
@@ -391,8 +419,8 @@ func (s *Service) PollNow(ctx context.Context, pubkey []byte) error {
 		return fmt.Errorf("node is not currently monitored")
 	}
 
-	pollErr := s.poll(ctx, *target)
-	s.rescheduleAfter(key, *target, pollErr == nil)
+	retryFailure, pollErr := s.poll(ctx, *target)
+	s.rescheduleAfter(key, *target, pollErr == nil && !retryFailure)
 	return pollErr
 }
 

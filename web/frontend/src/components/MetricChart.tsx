@@ -61,6 +61,7 @@ export function MetricChart({
   height = 180,
   variant = "compact",
   className,
+  label,
 }: {
   metric: string;
   data: SeriesPoint[];
@@ -68,8 +69,13 @@ export function MetricChart({
   height?: number;
   variant?: "hero" | "compact";
   className?: string;
+  // Overrides the title (e.g. a link monitor's "<source> → <destination>"
+  // instead of the generic "SNR hop N"). Colour/format/kind still come from
+  // the metric catalogue.
+  label?: string;
 }) {
   const def = metricDef(metric);
+  const displayLabel = label ?? metricLabel(metric);
   const gradId = useId();
   const hero = variant === "hero";
   const isCounter = def.kind === "counter";
@@ -123,17 +129,20 @@ export function MetricChart({
         const v = Number(value);
         return [
           isCounter ? `+${formatMetric(metric, v)}` : formatMetric(metric, v),
-          isCounter ? `${metricLabel(metric)} · Δ` : metricLabel(metric),
+          isCounter ? `${displayLabel} · Δ` : displayLabel,
         ];
       }}
     />,
-  ], [spanSecs, hero, isCounter, metric]);
+  ], [spanSecs, hero, isCounter, metric, displayLabel]);
 
   return (
     <div className={cn("panel flex flex-col", className)}>
-      <div className="flex items-baseline justify-between px-3 pt-2.5 pb-1.5">
-        <span className="font-mono text-[10px] uppercase tracking-[0.12em] text-muted-foreground">
-          {metricLabel(metric)}
+      <div className="flex items-baseline justify-between gap-2 px-3 pt-2.5 pb-1.5">
+        <span
+          title={displayLabel}
+          className="font-mono text-[10px] uppercase tracking-[0.12em] text-muted-foreground truncate min-w-0"
+        >
+          {displayLabel}
           {isCounter ? (
             <span className="text-muted-foreground/40"> · rate</span>
           ) : def.unit ? (
@@ -141,7 +150,7 @@ export function MetricChart({
           ) : null}
         </span>
         <span
-          className={cn("font-mono tabular-nums", hero ? "text-lg" : "text-sm")}
+          className={cn("font-mono tabular-nums shrink-0", hero ? "text-lg" : "text-sm")}
           style={{ color: def.color }}
         >
           {lastRaw !== undefined ? formatMetric(metric, lastRaw) : "—"}

@@ -25,6 +25,7 @@ import (
 	"github.com/meshcore-go/meshcore-bot/internal/modem"
 	"github.com/meshcore-go/meshcore-bot/internal/monitor"
 	"github.com/meshcore-go/meshcore-bot/internal/node/companion"
+	"github.com/meshcore-go/meshcore-bot/internal/signaltest"
 	"github.com/meshcore-go/meshcore-bot/internal/store"
 	"github.com/meshcore-go/meshcore-bot/web"
 	meshcore "github.com/meshcore-go/meshcore-go"
@@ -129,11 +130,19 @@ func Run(ctx context.Context, importPath string, verbosity int) error {
 	// companion set). It resolves the live companions through compReg, which we
 	// re-point on every reload, and derives its targets from contact metadata.
 	compReg := newCompanionRegistry()
-	mon := monitor.New(db, srv.Hub(), newContactLister(compReg, db), slog.Default())
+	mon := monitor.New(db, srv.Hub(), newMergedLister(newContactLister(compReg, db), newLinkLister(compReg, db)), slog.Default())
 	mon.RegisterCollector("repeater", newRepeaterCollector(compReg, db, slog.Default()))
 	mon.RegisterCollector("companion", newCompanionCollector(compReg, slog.Default()))
+	mon.RegisterCollector("link", newLinkCollector(compReg, db, slog.Default()))
 	mon.Start(ctx)
 	srv.SetPoller(mon) // long-lived: set once, never swapped on reload
+
+	// The signal-test runner shares the monitor's airtime lock so a running
+	// test and a scheduled poll interleave per-operation instead of one
+	// starving the other. Also long-lived — set once, never swapped on reload.
+	tester := signaltest.New(db, srv.Hub(), newSignalTestTracer(compReg), mon.AirtimeLock(), slog.Default())
+	tester.Start(ctx)
+	srv.SetSignalTester(tester)
 
 	companions, err := startCompanions(ctx, cfg, ms, mux, db, srv.Hub(), echoTracker)
 	if err != nil {

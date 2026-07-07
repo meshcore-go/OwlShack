@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useMemo, useState } from "react";
-import { Link, useParams } from "react-router-dom";
+import { Link, useNavigate, useParams } from "react-router-dom";
 import { ExternalLink, RefreshCw, SlidersHorizontal } from "lucide-react";
 import { toast } from "sonner";
 import { useWebSocket } from "@/hooks/useWebSocket";
@@ -10,6 +10,7 @@ import { NodeStatGrid } from "@/components/NodeStatTiles";
 import { MetricChart, type SeriesPoint } from "@/components/MetricChart";
 import { TrackMap, type TrackPoint } from "@/components/TrackMap";
 import { MonitoringSettings } from "@/components/MonitoringSettings";
+import { LinkMonitorSettings } from "@/components/LinkMonitorSettings";
 import { Button } from "@/components/ui/button";
 import { Skeleton } from "@/components/ui/skeleton";
 import { cn } from "@/lib/utils";
@@ -17,6 +18,13 @@ import { pollNode } from "@/lib/nodesApi";
 import { formatSecsAgo } from "@/lib/format";
 import { metricDef, metricOrderIndex } from "@/lib/metrics";
 import { contactDetailPath } from "@/lib/routes";
+import {
+  filterMetricNames,
+  filterMetrics,
+  hopDirectionLabel,
+  type NamedPeer,
+} from "@/lib/linkPath";
+import type { LinkMonitorInfo } from "@/components/LinkMonitorSettings";
 
 interface MonitoredNode {
   pubkey: string;
@@ -45,8 +53,12 @@ interface RangePreset {
   bucketSecs: number;
 }
 
+// 24h uses a 60s bucket (finer than the other ranges) so two readings within
+// a minute of each other — e.g. a failed poll and its retry — don't get
+// averaged by the backend's AVG(value) bucketing into one fractional point.
+// 60s matches the minimum link retry delay (lib/monitorOptions.ts RETRY_OPTS).
 const RANGES: RangePreset[] = [
-  { key: "24h", label: "24h", spanSecs: 86400, bucketSecs: 300 },
+  { key: "24h", label: "24h", spanSecs: 86400, bucketSecs: 60 },
   { key: "7d", label: "7d", spanSecs: 7 * 86400, bucketSecs: 3600 },
   { key: "30d", label: "30d", spanSecs: 30 * 86400, bucketSecs: 21600 },
   { key: "1y", label: "1y", spanSecs: 365 * 86400, bucketSecs: 86400 },
@@ -64,11 +76,37 @@ const HERO_METRICS = ["battery_mv", "last_snr"];
 // meaningless). Altitude stays — it's a real elevation profile over time.
 const TRACK_METRICS = new Set(["location_lat", "location_lon"]);
 
-function orderGridMetrics(available: string[]): string[] {
-  const hero = new Set(HERO_METRICS);
+// A link monitor's headline is whether the path delivered and its first
+// hop's SNR, picked dynamically since path length varies.
+function linkHeroMetrics(available: string[]): string[] {
+  const hopKeys = available
+    .filter((m) => /^snr_hop\d+$/.test(m))
+    .sort(
+      (a, b) =>
+        parseInt(a.slice("snr_hop".length), 10) -
+        parseInt(b.slice("snr_hop".length), 10),
+    );
+  return ["success", hopKeys[0]].filter(
+    (m): m is string => !!m && available.includes(m),
+  );
+}
+
+// Resolves a "snr_hopN" metric to its "<source> → <destination>" chart title
+// when a hop resolver is available; other metrics keep MetricChart's default.
+function hopMetricLabel(
+  metric: string,
+  hopLabel?: (hop: number) => string,
+): string | undefined {
+  if (!hopLabel) return undefined;
+  const m = metric.match(/^snr_hop(\d+)$/);
+  return m ? hopLabel(parseInt(m[1], 10)) : undefined;
+}
+
+function orderGridMetrics(available: string[], hero: string[]): string[] {
+  const heroSet = new Set(hero);
   return available
     // noChart metrics (e.g. uptime) live only as stat tiles in NodeStatGrid.
-    .filter((m) => !hero.has(m) && !TRACK_METRICS.has(m) && !metricDef(m).noChart)
+    .filter((m) => !heroSet.has(m) && !TRACK_METRICS.has(m) && !metricDef(m).noChart)
     .sort((a, b) => {
       const ia = metricOrderIndex(a);
       const ib = metricOrderIndex(b);
@@ -79,12 +117,15 @@ function orderGridMetrics(available: string[]): string[] {
 
 export function MonitoringDetailPage() {
   const { pubkey = "" } = useParams();
+  const navigate = useNavigate();
   const [node, setNode] = useState<MonitoredNode | null>(null);
   const [available, setAvailable] = useState<string[]>([]);
   const [series, setSeries] = useState<Record<string, SeriesPoint[]>>({});
   const [range, setRange] = useState<RangePreset>(RANGES[0]);
   const [loading, setLoading] = useState(true);
   const [showSettings, setShowSettings] = useState(false);
+  const [link, setLink] = useState<LinkMonitorInfo | null>(null);
+  const [peers, setPeers] = useState<NamedPeer[]>([]);
 
   const loadMeta = useCallback(() => {
     Promise.all([
@@ -102,8 +143,46 @@ export function MonitoringDetailPage() {
     loadMeta();
   }, [loadMeta]);
 
+  // Only relevant for a link monitor — resolves "snr_hopN" to the actual
+  // "<source> → <destination>" repeater names for chart/tile titles.
+  useEffect(() => {
+    if (node?.kind !== "link") return;
+    fetch("/api/links")
+      .then((r) => (r.ok ? r.json() : []))
+      .then((links: LinkMonitorInfo[]) =>
+        setLink(
+          (links || []).find(
+            (l) => l.key.toLowerCase() === pubkey.toLowerCase(),
+          ) || null,
+        ),
+      )
+      .catch(() => {});
+    fetch("/api/peers")
+      .then((r) => (r.ok ? r.json() : []))
+      .then((data: NamedPeer[]) => setPeers(data || []))
+      .catch(() => {});
+  }, [node?.kind, pubkey]);
+
+  const hopLabel = useMemo(
+    () =>
+      link ? hopDirectionLabel(link.path, link.pathHashSize, peers) : undefined,
+    [link, peers],
+  );
+
+  // Hides the first-hop/last-SNR readings per the link's settings across
+  // fetched series, hero/grid selection, and the stat-tile grid alike.
+  const displayAvailable = useMemo(
+    () =>
+      filterMetricNames(
+        available,
+        !!link?.ignoreFirstHop,
+        !!link?.hideLastSnr,
+      ),
+    [available, link?.ignoreFirstHop, link?.hideLastSnr],
+  );
+
   const loadSeries = useCallback(() => {
-    if (available.length === 0) {
+    if (displayAvailable.length === 0) {
       setLoading(false);
       return;
     }
@@ -111,7 +190,7 @@ export function MonitoringDetailPage() {
     const to = nowSecs();
     const from = to - range.spanSecs;
     Promise.all(
-      available.map((metric) =>
+      displayAvailable.map((metric) =>
         fetch(
           `/api/nodes/${pubkey}/history?metric=${encodeURIComponent(metric)}&from=${from}&to=${to}&bucket=${range.bucketSecs}`,
         )
@@ -122,7 +201,7 @@ export function MonitoringDetailPage() {
     )
       .then((entries) => setSeries(Object.fromEntries(entries)))
       .finally(() => setLoading(false));
-  }, [pubkey, available, range]);
+  }, [pubkey, displayAvailable, range]);
 
   useEffect(() => {
     loadSeries();
@@ -150,12 +229,16 @@ export function MonitoringDetailPage() {
   const { connected } = useWebSocket(["metrics"], onWs);
 
   const { heroMetrics, gridMetrics } = useMemo(() => {
-    const avail = new Set(available);
+    const avail = new Set(displayAvailable);
+    const hero =
+      node?.kind === "link"
+        ? linkHeroMetrics(displayAvailable)
+        : HERO_METRICS.filter((m) => avail.has(m));
     return {
-      heroMetrics: HERO_METRICS.filter((m) => avail.has(m)),
-      gridMetrics: orderGridMetrics(available),
+      heroMetrics: hero,
+      gridMetrics: orderGridMetrics(displayAvailable, hero),
     };
-  }, [available]);
+  }, [displayAvailable, node?.kind]);
   const name = node?.name || pubkey.slice(0, 12);
 
   // On-demand poll, same as the monitoring list card. Success pushes fresh
@@ -218,25 +301,27 @@ export function MonitoringDetailPage() {
             </Button>
             {node?.companionId && (
               <>
-                <Button
-                  asChild
-                  variant="outline"
-                  size="sm"
-                  className="h-auto rounded-none py-1 font-mono text-[10px] uppercase tracking-[0.12em]"
-                >
-                  <Link
-                    to={contactDetailPath(
-                      node.companionId,
-                      pubkey,
-                      node.kind === "repeater",
-                    )}
+                {node.kind !== "link" && (
+                  <Button
+                    asChild
+                    variant="outline"
+                    size="sm"
+                    className="h-auto rounded-none py-1 font-mono text-[10px] uppercase tracking-[0.12em]"
                   >
-                    <ExternalLink className="size-3" />
-                    <span className="hidden sm:inline">
-                      {node.kind === "repeater" ? "repeater" : "contact"}
-                    </span>
-                  </Link>
-                </Button>
+                    <Link
+                      to={contactDetailPath(
+                        node.companionId,
+                        pubkey,
+                        node.kind === "repeater",
+                      )}
+                    >
+                      <ExternalLink className="size-3" />
+                      <span className="hidden sm:inline">
+                        {node.kind === "repeater" ? "repeater" : "contact"}
+                      </span>
+                    </Link>
+                  </Button>
+                )}
                 <Button
                   variant="outline"
                   size="sm"
@@ -255,7 +340,14 @@ export function MonitoringDetailPage() {
         }
       />
 
-      {showSettings && node?.companionId && (
+      {showSettings && node?.kind === "link" && (
+        <LinkMonitorSettings
+          linkKey={pubkey}
+          onSaved={() => loadMeta()}
+          onDeleted={() => navigate("/monitoring")}
+        />
+      )}
+      {showSettings && node?.companionId && node.kind !== "link" && (
         <MonitoringSettings
           companionName={node.companionId}
           pubkey={pubkey}
@@ -266,8 +358,13 @@ export function MonitoringDetailPage() {
 
       {node && (
         <NodeStatGrid
-          metrics={node.metrics || {}}
+          metrics={filterMetrics(
+            node.metrics || {},
+            !!link?.ignoreFirstHop,
+            !!link?.hideLastSnr,
+          )}
           className="grid-cols-2 sm:grid-cols-3 lg:grid-cols-6 border border-border"
+          hopLabel={hopLabel}
         />
       )}
 
@@ -315,6 +412,7 @@ export function MonitoringDetailPage() {
                   spanSecs={range.spanSecs}
                   variant="hero"
                   height={260}
+                  label={hopMetricLabel(metric, hopLabel)}
                 />
               ))}
             </section>
@@ -329,6 +427,7 @@ export function MonitoringDetailPage() {
                   data={series[metric] || []}
                   spanSecs={range.spanSecs}
                   height={160}
+                  label={hopMetricLabel(metric, hopLabel)}
                 />
               ))}
             </section>

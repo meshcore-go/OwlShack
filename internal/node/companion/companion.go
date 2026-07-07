@@ -56,6 +56,8 @@ type Companion struct {
 		channel string
 	}
 
+	traceWaiters traceWaiters
+
 	// -- Bot Triggers
 	triggers []triggerEntry
 

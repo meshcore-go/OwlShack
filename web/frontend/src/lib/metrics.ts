@@ -66,6 +66,9 @@ export const METRIC_DEFS: Record<string, MetricDef> = {
   recv_errors: { label: "Recv errors", format: COUNT, color: "var(--chart-4)", kind: "counter" },
   flood_dups: { label: "Flood dups", format: COUNT, color: "var(--chart-5)", kind: "counter" },
   direct_dups: { label: "Direct dups", format: COUNT, color: "var(--chart-1)", kind: "counter" },
+  // link monitoring: success is 0/1 per poll; snr_hopN is resolved dynamically below.
+  success: { label: "Delivery", format: (v) => (v >= 1 ? "OK" : "LOST"), color: "var(--chart-1)", kind: "gauge" },
+  elapsed_ms: { label: "RTT", unit: "ms", format: (v) => `${Math.round(v)} ms`, color: "var(--chart-2)", kind: "gauge" },
 };
 
 // METRIC_ORDER is the canonical display order for charts/tiles, grouped
@@ -79,6 +82,7 @@ export const METRIC_ORDER: string[] = Object.keys(METRIC_DEFS);
 export function metricOrderIndex(key: string): number {
   const i = METRIC_ORDER.indexOf(key);
   if (i >= 0) return i;
+  if (/^snr_hop\d+$/.test(key)) return METRIC_ORDER.indexOf("last_snr");
   return METRIC_ORDER.indexOf(key.replace(/_ch\d+$/, ""));
 }
 
@@ -100,6 +104,12 @@ export function metricDef(key: string): MetricDef {
   const ch = key.match(/^(.+)_ch(\d+)$/);
   if (ch && METRIC_DEFS[ch[1]]) {
     return { ...METRIC_DEFS[ch[1]], label: `${METRIC_DEFS[ch[1]].label} (ch${ch[2]})` };
+  }
+  // "snr_hopN" is one series per hop of a monitored link's path (see the link
+  // collector); reuse last_snr's format/colour, just relabeled per hop.
+  const hop = key.match(/^snr_hop(\d+)$/);
+  if (hop) {
+    return { ...METRIC_DEFS.last_snr, label: `SNR hop ${hop[1]}` };
   }
   return {
     label: humanizeMetric(key),
