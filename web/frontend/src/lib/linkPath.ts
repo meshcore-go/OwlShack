@@ -1,16 +1,12 @@
-// Resolves a link monitor's saved path (hex hashes) to human-readable
-// "<source> → <destination>" hop labels, so SNR tiles/charts read as "who
-// heard whom" instead of an opaque "SNR hop N". Hop N's SNR is the strength
-// at which the destination (hashes[N-1]) received the packet from the source
-// (hashes[N-2], or the local companion for hop 1) — see the link collector's
-// snr_hopN reading semantics in internal/app/link_collector.go.
+// Resolves a link monitor's saved path to "<source> → <destination>" hop
+// labels for SNR tiles/charts.
 
 export interface NamedPeer {
   pubkey: string;
   name: string;
 }
 
-function hexToHopHashes(pathHex: string, hashSize: number): string[] {
+export function hexToHopHashes(pathHex: string, hashSize: number): string[] {
   const step = hashSize * 2;
   if (step <= 0) return [];
   const out: string[] = [];
@@ -20,7 +16,7 @@ function hexToHopHashes(pathHex: string, hashSize: number): string[] {
   return out;
 }
 
-function buildPeerByHash(
+export function buildPeerByHash(
   peers: NamedPeer[],
   hashSize: number,
 ): Map<string, NamedPeer> {
@@ -32,23 +28,12 @@ function buildPeerByHash(
   return map;
 }
 
-// FIRST_HOP_METRIC is the "you → <first node>" SNR reading — a local
-// companion-to-base-station radio link that's normally rock solid, so users
-// can opt to hide it from monitoring charts/tiles via a link's
-// ignoreFirstHop setting. Display-only: the collector keeps recording it.
+// Display-only toggles (collector still records both readings): the "you →
+// first node" leg is the local radio, normally rock solid and just clutter.
 export const FIRST_HOP_METRIC = "snr_hop1";
-
-// LAST_SNR_METRIC is the "SNR" tile/chart (last_snr — the local radio's RX
-// SNR of the final returning packet). For an out-and-back path that's the
-// same physical leg as the first hop (the return trip is relayed back
-// through that same nearby node), so it's exactly as static and
-// uninteresting as FIRST_HOP_METRIC, for the same reason — hideable via a
-// link's hideLastSnr setting. Display-only: the collector keeps recording it.
 export const LAST_SNR_METRIC = "last_snr";
 
-// filterMetrics strips the first-hop and/or last-SNR readings from a metrics
-// snapshot per a link's ignoreFirstHop/hideLastSnr settings, for tiles that
-// render straight off a metrics map.
+// Strips the first-hop/last-SNR readings per a link's ignoreFirstHop/hideLastSnr settings.
 export function filterMetrics(
   metrics: Record<string, number>,
   ignoreFirstHop: boolean,
@@ -66,9 +51,7 @@ export function filterMetrics(
   return out;
 }
 
-// filterMetricNames strips the first-hop and/or last-SNR metric keys from a
-// list of available metric names, for pages that drive charts off a name
-// list rather than a values snapshot.
+// Same as filterMetrics but for a name list (pages that drive charts off available names).
 export function filterMetricNames(
   names: string[],
   ignoreFirstHop: boolean,
@@ -82,9 +65,8 @@ export function filterMetricNames(
   );
 }
 
-// hopDirectionLabel returns a resolver from 1-indexed hop number to
-// "<source> → <destination>", falling back to the hash prefix for an
-// unresolved (not-yet-seen) peer.
+// Resolves a 1-indexed hop number to "<source> → <destination>", falling
+// back to the hash prefix for an unresolved peer.
 export function hopDirectionLabel(
   pathHex: string,
   hashSize: number,

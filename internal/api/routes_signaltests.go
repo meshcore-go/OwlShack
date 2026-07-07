@@ -12,11 +12,9 @@ import (
 	"github.com/meshcore-go/meshcore-bot/internal/store"
 )
 
-// SignalTester is the signal-test-runner seam: starting/cancelling a
-// repeatable trace test. Implemented by *signaltest.Service and installed via
-// Server.SetSignalTester — a process-lifetime service, same pattern as
-// NodePoller/SetPoller, since the runner must survive the HTTP request that
-// started a test and outlive config reloads.
+// SignalTester is the signal-test-runner seam. Implemented by
+// *signaltest.Service and installed via Server.SetSignalTester — same
+// process-lifetime pattern as NodePoller/SetPoller.
 type SignalTester interface {
 	Begin(ctx context.Context, p signaltest.Params) (int64, error)
 	Cancel(id int64) error

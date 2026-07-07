@@ -66,9 +66,7 @@ export const METRIC_DEFS: Record<string, MetricDef> = {
   recv_errors: { label: "Recv errors", format: COUNT, color: "var(--chart-4)", kind: "counter" },
   flood_dups: { label: "Flood dups", format: COUNT, color: "var(--chart-5)", kind: "counter" },
   direct_dups: { label: "Direct dups", format: COUNT, color: "var(--chart-1)", kind: "counter" },
-  // link monitoring (a saved trace path, polled on a schedule — see
-  // internal/app's link collector). success is 0/1 per poll; snr_hopN is
-  // resolved dynamically below (one series per hop of the monitored path).
+  // link monitoring: success is 0/1 per poll; snr_hopN is resolved dynamically below.
   success: { label: "Delivery", format: (v) => (v >= 1 ? "OK" : "LOST"), color: "var(--chart-1)", kind: "gauge" },
   elapsed_ms: { label: "RTT", unit: "ms", format: (v) => `${Math.round(v)} ms`, color: "var(--chart-2)", kind: "gauge" },
 };

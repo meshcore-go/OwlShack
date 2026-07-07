@@ -7,14 +7,9 @@ import (
 )
 
 // SignalTestRepo persists repeatable trace-route runs: a signal_tests row
-// describes one test (path, count, interval, status); signal_test_runs holds
-// one row per completed/timed-out trace attempt. Stats are computed on read
-// (see internal/signaltest.ComputeStats) rather than stored.
-//
-// Writes are issued by the signaltest runner goroutine and HTTP handlers and
-// must be wrapped by the caller in store.WriteAsync/WriteSync — these methods
-// do the raw db.Exec and are not goroutine-safe against the writer loop on
-// their own. Reads (List/Get/ListRuns) run on the calling goroutine.
+// describes one test; signal_test_runs holds one row per trace attempt.
+// Stats are computed on read (see internal/signaltest.ComputeStats), not
+// stored. Writes must be wrapped by the caller in store.WriteAsync/WriteSync.
 type SignalTestRepo struct {
 	db *sql.DB
 }

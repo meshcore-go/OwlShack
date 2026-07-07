@@ -52,6 +52,7 @@ import {
   type SignalTestSummary,
   type SignalTestWsMessage,
 } from "@/lib/signalTestApi";
+import { hexToHopHashes, buildPeerByHash } from "@/lib/linkPath";
 
 interface Companion {
   name: string;
@@ -98,29 +99,7 @@ const TRACE_TIMEOUT_MS = 5000;
 
 const HEX_RE = /^[0-9a-f]+$/i;
 
-function hexToHopHashes(pathHex: string, hashSize: number): string[] {
-  const step = hashSize * 2;
-  if (step <= 0) return [];
-  const out: string[] = [];
-  for (let i = 0; i + step <= pathHex.length; i += step) {
-    out.push(pathHex.slice(i, i + step).toLowerCase());
-  }
-  return out;
-}
-
-function buildPeerByHash(peers: Peer[], hashSize: number): Map<string, Peer> {
-  const map = new Map<string, Peer>();
-  for (const p of peers) {
-    const k = p.pubkey.slice(0, hashSize * 2).toLowerCase();
-    if (!map.has(k)) map.set(k, p);
-  }
-  return map;
-}
-
-// hopLabelFor resolves a 1-indexed hop number to "N. <repeater name or hash>"
-// for an arbitrary saved/live test path — independent of the builder's
-// current hashSize, so it works for a test built earlier with a different
-// setting.
+// Resolves a 1-indexed hop number to "N. <repeater name or hash>".
 function hopLabelFor(pathHex: string, hashSize: number, peers: Peer[]) {
   const hashes = hexToHopHashes(pathHex, hashSize);
   const byHash = buildPeerByHash(peers, hashSize);

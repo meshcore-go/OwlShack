@@ -47,10 +47,8 @@ const INTERVAL_OPTS: { value: string; label: string }[] = [
 const DEFAULT_RETRY_SECS = 300;
 
 // LinkMonitorSettings is the per-link config form on the monitoring detail
-// page for kind === "link" nodes — the link-monitor sibling of
-// MonitoringSettings (which only applies to contact-derived node/companion
-// monitors). It fetches the link by its synthetic key, since the detail page
-// only has the key (used as the pubkey URL param) not the DB row.
+// page — the link-monitor sibling of MonitoringSettings. Fetches the link by
+// its synthetic key, since the detail page only has the key, not the DB row.
 export function LinkMonitorSettings({
   linkKey,
   onSaved,
@@ -102,17 +100,11 @@ export function LinkMonitorSettings({
   }, [load]);
 
   // A link only fast-retries a timed-out trace when Max retries is
-  // explicitly positive (internal/app.linkCollector.Collect) — unlike node
-  // monitoring, "0/Default" is a no-op for links here (it still applies to
-  // genuine send/companion-down failures via the poller's own fallback, but
-  // that's not the timeout case this setting is about). "-1/None" is
-  // likewise a no-op. Either way the retry delay is moot.
+  // explicitly positive (internal/app.linkCollector.Collect) — 0/Default and
+  // -1/None are both no-ops here.
   const noRetries = Number(maxRetries) <= 0;
 
-  // Mirrors the backend's validateLinkRetry: only positive Max retries is
-  // validated against the interval (see noRetries above) — the retry span
-  // (delay × max retries) must fit within the poll interval, or a retry
-  // could still be in flight when the next scheduled poll comes due.
+  // Mirrors the backend's validateLinkRetry.
   const retryTooLong = useMemo(() => {
     const numMax = Number(maxRetries);
     if (numMax <= 0) return false;

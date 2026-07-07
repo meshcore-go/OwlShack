@@ -131,11 +131,9 @@ function hopSNRKeys(m: Record<string, number>): string[] {
     );
 }
 
-// nodeTiles maps a metrics snapshot to the ordered tiles shown on a node, in the
-// reference dashboard's layout: battery, signal, then optional sensor tiles
-// (only rendered when the reading exists). hopLabel, when supplied (link
-// monitors only), resolves a hop number to "<source> → <destination>" using
-// the link's actual path/peer names instead of the generic "SNR hop N".
+// nodeTiles maps a metrics snapshot to the ordered tiles shown on a node.
+// hopLabel (link monitors only) resolves a hop number to
+// "<source> → <destination>" instead of the generic "SNR hop N".
 export function nodeTiles(
   m: Record<string, number>,
   hopLabel?: (hop: number) => string,

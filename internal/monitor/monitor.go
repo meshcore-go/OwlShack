@@ -122,12 +122,9 @@ type CollectResult struct {
 	Readings []Reading
 	// Neighbors are optional neighbour SNR samples (topology over time).
 	Neighbors []NeighborSample
-	// RetryFailure marks a poll that got valid data (and is persisted
-	// normally) but should still be treated as a failed poll for retry
-	// scheduling — e.g. a link monitor's trace timed out (no reply is itself
-	// a measurement worth graphing), but the caller wants a fast re-attempt
-	// per Target.RetrySecs/MaxRetries to tell an ephemeral drop from a
-	// consistent one, rather than waiting out the full poll interval.
+	// RetryFailure marks a poll that got valid data (persisted normally) but
+	// should still count as a failed poll for retry scheduling — e.g. a link
+	// monitor's trace timed out (no reply is itself a measurement).
 	RetryFailure bool
 }
 
@@ -300,13 +297,10 @@ func (s *Service) runCycle(ctx context.Context) {
 	}
 }
 
-// poll runs one Collector call and persists/broadcasts the result. The
-// returned error is non-nil only when the poll itself failed (no data to
-// persist) — the scheduler retries on it and a manual PollNow surfaces it to
-// the caller. retryFailure is set separately: it's true when the poll did
-// get data (persisted normally) but the Collector still wants the scheduler
-// to treat it as a failure for retry-scheduling purposes (CollectResult.
-// RetryFailure — e.g. a link's trace timed out). Callers must hold s.pollMu.
+// poll runs one Collector call and persists/broadcasts the result. err is
+// non-nil only when the poll itself failed (no data to persist). retryFailure
+// is set separately: true when the poll got data but CollectResult.RetryFailure
+// still wants it treated as a failure for retry scheduling. Callers must hold s.pollMu.
 func (s *Service) poll(ctx context.Context, t Target) (retryFailure bool, err error) {
 	s.mu.RLock()
 	collector := s.collectors[t.Kind]

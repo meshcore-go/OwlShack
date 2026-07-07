@@ -10,14 +10,11 @@ import (
 )
 
 // linkMonitorDefaultIntervalSecs is the poll cadence for a link monitor that
-// doesn't override it — one trace round-trip is a few seconds of airtime, so
-// 15 minutes is far more frequent than the 6h node-monitoring default without
-// being excessive.
+// doesn't override it.
 const linkMonitorDefaultIntervalSecs = 900
 
-// newMergedLister concatenates multiple Listers into one, so monitor.Service
-// (which only takes a single Lister) can poll both contact-derived targets
-// and link-monitor targets on the same schedule.
+// newMergedLister concatenates multiple Listers into one, since
+// monitor.Service only takes a single Lister.
 func newMergedLister(ls ...monitor.Lister) monitor.ListerFunc {
 	return func(ctx context.Context) ([]monitor.Target, error) {
 		var out []monitor.Target
@@ -33,10 +30,9 @@ func newMergedLister(ls ...monitor.Lister) monitor.ListerFunc {
 }
 
 // newLinkLister builds a monitor.Lister from enabled link_monitors rows. Each
-// row's synthetic key stands in for Target.Pubkey, letting the existing
-// node_metrics/node_state/history plumbing carry link data unchanged. Links
-// whose companion no longer resolves in the registry (mid-reload) are skipped
-// for the cycle rather than erroring the whole listing.
+// row's synthetic key stands in for Target.Pubkey. Links whose companion no
+// longer resolves (mid-reload) are skipped for the cycle rather than erroring
+// the whole listing.
 func newLinkLister(reg *companionRegistry, db *store.Store) monitor.ListerFunc {
 	return func(ctx context.Context) ([]monitor.Target, error) {
 		links, err := db.LinkMonitors.ListEnabled(ctx)
@@ -66,10 +62,9 @@ func newLinkLister(reg *companionRegistry, db *store.Store) monitor.ListerFunc {
 	}
 }
 
-// linkCollector polls a monitored link by running one trace over its saved
-// path and mapping the result onto per-hop SNR readings plus a delivery flag.
-// A timed-out trace is a measurement (packet loss), not a failed poll — only
-// an inability to send (companion down, encoding failure) fails the poll.
+// linkCollector polls a monitored link by running one trace and mapping the
+// result onto per-hop SNR readings plus a delivery flag. A timed-out trace is
+// a measurement (packet loss), not a failed poll.
 type linkCollector struct {
 	reg *companionRegistry
 	db  *store.Store
@@ -83,10 +78,9 @@ func newLinkCollector(reg *companionRegistry, db *store.Store, log *slog.Logger)
 	return &linkCollector{reg: reg, db: db, log: log.With("component", "link-collector")}
 }
 
-// Collect runs under monitor.Service's pollMu (the scheduler already holds it
-// for the whole poll call) — it must NOT also acquire the signal-test
-// runner's airtime lock (the same mutex), or a link poll would deadlock
-// against itself.
+// Collect runs under monitor.Service's pollMu, which is the same mutex as the
+// signal-test runner's airtime lock — must not acquire that lock too, or a
+// link poll would deadlock against itself.
 func (lc *linkCollector) Collect(ctx context.Context, t monitor.Target) (*monitor.CollectResult, error) {
 	lm, err := lc.db.LinkMonitors.GetByKey(ctx, t.Pubkey)
 	if err != nil {
@@ -109,13 +103,8 @@ func (lc *linkCollector) Collect(ctx context.Context, t monitor.Target) (*monito
 	if name == "" {
 		name = "link"
 	}
-	// A timed-out trace is valid data (packet loss) and always gets recorded
-	// like any other poll. It only asks the scheduler for a fast retry when
-	// the user has explicitly opted in (MaxRetries > 0) — links that never
-	// touch the retry settings (MaxRetries == 0, "use default") keep today's
-	// behavior of one independent reading per normal interval, so enabling
-	// retries on one link doesn't silently add extra airtime to every other
-	// one.
+	// A timed-out trace is recorded like any other poll; it only asks for a
+	// fast retry when the user has explicitly opted in (MaxRetries > 0).
 	res := &monitor.CollectResult{Name: name, RetryFailure: lm.MaxRetries > 0 && !out.Complete}
 
 	ok01 := 0.0

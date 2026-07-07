@@ -53,18 +53,10 @@ interface RangePreset {
   bucketSecs: number;
 }
 
-// The backend's /history endpoint buckets every metric with AVG(value), with
-// no special case for 0/1 metrics like a link's "success" reading — so two
-// readings landing in the same bucket (e.g. a failed poll and a retry ~1min
-// later) get averaged into a fractional value instead of showing as two
-// distinct points. Bucket width only needs to be <= the smallest gap between
-// readings you want to keep separate: adding a full bucket-width to a
-// timestamp always advances the bucket index by exactly one, regardless of
-// phase, so a 60s bucket is guaranteed to separate any two readings at least
-// 60s apart. 60s is also the minimum selectable link retry delay
-// (lib/monitorOptions.ts RETRY_OPTS), so the 24h view — the one most likely
-// to be watched right after configuring retries — uses 60s instead of a
-// coarser default.
+// 24h uses a 60s bucket (finer than the other ranges) so two readings within
+// a minute of each other — e.g. a failed poll and its retry — don't get
+// averaged by the backend's AVG(value) bucketing into one fractional point.
+// 60s matches the minimum link retry delay (lib/monitorOptions.ts RETRY_OPTS).
 const RANGES: RangePreset[] = [
   { key: "24h", label: "24h", spanSecs: 86400, bucketSecs: 60 },
   { key: "7d", label: "7d", spanSecs: 7 * 86400, bucketSecs: 3600 },
@@ -84,9 +76,8 @@ const HERO_METRICS = ["battery_mv", "last_snr"];
 // meaningless). Altitude stays — it's a real elevation profile over time.
 const TRACK_METRICS = new Set(["location_lat", "location_lon"]);
 
-// A link monitor (kind === "link") has no battery/signal-strength-in-general
-// tiles — its headline is whether the path delivered and its first hop's SNR
-// (path length varies, so this is picked dynamically from what's available).
+// A link monitor's headline is whether the path delivered and its first
+// hop's SNR, picked dynamically since path length varies.
 function linkHeroMetrics(available: string[]): string[] {
   const hopKeys = available
     .filter((m) => /^snr_hop\d+$/.test(m))
@@ -100,9 +91,8 @@ function linkHeroMetrics(available: string[]): string[] {
   );
 }
 
-// hopMetricLabel resolves a "snr_hopN" metric to its "<source> → <destination>"
-// chart title when a link's hop resolver is available; other metrics keep
-// MetricChart's default (the static metrics catalogue label).
+// Resolves a "snr_hopN" metric to its "<source> → <destination>" chart title
+// when a hop resolver is available; other metrics keep MetricChart's default.
 function hopMetricLabel(
   metric: string,
   hopLabel?: (hop: number) => string,
@@ -179,10 +169,8 @@ export function MonitoringDetailPage() {
     [link, peers],
   );
 
-  // The "you → first node" and "SNR" (last_snr) readings are display-only
-  // hidden per the link's ignoreFirstHop/hideLastSnr settings — filtered
-  // here so they're excluded from fetched series, hero/grid selection, and
-  // the stat-tile grid alike.
+  // Hides the first-hop/last-SNR readings per the link's settings across
+  // fetched series, hero/grid selection, and the stat-tile grid alike.
   const displayAvailable = useMemo(
     () =>
       filterMetricNames(

@@ -96,11 +96,9 @@ func (s *Server) handleListMonitoredNodes(w http.ResponseWriter, r *http.Request
 				}
 			}
 		}
-		// A link's display name is its saved label — always read live, never
-		// from node_state.name. node_state.name is only a snapshot of what the
-		// collector saw *at poll time*, so preferring it (like a repeater's
-		// advertised name) would make a rename invisible until the next
-		// scheduled poll overwrites it — up to a full interval later.
+		// A link's display name is its saved label, read live — node_state.name
+		// is only a snapshot from the last poll, so a rename would otherwise
+		// stay invisible until the next scheduled poll.
 		if t.Kind == "link" {
 			if lm, err := s.store.LinkMonitors.GetByKey(r.Context(), t.Pubkey); err == nil && lm != nil && lm.Label != "" {
 				n.Name = lm.Label

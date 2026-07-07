@@ -13,9 +13,7 @@ import (
 )
 
 // linkMonitorKey derives the synthetic 32-byte key a link monitor is polled
-// under (see internal/app's link collector) — a plain store CRUD needs no
-// runner seam, unlike signal tests, since enrollment just writes a row the
-// monitor Lister picks up on its next cycle.
+// under (see internal/app's link collector).
 func linkMonitorKey(companionID int64, pathHashSize uint8, path []byte) []byte {
 	h := sha256.New()
 	fmt.Fprintf(h, "link|%d|%d|%x", companionID, pathHashSize, path)
@@ -58,16 +56,10 @@ func (s *Server) toLinkMonitorJSON(ctx context.Context, l store.LinkMonitor) lin
 	}
 }
 
-// validateLinkRetry enforces that a link's retry span (retry delay × max
-// retries) fits within its poll interval, so a run of retries can never
-// still be in flight when the next scheduled poll comes due. Only applies
-// when maxRetries is explicitly positive: a link's timeout-triggered retry
-// (internal/app.linkCollector.Collect) only ever fires when MaxRetries > 0
-// — links left at the default (0, "off" for links, unlike node monitoring
-// where 0 means "use the poller's 3-retry default" for every failure) never
-// schedule a fast retry on a trace timeout, so there's nothing to validate
-// against the interval. A negative maxRetries (the UI's "None" option sends
-// -1) is likewise a no-op here.
+// validateLinkRetry ensures a link's retry span (delay × max retries) fits
+// within its poll interval. Only applies when maxRetries is explicitly
+// positive — 0 (default) or negative ("no retries") never schedule a fast
+// retry, so there's nothing to validate.
 func validateLinkRetry(intervalSecs, retrySecs, maxRetries int) error {
 	if maxRetries <= 0 {
 		return nil
@@ -105,10 +97,7 @@ type addLinkRequest struct {
 	MaxRetries   int    `json:"maxRetries"`
 }
 
-// handleAddLink saves a new monitored link (a path to poll on a schedule,
-// just like a signal test's path but continuous). Its synthetic key becomes
-// the node_metrics/node_state key the monitor engine already knows how to
-// persist and chart.
+// handleAddLink saves a new monitored link — a path polled on a schedule.
 func (s *Server) handleAddLink(w http.ResponseWriter, r *http.Request) {
 	name := r.PathValue("name")
 	companionID, ok := s.companionID(r.Context(), w, name)
@@ -207,10 +196,8 @@ type updateLinkRequest struct {
 	HideLastSnr    *bool   `json:"hideLastSnr"`
 }
 
-// handleUpdateLink patches a link monitor's label/interval/enabled/
-// ignoreFirstHop/retrySecs/maxRetries/hideLastSnr. Takes effect on the
-// monitor engine's next scheduling tick (or, for ignoreFirstHop/
-// hideLastSnr, the next UI fetch) — no restart.
+// handleUpdateLink patches a link monitor's settings. Takes effect on the
+// monitor engine's next scheduling tick — no restart.
 func (s *Server) handleUpdateLink(w http.ResponseWriter, r *http.Request) {
 	lm, ok := s.linkMonitorByID(w, r)
 	if !ok {
@@ -233,9 +220,7 @@ func (s *Server) handleUpdateLink(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusBadRequest, "maxRetries must be -1 (no retries), 0 (default), or up to 100")
 		return
 	}
-	// Validate the merged (post-patch) values — a request that only changes
-	// intervalSecs (or only maxRetries) must still be caught against the
-	// row's existing settings for the fields it doesn't touch.
+	// Validate the merged post-patch values, not just the fields this request touches.
 	mergedInterval := lm.IntervalSecs
 	if req.IntervalSecs != nil {
 		mergedInterval = *req.IntervalSecs
@@ -263,9 +248,7 @@ func (s *Server) handleUpdateLink(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, map[string]bool{"ok": true})
 }
 
-// handleDeleteLink removes a link monitor and its node_state/node_metrics
-// rows (keyed by the same synthetic key), so the Monitoring page doesn't
-// ghost a deleted link.
+// handleDeleteLink removes a link monitor and its node_state/node_metrics rows.
 func (s *Server) handleDeleteLink(w http.ResponseWriter, r *http.Request) {
 	lm, ok := s.linkMonitorByID(w, r)
 	if !ok {

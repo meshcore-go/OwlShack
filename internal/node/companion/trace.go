@@ -73,10 +73,8 @@ func (c *Companion) RunTrace(ctx context.Context, path []byte, pathHashSize uint
 	timer := time.NewTimer(traceSilenceWindow)
 	defer timer.Stop()
 
-	// Zero-valued so a full timeout with zero echoes ever heard would leave
-	// HopSNRs/PathHex nil — which json.Marshal encodes as `null` rather than
-	// `[]`, and a `null` array crashes JS consumers that .forEach() it. Seed
-	// non-nil empty slices so every TraceOutcome round-trips as `[]`.
+	// Seed non-nil empty slices: nil would json-marshal as `null`, not `[]`,
+	// crashing JS consumers that .forEach() it.
 	last := traceEcho{hopSNRs: []float64{}, pathHex: []string{}}
 	for {
 		select {

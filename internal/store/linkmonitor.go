@@ -6,46 +6,29 @@ import (
 	"fmt"
 )
 
-// LinkMonitorRepo persists monitored paths — a saved trace path that the
-// node-monitoring engine (internal/monitor) polls on a schedule, under a
-// synthetic 32-byte key (see internal/app's link collector) so it can reuse
-// node_metrics/node_state/history without a parallel schema.
-//
-// Writes must be wrapped by the caller in store.WriteAsync/WriteSync. Reads
-// run on the calling goroutine.
+// LinkMonitorRepo persists monitored paths under a synthetic 32-byte key (see
+// internal/app's link collector), reusing node_metrics/node_state/history.
+// Writes must be wrapped by the caller in store.WriteAsync/WriteSync.
 type LinkMonitorRepo struct {
 	db *sql.DB
 }
 
 type LinkMonitor struct {
-	ID             int64
-	Key            []byte
-	CompanionID    int64
-	Label          string
-	Path           []byte
-	PathHashSize   int
-	IntervalSecs   int
-	Enabled        bool
-	// IgnoreFirstHop hides the "you → <first node>" hop from the UI: that leg
-	// is a local companion-to-base-station radio link that's normally rock
-	// solid, so its SNR is noise the user doesn't want cluttering the charts.
-	// Display-only — the collector still records it, so toggling this back
-	// off doesn't lose any history.
+	ID           int64
+	Key          []byte
+	CompanionID  int64
+	Label        string
+	Path         []byte
+	PathHashSize int
+	IntervalSecs int
+	Enabled      bool
+	// Display-only UI toggles; the collector keeps recording both readings.
 	IgnoreFirstHop bool
-	// RetrySecs/MaxRetries override the node-monitoring poller's failed-poll
-	// retry cadence (internal/monitor.Service.rescheduleAfter) for this link's
-	// monitor.Target; 0 means "use the poller's built-in default" — same
-	// convention as ContactMetadata.MonitorRetrySecs/MonitorMaxRetries. A
-	// timed-out trace is a measurement, not a failed poll, so these only
-	// govern recovery from an actual send/companion-down failure.
+	HideLastSnr    bool
+	// 0 = use the poller's built-in default, same convention as
+	// ContactMetadata.MonitorRetrySecs/MonitorMaxRetries.
 	RetrySecs  int
 	MaxRetries int
-	// HideLastSnr hides the "SNR" tile/chart (last_snr — the local radio's RX
-	// SNR of the final returning packet) from the UI: for an out-and-back
-	// path that's the same physical leg as the first hop, so it's exactly as
-	// static and uninteresting as IgnoreFirstHop's reading, for the same
-	// reason. Display-only — the collector still records it.
-	HideLastSnr bool
 }
 
 func scanLinkMonitor(s interface{ Scan(...any) error }) (*LinkMonitor, error) {
@@ -147,42 +130,23 @@ func (r *LinkMonitorRepo) GetByKey(ctx context.Context, key []byte) (*LinkMonito
 }
 
 // Update patches label/intervalSecs/enabled/ignoreFirstHop/retrySecs/
-// maxRetries/hideLastSnr (nil = leave unchanged). Call inside WriteSync.
+// maxRetries/hideLastSnr (nil = leave unchanged) in one statement — a nil
+// pointer arg converts to SQL NULL, so COALESCE falls back to the current
+// column value. Call inside WriteSync.
 func (r *LinkMonitorRepo) Update(ctx context.Context, id int64, label *string, intervalSecs *int, enabled *bool, ignoreFirstHop *bool, retrySecs *int, maxRetries *int, hideLastSnr *bool) error {
-	if label != nil {
-		if _, err := r.db.ExecContext(ctx, `UPDATE link_monitors SET label = ? WHERE id = ?`, *label, id); err != nil {
-			return fmt.Errorf("updating link monitor label: %w", err)
-		}
-	}
-	if intervalSecs != nil {
-		if _, err := r.db.ExecContext(ctx, `UPDATE link_monitors SET interval_secs = ? WHERE id = ?`, *intervalSecs, id); err != nil {
-			return fmt.Errorf("updating link monitor interval: %w", err)
-		}
-	}
-	if enabled != nil {
-		if _, err := r.db.ExecContext(ctx, `UPDATE link_monitors SET enabled = ? WHERE id = ?`, *enabled, id); err != nil {
-			return fmt.Errorf("updating link monitor enabled flag: %w", err)
-		}
-	}
-	if ignoreFirstHop != nil {
-		if _, err := r.db.ExecContext(ctx, `UPDATE link_monitors SET ignore_first_hop = ? WHERE id = ?`, *ignoreFirstHop, id); err != nil {
-			return fmt.Errorf("updating link monitor ignore_first_hop flag: %w", err)
-		}
-	}
-	if retrySecs != nil {
-		if _, err := r.db.ExecContext(ctx, `UPDATE link_monitors SET retry_secs = ? WHERE id = ?`, *retrySecs, id); err != nil {
-			return fmt.Errorf("updating link monitor retry_secs: %w", err)
-		}
-	}
-	if maxRetries != nil {
-		if _, err := r.db.ExecContext(ctx, `UPDATE link_monitors SET max_retries = ? WHERE id = ?`, *maxRetries, id); err != nil {
-			return fmt.Errorf("updating link monitor max_retries: %w", err)
-		}
-	}
-	if hideLastSnr != nil {
-		if _, err := r.db.ExecContext(ctx, `UPDATE link_monitors SET hide_last_snr = ? WHERE id = ?`, *hideLastSnr, id); err != nil {
-			return fmt.Errorf("updating link monitor hide_last_snr flag: %w", err)
-		}
+	_, err := r.db.ExecContext(ctx, `
+		UPDATE link_monitors SET
+			label = COALESCE(?, label),
+			interval_secs = COALESCE(?, interval_secs),
+			enabled = COALESCE(?, enabled),
+			ignore_first_hop = COALESCE(?, ignore_first_hop),
+			retry_secs = COALESCE(?, retry_secs),
+			max_retries = COALESCE(?, max_retries),
+			hide_last_snr = COALESCE(?, hide_last_snr)
+		WHERE id = ?`,
+		label, intervalSecs, enabled, ignoreFirstHop, retrySecs, maxRetries, hideLastSnr, id)
+	if err != nil {
+		return fmt.Errorf("updating link monitor: %w", err)
 	}
 	return nil
 }

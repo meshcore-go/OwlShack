@@ -20,15 +20,12 @@ import (
 	"github.com/meshcore-go/meshcore-bot/internal/store"
 )
 
-// ErrAlreadyRunning is returned by Begin when a test is already active — the
-// radio is half-duplex, so only one test (and no test alongside a scheduled
-// monitor poll's collector, via the shared airtime lock) runs at a time. The
-// API layer maps this to 409.
+// ErrAlreadyRunning is returned by Begin when a test is already active (only
+// one runs at a time — the radio is half-duplex). The API layer maps this to 409.
 var ErrAlreadyRunning = errors.New("a signal test is already running")
 
-// ValidationError marks a Begin failure as a bad request (bad path/count/
-// interval) rather than an internal fault, so the API layer can map it to
-// 400 without string-matching the error text.
+// ValidationError marks a Begin failure as a bad request rather than an
+// internal fault, so the API layer can map it to 400 without string-matching.
 type ValidationError struct{ msg string }
 
 func (e *ValidationError) Error() string { return e.msg }
@@ -117,10 +114,9 @@ func New(st *store.Store, bc Broadcaster, tracer Tracer, airtime *sync.Mutex, lo
 	}
 }
 
-// Start records the base context that test-run goroutines derive from (so a
-// test survives the HTTP request that started it) and marks any test left
-// "running" from a previous process as "interrupted". Call once at app
-// startup before serving requests.
+// Start records the base context test-run goroutines derive from and marks
+// any test left "running" from a previous process as "interrupted". Call
+// once at app startup before serving requests.
 func (s *Service) Start(ctx context.Context) {
 	s.mu.Lock()
 	s.baseCtx = ctx

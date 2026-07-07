@@ -486,11 +486,8 @@ func migrateV2(ctx context.Context, db *sql.DB) error {
 	return nil
 }
 
-// migrateV3 adds storage for the signal-test runner (repeatable trace runs
-// with saved per-hop stats) and for link monitors (a monitored path, polled
-// by the existing node-monitoring engine under a synthetic pubkey — see
-// LinkMonitorRepo). signal_test_runs is never pruned by PruneMetrics; rows
-// are bounded per test and removed by deleting the parent test.
+// migrateV3 adds storage for the signal-test runner and for link monitors (a
+// monitored path polled under a synthetic pubkey — see LinkMonitorRepo).
 func migrateV3(ctx context.Context, db *sql.DB) error {
 	_, err := db.ExecContext(ctx, `
 		CREATE TABLE IF NOT EXISTS signal_tests (
@@ -528,23 +525,12 @@ func migrateV3(ctx context.Context, db *sql.DB) error {
 			path_hash_size   INTEGER NOT NULL DEFAULT 1,
 			interval_secs    INTEGER NOT NULL DEFAULT 900,
 			enabled          INTEGER NOT NULL DEFAULT 1,
-			-- ignore_first_hop hides the "you → <first node>" hop from the UI: that
-			-- leg is a local companion-to-base-station radio link that's normally
-			-- rock solid, so its SNR is noise the user doesn't want cluttering the
-			-- charts. Display-only — the collector still records it.
+			-- Display-only UI toggles; the collector keeps recording both readings.
 			ignore_first_hop INTEGER NOT NULL DEFAULT 0,
-			-- retry_secs/max_retries override the node-monitoring poller's
-			-- failed-poll retry cadence (internal/monitor.retryInterval/
-			-- defaultMaxRetries) for this link; 0 means "use the poller default".
+			hide_last_snr    INTEGER NOT NULL DEFAULT 0,
+			-- 0 = use the node-monitoring poller's built-in default.
 			retry_secs       INTEGER NOT NULL DEFAULT 0,
-			max_retries      INTEGER NOT NULL DEFAULT 0,
-			-- hide_last_snr hides the "SNR" tile/chart (the local radio's RX SNR
-			-- of the final returning packet): for an out-and-back path that's the
-			-- same physical leg as the first hop (the return trip is relayed back
-			-- through that same nearby node), so it's exactly as static and
-			-- uninteresting as ignore_first_hop's reading, for the same reason.
-			-- Display-only — the collector still records it.
-			hide_last_snr    INTEGER NOT NULL DEFAULT 0
+			max_retries      INTEGER NOT NULL DEFAULT 0
 		);
 	`)
 	if err != nil {
