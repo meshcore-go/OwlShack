@@ -500,6 +500,26 @@ export function TracesPage() {
     setDraggingIndex(toIdx);
   };
 
+  const clearDrag = (e: React.DragEvent) => {
+    e.preventDefault();
+    setDraggingIndex(null);
+  };
+
+  const DropZone = ({ toIdx }: { toIdx: number }) => (
+    <li
+      aria-hidden
+      onDragOver={(e) => {
+        e.preventDefault();
+        dragOverToIndex(toIdx);
+      }}
+      onDrop={clearDrag}
+      className={cn(
+        "transition-[width]",
+        draggingIndex !== null ? "w-10" : "w-0",
+      )}
+    />
+  );
+
   const clearPath = () => setSelectedPath([]);
 
   const sendTrace = async () => {
@@ -802,21 +822,7 @@ export function TracesPage() {
                       </div>
                     ) : (
                       <ol className="flex flex-wrap items-stretch gap-2">
-                        <li
-                          aria-hidden
-                          onDragOver={(e) => {
-                            e.preventDefault();
-                            dragOverToIndex(0);
-                          }}
-                          onDrop={(e) => {
-                            e.preventDefault();
-                            setDraggingIndex(null);
-                          }}
-                          className={cn(
-                            "transition-[width]",
-                            draggingIndex !== null ? "w-10" : "w-0",
-                          )}
-                        />
+                        <DropZone toIdx={0} />
                         {selectedPath.map((peer, idx) => (
                           <li
                             key={`${peer.pubkey}-${idx}`}
@@ -827,10 +833,7 @@ export function TracesPage() {
                               e.preventDefault();
                               dragOverToIndex(idx);
                             }}
-                            onDrop={(e) => {
-                              e.preventDefault();
-                              setDraggingIndex(null);
-                            }}
+                            onDrop={clearDrag}
                             className={cn(
                               "inline-flex items-center gap-1.5 border border-border bg-muted/40 px-2 py-1 font-mono text-xs hover:border-primary/40 transition-colors cursor-grab active:cursor-grabbing",
                               draggingIndex === idx && "opacity-40",
@@ -880,21 +883,7 @@ export function TracesPage() {
                             </span>
                           </li>
                         ))}
-                        <li
-                          aria-hidden
-                          onDragOver={(e) => {
-                            e.preventDefault();
-                            dragOverToIndex(selectedPath.length - 1);
-                          }}
-                          onDrop={(e) => {
-                            e.preventDefault();
-                            setDraggingIndex(null);
-                          }}
-                          className={cn(
-                            "transition-[width]",
-                            draggingIndex !== null ? "w-10" : "w-0",
-                          )}
-                        />
+                        <DropZone toIdx={selectedPath.length - 1} />
                         {mirrorPeers.map((peer, i) => (
                           <li
                             key={`mirror-${peer.pubkey}-${i}`}
