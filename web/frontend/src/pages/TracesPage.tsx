@@ -7,6 +7,7 @@ import {
   ChevronRight,
   CircleDashed,
   GitCompare,
+  GripVertical,
   Link2,
   Pencil,
   Plus,
@@ -32,6 +33,7 @@ import {
   SelectValue,
 } from "@/components/ui/select";
 import { Input } from "@/components/ui/input";
+import { Switch } from "@/components/ui/switch";
 import {
   Dialog,
   DialogContent,
@@ -58,6 +60,8 @@ interface Companion {
   name: string;
   pubkey: string;
   peerCount: number;
+  lat?: number | null;
+  lon?: number | null;
 }
 
 interface Peer {
@@ -67,6 +71,8 @@ interface Peer {
   lastSeen: string;
   snr: number | null;
   rssi: number | null;
+  lat: number;
+  lon: number;
 }
 
 interface TraceWsMessage {
@@ -89,7 +95,7 @@ interface TraceResult {
 
 type HashSize = 1 | 2 | 4;
 type BuilderMode = "select" | "manual";
-type PeerSort = "name" | "recent" | "signal";
+type PeerSort = "name" | "recent" | "signal" | "distance";
 
 // Silence window: the final packet (last repeater in the path) must arrive
 // within this long after the trace was sent OR after the most recent echo.
@@ -98,6 +104,19 @@ type PeerSort = "name" | "recent" | "signal";
 const TRACE_TIMEOUT_MS = 5000;
 
 const HEX_RE = /^[0-9a-f]+$/i;
+
+// Great-circle distance in km between two lat/lon pairs (both in degrees).
+function haversineKm(lat1: number, lon1: number, lat2: number, lon2: number): number {
+  const R = 6371;
+  const dLat = ((lat2 - lat1) * Math.PI) / 180;
+  const dLon = ((lon2 - lon1) * Math.PI) / 180;
+  const a =
+    Math.sin(dLat / 2) ** 2 +
+    Math.cos((lat1 * Math.PI) / 180) *
+      Math.cos((lat2 * Math.PI) / 180) *
+      Math.sin(dLon / 2) ** 2;
+  return 2 * R * Math.asin(Math.sqrt(a));
+}
 
 // Resolves a 1-indexed hop number to "N. <repeater name or hash>".
 function hopLabelFor(pathHex: string, hashSize: number, peers: Peer[]) {
@@ -121,6 +140,7 @@ export function TracesPage() {
   const [hashSize, setHashSize] = useState<HashSize>(1);
   const [mode, setMode] = useState<BuilderMode>("select");
   const [selectedPath, setSelectedPath] = useState<Peer[]>([]);
+  const [mirrorReturn, setMirrorReturn] = useState(false);
   const [manualHex, setManualHex] = useState<string>("");
   const [filter, setFilter] = useState<string>("");
   const [sort, setSort] = useState<PeerSort>("name");
@@ -338,6 +358,13 @@ export function TracesPage() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
+  const companionCoords = useMemo(() => {
+    const c = companions.find((x) => x.name === companionName);
+    return c && c.lat != null && c.lon != null
+      ? { lat: c.lat, lon: c.lon }
+      : null;
+  }, [companions, companionName]);
+
   const filteredPeers = useMemo(() => {
     const f = filter.trim().toLowerCase();
     // Note: already-selected repeaters intentionally stay in the list so the
@@ -350,6 +377,19 @@ export function TracesPage() {
         )
       : peers;
     return matched.slice().sort((a, b) => {
+      if (sort === "distance" && companionCoords) {
+        // Nearest first; peers with no advertised location sink to the bottom.
+        const distFor = (p: Peer) =>
+          p.lat === 0 && p.lon === 0
+            ? Infinity
+            : haversineKm(
+                companionCoords.lat,
+                companionCoords.lon,
+                p.lat / 1e6,
+                p.lon / 1e6,
+              );
+        return distFor(a) - distFor(b);
+      }
       if (sort === "signal") {
         // Strongest first; repeaters with no recent signal sink to the bottom.
         return (b.snr ?? -Infinity) - (a.snr ?? -Infinity);
@@ -365,7 +405,7 @@ export function TracesPage() {
       if (!an !== !bn) return an ? -1 : 1;
       return an.localeCompare(bn) || a.pubkey.localeCompare(b.pubkey);
     });
-  }, [peers, filter, sort]);
+  }, [peers, filter, sort, companionCoords]);
 
   const peerByHash = useMemo(() => {
     const map = new Map<string, Peer>();
@@ -377,12 +417,24 @@ export function TracesPage() {
   }, [peers, hashSize]);
 
   const computedPathHex = useMemo(() => {
-    if (mode === "manual") return manualHex.trim().toLowerCase();
-    return selectedPath
-      .map((p) => p.pubkey.slice(0, hashSize * 2))
-      .join("")
-      .toLowerCase();
-  }, [mode, manualHex, selectedPath, hashSize]);
+    const base =
+      mode === "manual"
+        ? manualHex.trim().toLowerCase()
+        : selectedPath
+            .map((p) => p.pubkey.slice(0, hashSize * 2))
+            .join("")
+            .toLowerCase();
+    if (!mirrorReturn) return base;
+    const hops = hexToHopHashes(base, hashSize);
+    return hops.length <= 1 ? base : base + hops.slice(0, -1).reverse().join("");
+  }, [mode, manualHex, selectedPath, hashSize, mirrorReturn]);
+
+  // Read-only preview of the auto-added return leg (mirror of selectedPath,
+  // minus the turnaround hop) shown after the editable chips.
+  const mirrorPeers = useMemo(() => {
+    if (!mirrorReturn || selectedPath.length <= 1) return [];
+    return selectedPath.slice(0, -1).reverse();
+  }, [mirrorReturn, selectedPath]);
 
   const pathHexValid = useMemo(() => {
     if (!computedPathHex) return mode === "select";
@@ -409,9 +461,7 @@ export function TracesPage() {
   plannedHopCountRef.current = routeHashes.length;
 
   const onChangeHashSize = (v: string) => {
-    const n = Number(v) as HashSize;
-    setHashSize(n);
-    setSelectedPath([]);
+    setHashSize(Number(v) as HashSize);
   };
 
   const addPeer = (peer: Peer) => {
@@ -430,6 +480,24 @@ export function TracesPage() {
       [next[idx], next[j]] = [next[j], next[idx]];
       return next;
     });
+  };
+
+  // Reorders live as the drag passes over a new slot (rather than waiting for
+  // drop) so the row visually previews where the chip will land. Boundary
+  // indices (0 and length-1) are unambiguous even mid-drag: splice(0, ...)
+  // always prepends and splice(length-1, ...) on the post-removal array
+  // always appends, regardless of where "from" started.
+  const [draggingIndex, setDraggingIndex] = useState<number | null>(null);
+
+  const dragOverToIndex = (toIdx: number) => {
+    if (draggingIndex === null || draggingIndex === toIdx) return;
+    setSelectedPath((prev) => {
+      const next = [...prev];
+      const [moved] = next.splice(draggingIndex, 1);
+      next.splice(toIdx, 0, moved);
+      return next;
+    });
+    setDraggingIndex(toIdx);
   };
 
   const clearPath = () => setSelectedPath([]);
@@ -695,6 +763,14 @@ export function TracesPage() {
                       manual hex
                     </ModeToggle>
                   </div>
+                  <label className="flex items-center gap-2 font-mono text-xs uppercase tracking-[0.06em] cursor-pointer select-none">
+                    <Switch
+                      size="sm"
+                      checked={mirrorReturn}
+                      onCheckedChange={setMirrorReturn}
+                    />
+                    Mirror return
+                  </label>
                 </div>
 
                 {mode === "select" ? (
@@ -703,7 +779,7 @@ export function TracesPage() {
                       <span className="label-overline">Selected route</span>
                       <div className="flex items-center gap-2">
                         <span className="font-mono text-[10px] tabular-nums text-muted-foreground">
-                          {selectedPath.length} hops · {pathByteLen}B
+                          {pathHopCount} hops · {pathByteLen}B
                         </span>
                         {selectedPath.length > 0 && (
                           <Button
@@ -725,12 +801,42 @@ export function TracesPage() {
                         </p>
                       </div>
                     ) : (
-                      <ol className="flex flex-wrap gap-2">
+                      <ol className="flex flex-wrap items-stretch gap-2">
+                        <li
+                          aria-hidden
+                          onDragOver={(e) => {
+                            e.preventDefault();
+                            dragOverToIndex(0);
+                          }}
+                          onDrop={(e) => {
+                            e.preventDefault();
+                            setDraggingIndex(null);
+                          }}
+                          className={cn(
+                            "transition-[width]",
+                            draggingIndex !== null ? "w-10" : "w-0",
+                          )}
+                        />
                         {selectedPath.map((peer, idx) => (
                           <li
                             key={`${peer.pubkey}-${idx}`}
-                            className="inline-flex items-center gap-1.5 border border-border bg-muted/40 px-2 py-1 font-mono text-xs hover:border-primary/40 transition-colors"
+                            draggable
+                            onDragStart={() => setDraggingIndex(idx)}
+                            onDragEnd={() => setDraggingIndex(null)}
+                            onDragOver={(e) => {
+                              e.preventDefault();
+                              dragOverToIndex(idx);
+                            }}
+                            onDrop={(e) => {
+                              e.preventDefault();
+                              setDraggingIndex(null);
+                            }}
+                            className={cn(
+                              "inline-flex items-center gap-1.5 border border-border bg-muted/40 px-2 py-1 font-mono text-xs hover:border-primary/40 transition-colors cursor-grab active:cursor-grabbing",
+                              draggingIndex === idx && "opacity-40",
+                            )}
                           >
+                            <GripVertical className="size-3 text-muted-foreground/40" />
                             <span className="text-muted-foreground/60 tabular-nums">
                               {idx + 1}
                             </span>
@@ -774,6 +880,40 @@ export function TracesPage() {
                             </span>
                           </li>
                         ))}
+                        <li
+                          aria-hidden
+                          onDragOver={(e) => {
+                            e.preventDefault();
+                            dragOverToIndex(selectedPath.length - 1);
+                          }}
+                          onDrop={(e) => {
+                            e.preventDefault();
+                            setDraggingIndex(null);
+                          }}
+                          className={cn(
+                            "transition-[width]",
+                            draggingIndex !== null ? "w-10" : "w-0",
+                          )}
+                        />
+                        {mirrorPeers.map((peer, i) => (
+                          <li
+                            key={`mirror-${peer.pubkey}-${i}`}
+                            title="Auto-added return hop (mirror return)"
+                            className="inline-flex items-center gap-1.5 border border-dashed border-border/50 bg-muted/10 px-2 py-1 font-mono text-xs text-muted-foreground/60"
+                          >
+                            <span className="tabular-nums">
+                              {selectedPath.length + i + 1}
+                            </span>
+                            <span>
+                              {peer.name || (
+                                <span className="italic">unknown</span>
+                              )}
+                            </span>
+                            <span className="text-muted-foreground/40">
+                              {peer.pubkey.slice(0, hashSize * 2)}
+                            </span>
+                          </li>
+                        ))}
                       </ol>
                     )}
 
@@ -809,6 +949,13 @@ export function TracesPage() {
                               >
                                 Signal
                               </SelectItem>
+                              <SelectItem
+                                value="distance"
+                                disabled={!companionCoords}
+                                className="font-mono text-xs uppercase tracking-[0.06em]"
+                              >
+                                Distance{!companionCoords ? " (no location)" : ""}
+                              </SelectItem>
                             </SelectContent>
                           </Select>
                           <Input
@@ -833,9 +980,9 @@ export function TracesPage() {
                               key={peer.pubkey}
                               type="button"
                               onClick={() => addPeer(peer)}
-                              className="w-full flex items-center justify-between gap-3 px-3 py-2 text-left hover:bg-muted/40 transition-colors group"
+                              className="w-full flex items-center justify-between gap-3 px-3 py-2 sm:py-1.5 text-left hover:bg-muted/40 transition-colors group"
                             >
-                              <div className="min-w-0 flex-1">
+                              <div className="min-w-0 flex-1 flex flex-col sm:flex-row sm:items-baseline sm:gap-2">
                                 <div className="text-sm font-medium truncate">
                                   {peer.name || (
                                     <span className="italic text-muted-foreground">
@@ -843,7 +990,7 @@ export function TracesPage() {
                                     </span>
                                   )}
                                 </div>
-                                <code className="font-mono text-[10px] text-muted-foreground tabular-nums">
+                                <code className="font-mono text-[10px] text-muted-foreground tabular-nums shrink-0">
                                   {truncateMid(peer.pubkey, 8, 4)}
                                 </code>
                               </div>
