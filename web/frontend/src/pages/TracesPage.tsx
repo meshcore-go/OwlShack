@@ -482,11 +482,6 @@ export function TracesPage() {
     });
   };
 
-  // Reorders live as the drag passes over a new slot (rather than waiting for
-  // drop) so the row visually previews where the chip will land. Boundary
-  // indices (0 and length-1) are unambiguous even mid-drag: splice(0, ...)
-  // always prepends and splice(length-1, ...) on the post-removal array
-  // always appends, regardless of where "from" started.
   const [draggingIndex, setDraggingIndex] = useState<number | null>(null);
 
   const dragOverToIndex = (toIdx: number) => {
