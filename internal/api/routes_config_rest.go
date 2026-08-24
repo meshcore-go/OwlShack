@@ -4,7 +4,7 @@ import (
 	"net/http"
 	"strconv"
 
-	"github.com/meshcore-go/meshcore-bot/internal/store"
+	"github.com/meshcore-go/OwlShack/internal/store"
 )
 
 // Per-resource config REST (reads). The frontend fetches only the slice it

@@ -6,8 +6,8 @@ import (
 
 	meshcore "github.com/meshcore-go/meshcore-go"
 
-	"github.com/meshcore-go/meshcore-bot/internal/config"
-	"github.com/meshcore-go/meshcore-bot/internal/node/advert"
+	"github.com/meshcore-go/OwlShack/internal/config"
+	"github.com/meshcore-go/OwlShack/internal/node/advert"
 )
 
 // bootAdvertDelay matches the firmware's sendSelfAdvertisement(16000, false) in

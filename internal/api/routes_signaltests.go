@@ -8,8 +8,8 @@ import (
 	"net/http"
 	"strconv"
 
-	"github.com/meshcore-go/meshcore-bot/internal/signaltest"
-	"github.com/meshcore-go/meshcore-bot/internal/store"
+	"github.com/meshcore-go/OwlShack/internal/signaltest"
+	"github.com/meshcore-go/OwlShack/internal/store"
 )
 
 // SignalTester is the signal-test-runner seam. Implemented by

@@ -2,8 +2,6 @@
 
 An operator console for [MeshCore](https://github.com/meshcore-dev/MeshCore) mesh networks, packaged as a single static Go binary. It runs companion nodes on the mesh, observes and archives traffic, administers remote repeaters, talks to room servers, polls nodes for telemetry, and serves a live web UI for all of it. Built on the pure Go [meshcore-go](https://github.com/meshcore-go/meshcore-go) library (no CGO).
 
-> **Note:** OwlShack is the project's new name. The repository, release binaries and Docker image are still published as `meshcore-bot` for now, so the commands below use that name.
-
 ## What it is
 
 Plug a MeshCore radio into any Linux, macOS or Windows machine (a Raspberry Pi is plenty), point a browser at `http://localhost:8080`, and you get a full operator console for the mesh:
@@ -64,23 +62,23 @@ Once running, open `http://localhost:8080`.
 
 ### Download a release binary (recommended)
 
-Pre-built binaries for Linux, macOS, and Windows are on the [Releases](https://github.com/meshcore-go/meshcore-bot/releases) page.
+Pre-built binaries for Linux, macOS, and Windows are on the [Releases](https://github.com/meshcore-go/OwlShack/releases) page.
 
-1. Grab the [latest release](https://github.com/meshcore-go/meshcore-bot/releases/latest).
-2. Download the binary for your platform (for example `meshcore-bot-linux-arm64` for a Raspberry Pi).
+1. Grab the [latest release](https://github.com/meshcore-go/OwlShack/releases/latest).
+2. Download the binary for your platform (for example `OwlShack-linux-arm64` for a Raspberry Pi).
 3. Make it executable and move it onto your `PATH`:
 
 ```bash
-chmod +x meshcore-bot-linux-arm64
-sudo mv meshcore-bot-linux-arm64 /usr/local/bin/meshcore-bot
+chmod +x OwlShack-linux-arm64
+sudo mv OwlShack-linux-arm64 /usr/local/bin/OwlShack
 ```
 
 ### Docker
 
-Images are published to `ghcr.io/meshcore-go/meshcore-bot` for `linux/386`, `linux/amd64`, `linux/arm/v6`, `linux/arm/v7`, `linux/arm64/v8`, `linux/ppc64le`, `linux/riscv64`, and `linux/s390x`.
+Images are published to `ghcr.io/meshcore-go/owlshack` for `linux/386`, `linux/amd64`, `linux/arm/v6`, `linux/arm/v7`, `linux/arm64/v8`, `linux/ppc64le`, `linux/riscv64`, and `linux/s390x`.
 
 ```bash
-docker pull ghcr.io/meshcore-go/meshcore-bot:latest
+docker pull ghcr.io/meshcore-go/owlshack:latest
 ```
 
 ### Build from source
@@ -88,10 +86,10 @@ docker pull ghcr.io/meshcore-go/meshcore-bot:latest
 Requires Go 1.26+. The frontend is built separately and embedded into the binary.
 
 ```bash
-git clone https://github.com/meshcore-go/meshcore-bot.git
-cd meshcore-bot
+git clone https://github.com/meshcore-go/OwlShack.git
+cd OwlShack
 (cd web/frontend && npm install && npm run build)   # builds the SPA into web/frontend/dist
-go build -o meshcore-bot .
+go build -o OwlShack .
 ```
 
 ## Quick start
@@ -109,13 +107,13 @@ sudo usermod -a -G dialout $USER
 ### 2. Run it
 
 ```bash
-./meshcore-bot -vvv
+./OwlShack -vvv
 ```
 
 On first run with no stored config, OwlShack starts quietly with no companion — it observes the mesh but advertises nothing — and the web console presents a first-run setup wizard that walks you through radio settings and creating your first companion. If a `config.toml` (or `.yaml` / `.json`) is present in the working directory, it is imported automatically instead (and the wizard is skipped). To import an explicit file and overwrite the stored config:
 
 ```bash
-./meshcore-bot -config myconfig.toml
+./OwlShack -config myconfig.toml
 ```
 
 ### 3. Open the console
@@ -131,7 +129,7 @@ docker run -d \
   --device /dev/ttyACM0 \
   -p 8080:8080 \
   -v ./config.toml:/data/config.toml \
-  ghcr.io/meshcore-go/meshcore-bot
+  ghcr.io/meshcore-go/owlshack
 ```
 
 For a TCP radio connection (a serial-to-TCP bridge), drop `--device`:
@@ -140,7 +138,7 @@ For a TCP radio connection (a serial-to-TCP bridge), drop `--device`:
 docker run -d \
   -p 8080:8080 \
   -v ./config.toml:/data/config.toml \
-  ghcr.io/meshcore-go/meshcore-bot
+  ghcr.io/meshcore-go/owlshack
 ```
 
 ## Configuration
@@ -333,14 +331,14 @@ The web UI binds to `:8080` by default. Two environment variables override the s
 | `HOST` | Bind host (e.g. `0.0.0.0` or `127.0.0.1`). Unset = all interfaces. |
 | `PORT` | Bind port (e.g. `4432`). Unset = the stored/default port. |
 
-Either may be set alone, for example `PORT=4432 ./meshcore-bot`.
+Either may be set alone, for example `PORT=4432 ./OwlShack`.
 
 ## Hot reload
 
 Send `SIGHUP` to reload configuration from the database without a full restart:
 
 ```bash
-kill -SIGHUP $(pgrep meshcore-bot)
+kill -SIGHUP $(pgrep OwlShack)
 ```
 
 Reloads are diff-based: only companions whose effective config changed are restarted, so unchanged ones keep their sessions. A radio or connection change reconnects the modem; changing the listen address needs a process restart.

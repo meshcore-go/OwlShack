@@ -5,8 +5,8 @@ import (
 	"fmt"
 	"log/slog"
 
-	"github.com/meshcore-go/meshcore-bot/internal/monitor"
-	"github.com/meshcore-go/meshcore-bot/internal/store"
+	"github.com/meshcore-go/OwlShack/internal/monitor"
+	"github.com/meshcore-go/OwlShack/internal/store"
 )
 
 // linkMonitorDefaultIntervalSecs is the poll cadence for a link monitor that

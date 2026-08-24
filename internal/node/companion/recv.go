@@ -12,7 +12,7 @@ import (
 	meshcore "github.com/meshcore-go/meshcore-go"
 	"github.com/meshcore-go/meshcore-go/node"
 
-	"github.com/meshcore-go/meshcore-bot/internal/store"
+	"github.com/meshcore-go/OwlShack/internal/store"
 )
 
 const dmAckDelay = 200 * time.Millisecond

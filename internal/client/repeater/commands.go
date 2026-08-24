@@ -10,7 +10,7 @@ import (
 
 	meshcore "github.com/meshcore-go/meshcore-go"
 
-	"github.com/meshcore-go/meshcore-bot/internal/telemetry"
+	"github.com/meshcore-go/OwlShack/internal/telemetry"
 )
 
 func (rm *Client) SendStatusReq(pubkeyHex string, timeout time.Duration) (*Status, error) {

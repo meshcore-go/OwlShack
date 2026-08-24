@@ -4,7 +4,7 @@ import (
 	"context"
 	"fmt"
 
-	"github.com/meshcore-go/meshcore-bot/internal/signaltest"
+	"github.com/meshcore-go/OwlShack/internal/signaltest"
 )
 
 // newSignalTestTracer adapts the companion runtime's blocking RunTrace into

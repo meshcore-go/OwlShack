@@ -3,7 +3,7 @@ package trigger
 import (
 	"context"
 
-	"github.com/meshcore-go/meshcore-bot/internal/config"
+	"github.com/meshcore-go/OwlShack/internal/config"
 )
 
 // TriggerEvent is emitted by a trigger and passed to the template engine.

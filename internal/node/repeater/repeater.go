@@ -24,9 +24,9 @@ import (
 	"github.com/meshcore-go/meshcore-go/hardware"
 	"github.com/meshcore-go/meshcore-go/node"
 
-	"github.com/meshcore-go/meshcore-bot/internal/api"
-	"github.com/meshcore-go/meshcore-bot/internal/config"
-	"github.com/meshcore-go/meshcore-bot/internal/store"
+	"github.com/meshcore-go/OwlShack/internal/api"
+	"github.com/meshcore-go/OwlShack/internal/config"
+	"github.com/meshcore-go/OwlShack/internal/store"
 )
 
 // neighbor is a directly-heard (zero-hop) repeater advert — the firmware's

@@ -54,10 +54,10 @@ The Go binary embeds `web/frontend/dist/` via `go:embed` ([`web/embed.go`](./web
 # builds going forward.
 ./build.sh   # run from the repo root
 screen -S meshcore -X quit; sleep 1
-screen -dmS meshcore bash -c './meshcore-bot -vvv 2>&1 | tee /tmp/meshcore-bot2.log'
+screen -dmS meshcore bash -c './OwlShack -vvv 2>&1 | tee /tmp/OwlShack2.log'
 
 # Logs
-tail -f /tmp/meshcore-bot2.log
+tail -f /tmp/OwlShack2.log
 
 # Inspect the DB read-only while the bot holds it open (verify migrations, SNR, etc.)
 python3 -c "import sqlite3; c=sqlite3.connect('file:meshcore.db?mode=ro', uri=True); print(c.execute('PRAGMA user_version').fetchone())"

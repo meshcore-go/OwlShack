@@ -7,8 +7,8 @@ import (
 	"regexp"
 	"sync"
 
-	"github.com/meshcore-go/meshcore-bot/internal/config"
-	"github.com/meshcore-go/meshcore-bot/internal/logging"
+	"github.com/meshcore-go/OwlShack/internal/config"
+	"github.com/meshcore-go/OwlShack/internal/logging"
 	meshcore "github.com/meshcore-go/meshcore-go"
 	"github.com/meshcore-go/meshcore-go/node"
 )

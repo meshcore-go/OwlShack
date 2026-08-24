@@ -11,14 +11,14 @@ import (
 	meshcore "github.com/meshcore-go/meshcore-go"
 	"github.com/meshcore-go/meshcore-go/node"
 
-	"github.com/meshcore-go/meshcore-bot/internal/api"
-	"github.com/meshcore-go/meshcore-bot/internal/client/repeater"
-	"github.com/meshcore-go/meshcore-bot/internal/config"
-	"github.com/meshcore-go/meshcore-bot/internal/echo"
-	"github.com/meshcore-go/meshcore-bot/internal/modem"
-	"github.com/meshcore-go/meshcore-bot/internal/mqtt"
-	"github.com/meshcore-go/meshcore-bot/internal/store"
-	"github.com/meshcore-go/meshcore-bot/internal/trigger"
+	"github.com/meshcore-go/OwlShack/internal/api"
+	"github.com/meshcore-go/OwlShack/internal/client/repeater"
+	"github.com/meshcore-go/OwlShack/internal/config"
+	"github.com/meshcore-go/OwlShack/internal/echo"
+	"github.com/meshcore-go/OwlShack/internal/modem"
+	"github.com/meshcore-go/OwlShack/internal/mqtt"
+	"github.com/meshcore-go/OwlShack/internal/store"
+	"github.com/meshcore-go/OwlShack/internal/trigger"
 )
 
 type triggerEntry struct {

@@ -162,9 +162,9 @@ dist
 # SvelteKit build / generate output
 .svelte-kit
 
-# ── Project: meshcore-bot ───────────────────────────────────────────
-# Compiled binary (`go build -o meshcore-bot .`)
-/meshcore-bot
+# ── Project: OwlShack ──────────────────────────────────────────────
+# Compiled binary (`go build -o OwlShack .`)
+/OwlShack
 
 # Runtime config — holds repeater passwords / secrets. The bot stores config in
 # meshcore.db; a config file is only a one-time import (default-named or -config).

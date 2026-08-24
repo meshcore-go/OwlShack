@@ -7,8 +7,8 @@ import (
 	"fmt"
 	"log/slog"
 
-	"github.com/meshcore-go/meshcore-bot/internal/config"
-	"github.com/meshcore-go/meshcore-bot/internal/store"
+	"github.com/meshcore-go/OwlShack/internal/config"
+	"github.com/meshcore-go/OwlShack/internal/store"
 )
 
 // This file is the seam between the relational config tables and the

@@ -1,4 +1,4 @@
-module github.com/meshcore-go/meshcore-bot
+module github.com/meshcore-go/OwlShack
 
 go 1.26.4
 
