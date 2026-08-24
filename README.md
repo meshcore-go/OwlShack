@@ -88,8 +88,8 @@ docker pull ghcr.io/meshcore-go/meshcore-bot:latest
 Requires Go 1.26+. The frontend is built separately and embedded into the binary.
 
 ```bash
-git clone https://github.com/meshcore-go/meshcore-bot.git
-cd meshcore-bot
+git clone https://github.com/meshcore-go/OwlShack.git
+cd OwlShack
 (cd web/frontend && npm install && npm run build)   # builds the SPA into web/frontend/dist
 go build -o meshcore-bot .
 ```
