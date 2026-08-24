@@ -2,7 +2,7 @@
 # Build the OwlShack binary: compile the React SPA, then build the static Go
 # binary that embeds it. Mirrors .github/workflows/release.yml.
 #
-#   ./build.sh                       # -> ./meshcore-bot, version from git
+#   ./build.sh                       # -> ./OwlShack, version from git
 #   OUTPUT=dist/owlshack ./build.sh  # custom output path
 #   VERSION=v1.2.3 ./build.sh        # pin the stamped version
 set -euo pipefail
@@ -10,7 +10,7 @@ set -euo pipefail
 # Always run from the repo root, regardless of the caller's cwd.
 cd "$(dirname "${BASH_SOURCE[0]}")"
 
-OUTPUT="${OUTPUT:-meshcore-bot}"
+OUTPUT="${OUTPUT:-OwlShack}"
 # Stamped into the binary (buildinfo.Version, shown in the UI). Defaults to a
 # git description, falling back to "dev" outside a checkout.
 VERSION="${VERSION:-$(git describe --tags --always --dirty 2>/dev/null || echo dev)}"
@@ -30,7 +30,7 @@ echo ">> Building backend -> ${OUTPUT} (version ${VERSION})"
 go mod download
 CGO_ENABLED=0 go build \
   -trimpath \
-  -ldflags "-s -w -X github.com/meshcore-go/meshcore-bot/internal/buildinfo.Version=${VERSION}" \
+  -ldflags "-s -w -X github.com/meshcore-go/OwlShack/internal/buildinfo.Version=${VERSION}" \
   -o "${OUTPUT}" .
 
 echo ">> Done: ${OUTPUT} ($(du -h "${OUTPUT}" | cut -f1))"

@@ -7,8 +7,8 @@ import (
 	"strings"
 	"time"
 
-	"github.com/meshcore-go/meshcore-bot/internal/buildinfo"
-	"github.com/meshcore-go/meshcore-bot/internal/modem"
+	"github.com/meshcore-go/OwlShack/internal/buildinfo"
+	"github.com/meshcore-go/OwlShack/internal/modem"
 	meshcore "github.com/meshcore-go/meshcore-go"
 )
 
@@ -126,10 +126,10 @@ func formatStatus(status, originName, originID string, radio modem.RadioInfo, ds
 		Timestamp:       time.Now().UTC().Format(rxTimeLayout),
 		Origin:          originName,
 		OriginID:        originID,
-		Model:           "meshcore-bot",
+		Model:           "OwlShack",
 		FirmwareVersion: buildinfo.Version,
 		Radio:           radioStr,
-		ClientVersion:   "meshcore-bot/" + buildinfo.Version,
+		ClientVersion:   "OwlShack/" + buildinfo.Version,
 		NoiseFloor:      ds.NoiseFloor,
 		BatteryPercent:  batteryPct,
 		Stats: statsBlock{

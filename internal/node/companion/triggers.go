@@ -7,9 +7,9 @@ import (
 
 	meshcore "github.com/meshcore-go/meshcore-go"
 
-	"github.com/meshcore-go/meshcore-bot/internal/config"
-	"github.com/meshcore-go/meshcore-bot/internal/logging"
-	"github.com/meshcore-go/meshcore-bot/internal/trigger"
+	"github.com/meshcore-go/OwlShack/internal/config"
+	"github.com/meshcore-go/OwlShack/internal/logging"
+	"github.com/meshcore-go/OwlShack/internal/trigger"
 )
 
 // ReloadTriggers swaps the companion's trigger set in place, without tearing

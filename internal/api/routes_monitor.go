@@ -10,8 +10,8 @@ import (
 	"strings"
 	"time"
 
-	"github.com/meshcore-go/meshcore-bot/internal/monitor"
-	"github.com/meshcore-go/meshcore-bot/internal/store"
+	"github.com/meshcore-go/OwlShack/internal/monitor"
+	"github.com/meshcore-go/OwlShack/internal/store"
 )
 
 // NodePoller is the monitor-service seam: triggering an immediate out-of-band

@@ -8,9 +8,9 @@ import (
 	"os/signal"
 	"syscall"
 
-	"github.com/meshcore-go/meshcore-bot/internal/app"
-	"github.com/meshcore-go/meshcore-bot/internal/buildinfo"
-	"github.com/meshcore-go/meshcore-bot/internal/logging"
+	"github.com/meshcore-go/OwlShack/internal/app"
+	"github.com/meshcore-go/OwlShack/internal/buildinfo"
+	"github.com/meshcore-go/OwlShack/internal/logging"
 	flag "github.com/spf13/pflag"
 )
 
@@ -21,7 +21,7 @@ func main() {
 	flag.Parse()
 
 	if *showVersion {
-		fmt.Println("meshcore-bot", buildinfo.Version)
+		fmt.Println("OwlShack", buildinfo.Version)
 		return
 	}
 

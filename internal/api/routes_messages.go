@@ -6,7 +6,7 @@ import (
 	"strings"
 	"time"
 
-	"github.com/meshcore-go/meshcore-bot/internal/store"
+	"github.com/meshcore-go/OwlShack/internal/store"
 )
 
 func (s *Server) handleAddChannel(w http.ResponseWriter, r *http.Request) {

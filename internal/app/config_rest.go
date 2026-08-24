@@ -5,9 +5,9 @@ import (
 	"errors"
 	"slices"
 
-	"github.com/meshcore-go/meshcore-bot/internal/api"
-	"github.com/meshcore-go/meshcore-bot/internal/config"
-	"github.com/meshcore-go/meshcore-bot/internal/store"
+	"github.com/meshcore-go/OwlShack/internal/api"
+	"github.com/meshcore-go/OwlShack/internal/config"
+	"github.com/meshcore-go/OwlShack/internal/store"
 )
 
 // Per-resource config writes. Each loads the current row snapshot, applies the

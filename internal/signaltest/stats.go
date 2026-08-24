@@ -4,7 +4,7 @@ import (
 	"encoding/json"
 	"math"
 
-	"github.com/meshcore-go/meshcore-bot/internal/store"
+	"github.com/meshcore-go/OwlShack/internal/store"
 )
 
 // ValueStats summarizes a set of samples (a hop's SNR across runs, the final

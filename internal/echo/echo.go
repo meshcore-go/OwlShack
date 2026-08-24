@@ -7,8 +7,8 @@ import (
 
 	"log/slog"
 
-	"github.com/meshcore-go/meshcore-bot/internal/api"
-	"github.com/meshcore-go/meshcore-bot/internal/store"
+	"github.com/meshcore-go/OwlShack/internal/api"
+	"github.com/meshcore-go/OwlShack/internal/store"
 	meshcore "github.com/meshcore-go/meshcore-go"
 )
 

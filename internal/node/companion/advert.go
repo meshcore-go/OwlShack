@@ -4,7 +4,7 @@ import (
 	"context"
 	"time"
 
-	"github.com/meshcore-go/meshcore-bot/internal/node/advert"
+	"github.com/meshcore-go/OwlShack/internal/node/advert"
 )
 
 func (c *Companion) advertLoop(ctx context.Context) {

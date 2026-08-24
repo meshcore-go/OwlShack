@@ -6,8 +6,8 @@ import (
 	"log/slog"
 	"path/filepath"
 
-	"github.com/meshcore-go/meshcore-bot/internal/config"
-	"github.com/meshcore-go/meshcore-bot/internal/store"
+	"github.com/meshcore-go/OwlShack/internal/config"
+	"github.com/meshcore-go/OwlShack/internal/store"
 )
 
 // The database is the source of truth for config; files are one-time imports.

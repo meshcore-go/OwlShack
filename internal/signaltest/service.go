@@ -17,7 +17,7 @@ import (
 	"sync"
 	"time"
 
-	"github.com/meshcore-go/meshcore-bot/internal/store"
+	"github.com/meshcore-go/OwlShack/internal/store"
 )
 
 // ErrAlreadyRunning is returned by Begin when a test is already active (only

@@ -7,7 +7,7 @@ import (
 	"strings"
 	"time"
 
-	"github.com/meshcore-go/meshcore-bot/internal/store"
+	"github.com/meshcore-go/OwlShack/internal/store"
 )
 
 type conversationJSON struct {
