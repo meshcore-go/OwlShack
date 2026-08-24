@@ -10,6 +10,7 @@ import (
 	"github.com/meshcore-go/meshcore-bot/internal/api"
 	"github.com/meshcore-go/meshcore-bot/internal/config"
 	"github.com/meshcore-go/meshcore-bot/internal/node/companion"
+	"github.com/meshcore-go/meshcore-bot/internal/node/repeater"
 	"github.com/meshcore-go/meshcore-bot/internal/store"
 )
 
@@ -21,12 +22,13 @@ const repeaterReqTimeout = 10 * time.Second
 // reload/reconnect, so it never has to mutate its companion set.
 type backend struct {
 	companions []*companion.Companion
+	repeater   *repeater.Repeater // the single running repeater node, or nil
 	db         *store.Store
 	reload     func() error
 }
 
-func newBackend(companions []*companion.Companion, db *store.Store, reload func() error) *backend {
-	return &backend{companions: companions, db: db, reload: reload}
+func newBackend(companions []*companion.Companion, rep *repeater.Repeater, db *store.Store, reload func() error) *backend {
+	return &backend{companions: companions, repeater: rep, db: db, reload: reload}
 }
 
 func (b *backend) find(name string) (*companion.Companion, bool) {
@@ -185,6 +187,23 @@ func (b *backend) Repeater(name string) (*api.RepeaterOps, bool) {
 		SetPerm: func(pubkeyHex, targetPubkeyHex string, perms uint8) error {
 			return rm.SetAccessPerm(pubkeyHex, targetPubkeyHex, perms, repeaterReqTimeout)
 		},
+	}, true
+}
+
+// RepeaterNode exposes the single running repeater node's runtime operations,
+// or ok=false when no repeater is configured/running.
+func (b *backend) RepeaterNode() (*api.RepeaterNodeOps, bool) {
+	if b.repeater == nil {
+		return nil, false
+	}
+	rep := b.repeater
+	return &api.RepeaterNodeOps{
+		Name:      rep.Name(),
+		Stats:     func() any { return rep.Stats() },
+		Neighbors: func() any { return rep.Neighbors() },
+		Advert:    rep.SendAdvert,
+		ACL:       func() any { return rep.ACLList() },
+		RevokeACL: rep.RevokeACL,
 	}, true
 }
 

@@ -35,6 +35,8 @@ type Store struct {
 	Triggers       *TriggerRepo
 	SignalTests    *SignalTestRepo
 	LinkMonitors   *LinkMonitorRepo
+	Repeater       *RepeaterRepo
+	RepeaterACL    *RepeaterACLRepo
 
 	writerCh   chan func()
 	writerDone chan struct{}
@@ -80,6 +82,8 @@ func Open(ctx context.Context, path string) (*Store, error) {
 		Triggers:       &TriggerRepo{db: db},
 		SignalTests:    &SignalTestRepo{db: db},
 		LinkMonitors:   &LinkMonitorRepo{db: db},
+		Repeater:       &RepeaterRepo{db: db},
+		RepeaterACL:    &RepeaterACLRepo{db: db},
 		writerCh:       make(chan func(), writerQueueDepth),
 		writerDone:     make(chan struct{}),
 	}
@@ -170,6 +174,8 @@ func (s *Store) migrate(ctx context.Context) error {
 		migrateNoop, // 3 — squashed into migrateV1
 		migrateV2,   // 4 — indexed packet_hash/path columns
 		migrateV3,   // 5 — signal_tests, signal_test_runs, link_monitors
+		migrateV4,   // 6 — repeater node tables (config + ACL)
+		migrateV5,   // 7 — repeater flood_max_unscoped + default_region columns
 	}
 
 	for i := version; i < len(migrations); i++ {
@@ -537,4 +543,65 @@ func migrateV3(ctx context.Context, db *sql.DB) error {
 		return fmt.Errorf("creating signal test / link monitor tables: %w", err)
 	}
 	return nil
+}
+
+// migrateV4 creates the repeater-node tables (all feature-branch work, squashed
+// into one migration since none of it has shipped). Two tables:
+//   - repeater: the singleton repeater config (CHECK id=1; 0 rows = none). No
+//     child tables — a repeater has no messages/contacts — so nothing FKs it.
+//     path_hash_mode = flood-advert path-hash width (0=1B,1=2B,3=4B); regions =
+//     JSON array of {name, denyFlood} transport scopes.
+//   - repeater_acl: admin-over-mesh client list (see repeater_acl.go). Kept in
+//     the DB (not on flash like the firmware) so blank-password reauth survives
+//     restarts.
+//
+// Also backfills the "*" wildcard scope into an existing repeater whose regions
+// are empty: "*" is now an explicit, editable entry (config.WildcardRegion), and
+// its absence means unscoped flood is NOT relayed. A repeater created before
+// that change stored no regions but was relaying unscoped flood, so seed "*" to
+// preserve behaviour. Idempotent and a no-op on a fresh DB (no repeater row yet;
+// new repeaters get "*" seeded on create).
+func migrateV4(ctx context.Context, db *sql.DB) error {
+	_, err := db.ExecContext(ctx, `
+		CREATE TABLE IF NOT EXISTS repeater (
+			id                    INTEGER PRIMARY KEY CHECK (id = 1),
+			name                  TEXT    NOT NULL DEFAULT '',
+			private_key           TEXT    NOT NULL DEFAULT '',
+			pubkey                TEXT    NOT NULL DEFAULT '',
+			latitude              REAL,
+			longitude             REAL,
+			advert_interval       INTEGER,
+			flood_advert_interval INTEGER,
+			disable_fwd           INTEGER,
+			flood_max             INTEGER,
+			flood_max_advert      INTEGER,
+			loop_detect           TEXT,
+			path_hash_mode        INTEGER,
+			owner_info            TEXT    NOT NULL DEFAULT '',
+			admin_password        TEXT    NOT NULL DEFAULT '',
+			guest_password        TEXT    NOT NULL DEFAULT '',
+			regions               TEXT    NOT NULL DEFAULT '[]'
+		);
+		CREATE TABLE IF NOT EXISTS repeater_acl (
+			pubkey         TEXT    PRIMARY KEY,
+			permissions    INTEGER NOT NULL DEFAULT 0,
+			last_timestamp INTEGER NOT NULL DEFAULT 0,
+			last_seen      INTEGER NOT NULL DEFAULT 0
+		);
+		UPDATE repeater SET regions = '[{"name":"*"}]'
+			WHERE id = 1 AND (regions IS NULL OR regions = '' OR regions = '[]');
+	`)
+	return err
+}
+
+// migrateV5 adds the two relay-policy columns that postdate the migrateV4
+// repeater table: flood_max_unscoped (the extra hop cap for plain/unscoped
+// floods, firmware NodePrefs) and default_region (the region our own flood
+// adverts are scoped to, ” = unscoped).
+func migrateV5(ctx context.Context, db *sql.DB) error {
+	_, err := db.ExecContext(ctx, `
+		ALTER TABLE repeater ADD COLUMN flood_max_unscoped INTEGER;
+		ALTER TABLE repeater ADD COLUMN default_region TEXT NOT NULL DEFAULT '';
+	`)
+	return err
 }

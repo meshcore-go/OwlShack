@@ -149,8 +149,13 @@ func Run(ctx context.Context, importPath string, verbosity int) error {
 		ms.Close()
 		return fmt.Errorf("companion startup: %w", err)
 	}
+	rep, err := startRepeater(ctx, cfg, mux, db, srv.Hub(), ms.Stats, reload)
+	if err != nil {
+		ms.Close()
+		return fmt.Errorf("repeater startup: %w", err)
+	}
 	compReg.set(companions)
-	srv.SetBackend(newBackend(companions, db, reload))
+	srv.SetBackend(newBackend(companions, rep, db, reload))
 
 	for {
 		select {
@@ -158,6 +163,7 @@ func Run(ctx context.Context, importPath string, verbosity int) error {
 			slog.Info("shutting down...")
 			httpServer.Close()
 			stopCompanions(companions)
+			stopRepeater(rep)
 			ms.Close()
 			return nil
 
@@ -183,6 +189,7 @@ func Run(ctx context.Context, importPath string, verbosity int) error {
 				slog.Info("modem config changed, reconnecting...")
 				stats.stopped = len(companions)
 				stopCompanions(companions)
+				stopRepeater(rep)
 				ms.Close()
 				ms, mux, err = reconnectModem(ctx, newCfg, db, srv, reconnectCh)
 				if err != nil {
@@ -193,6 +200,11 @@ func Run(ctx context.Context, importPath string, verbosity int) error {
 					ms.Close()
 					return fmt.Errorf("companion restart after reload: %w", err)
 				}
+				rep, err = startRepeater(ctx, newCfg, mux, db, srv.Hub(), ms.Stats, reload)
+				if err != nil {
+					ms.Close()
+					return fmt.Errorf("repeater restart after reload: %w", err)
+				}
 				stats.started = len(companions)
 			} else {
 				companions, stats, err = reloadCompanions(ctx, cfg, newCfg, companions, ms, mux, db, srv.Hub(), echoTracker)
@@ -200,16 +212,22 @@ func Run(ctx context.Context, importPath string, verbosity int) error {
 					ms.Close()
 					return fmt.Errorf("companion restart after reload: %w", err)
 				}
+				rep, err = reloadRepeater(ctx, cfg, newCfg, rep, mux, db, srv.Hub(), ms.Stats, reload)
+				if err != nil {
+					ms.Close()
+					return fmt.Errorf("repeater restart after reload: %w", err)
+				}
 			}
 			cfg = newCfg
 			compReg.set(companions)
-			srv.SetBackend(newBackend(companions, db, reload))
+			srv.SetBackend(newBackend(companions, rep, db, reload))
 			slog.Info("config reloaded", "started", stats.started, "stopped", stats.stopped, "kept", stats.kept, "reloaded", stats.reloaded)
 
 		case <-reconnectCh:
 			slog.Warn("modem read loop exited, reconnecting...")
 
 			stopCompanions(companions)
+			stopRepeater(rep)
 			ms.Close()
 
 			ms, mux, err = reconnectModemWithBackoff(ctx, cfg, db, srv, reconnectCh)
@@ -223,8 +241,13 @@ func Run(ctx context.Context, importPath string, verbosity int) error {
 				ms.Close()
 				return fmt.Errorf("companion restart after reconnect: %w", err)
 			}
+			rep, err = startRepeater(ctx, cfg, mux, db, srv.Hub(), ms.Stats, reload)
+			if err != nil {
+				ms.Close()
+				return fmt.Errorf("repeater restart after reconnect: %w", err)
+			}
 			compReg.set(companions)
-			srv.SetBackend(newBackend(companions, db, reload))
+			srv.SetBackend(newBackend(companions, rep, db, reload))
 			slog.Info("modem reconnected")
 		}
 	}

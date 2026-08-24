@@ -1,7 +1,6 @@
 package mqtt
 
 import (
-	"crypto/ed25519"
 	"encoding/base64"
 	"encoding/hex"
 	"encoding/json"
@@ -67,8 +66,9 @@ func generateToken(id meshcore.LocalIdentity, audience, email, owner string) (st
 	payloadEnc := base64URLEncode(payload)
 	signingInput := headerEnc + "." + payloadEnc
 
-	privKey := id.PrivateKey()
-	sig := ed25519.Sign(privKey, []byte(signingInput))
+	// id.Sign handles both seed-based and expanded-key (imported prv.key)
+	// identities; ed25519.Sign(id.PrivateKey()) would break the latter.
+	sig := id.Sign([]byte(signingInput))
 	sigHex := strings.ToUpper(hex.EncodeToString(sig))
 
 	token := signingInput + "." + sigHex

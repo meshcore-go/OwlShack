@@ -108,6 +108,11 @@ type Config struct {
 	// Companions
 	Companions []CompanionConfig `json:"companions" yaml:"companions" toml:"companion"`
 
+	// Repeater is the optional repeater node the bot runs on the mesh (relay +
+	// advert + admin surface). At most one: multiple repeaters sharing one
+	// radio would just relay each other's transmissions. nil == no repeater.
+	Repeater *RepeaterConfig `json:"repeater,omitempty" yaml:"repeater,omitempty" toml:"repeater,omitempty"`
+
 	// Legacy import aliases from the pre-relational "main" deployment format
 	// (nodeType / [[bot]] / [[observer]]). migrateLegacyFormat folds these into
 	// ConnectionType / Companions / Mqtt and clears them — see legacy.go.

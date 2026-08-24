@@ -78,6 +78,7 @@ type configRows struct {
 	companions []store.Companion
 	channels   []store.CompanionChannel // across all companions
 	triggers   []store.Trigger          // across all companions, with ChannelIDs
+	repeater   *store.Repeater          // the single repeater node, or nil
 }
 
 func loadConfigRows(ctx context.Context, st *store.Store) (*configRows, error) {
@@ -105,7 +106,14 @@ func loadConfigRows(ctx context.Context, st *store.Store) (*configRows, error) {
 	if err != nil {
 		return nil, fmt.Errorf("reading triggers: %w", err)
 	}
-	return &configRows{settings: s, mqtt: mq, brokers: brokers, companions: comps, channels: chans, triggers: trigs}, nil
+	rep, err := st.Repeater.Get(ctx)
+	if err != nil {
+		if !errors.Is(err, sql.ErrNoRows) {
+			return nil, fmt.Errorf("reading repeater: %w", err)
+		}
+		rep = nil // no repeater configured
+	}
+	return &configRows{settings: s, mqtt: mq, brokers: brokers, companions: comps, channels: chans, triggers: trigs, repeater: rep}, nil
 }
 
 // assembleFromRows builds the in-memory *config.Config the runtime consumes from
@@ -183,6 +191,30 @@ func assembleFromRows(rows *configRows) *config.Config {
 			comp.Triggers = &tlist
 		}
 		cfg.Companions = append(cfg.Companions, comp)
+	}
+
+	if r := rows.repeater; r != nil {
+		cfg.Repeater = &config.RepeaterConfig{
+			Name:                r.Name,
+			PrivateKey:          r.PrivateKey,
+			Latitude:            r.Latitude,
+			Longitude:           r.Longitude,
+			AdvertInterval:      r.AdvertInterval,
+			FloodAdvertInterval: r.FloodAdvertInterval,
+			DisableFwd:          r.DisableFwd,
+			FloodMax:            r.FloodMax,
+			FloodMaxUnscoped:    r.FloodMaxUnscoped,
+			FloodMaxAdvert:      r.FloodMaxAdvert,
+			LoopDetect:          r.LoopDetect,
+			PathHashMode:        r.PathHashMode,
+			DefaultRegion:       r.DefaultRegion,
+			AdminPassword:       r.AdminPassword,
+			GuestPassword:       r.GuestPassword,
+			OwnerInfo:           r.OwnerInfo,
+		}
+		for _, rg := range r.Regions {
+			cfg.Repeater.Regions = append(cfg.Repeater.Regions, config.RepeaterRegion{Name: rg.Name, DenyFlood: rg.DenyFlood})
+		}
 	}
 
 	if hasMqttConfig(rows.mqtt, rows.brokers) {
@@ -312,7 +344,45 @@ func writeConfigToTables(ctx context.Context, st *store.Store, cfg *config.Confi
 		}
 	}
 
+	if err := writeRepeater(ctx, st, cfg); err != nil {
+		return err
+	}
+
 	return writeMqtt(ctx, st, cfg, nameToID)
+}
+
+// writeRepeater persists the single repeater node (or clears it when none is
+// configured). The pubkey column is derived from the seed, mirroring companions.
+func writeRepeater(ctx context.Context, st *store.Store, cfg *config.Config) error {
+	if cfg.Repeater == nil {
+		return st.Repeater.Clear(ctx)
+	}
+	r := cfg.Repeater
+	pub, _ := config.PubKeyHexFromSeed(r.PrivateKey)
+	var regions []store.RepeaterRegion
+	for _, rg := range r.Regions {
+		regions = append(regions, store.RepeaterRegion{Name: rg.Name, DenyFlood: rg.DenyFlood})
+	}
+	return st.Repeater.Set(ctx, &store.Repeater{
+		Name:                r.Name,
+		PrivateKey:          r.PrivateKey,
+		PubKey:              pub,
+		Latitude:            r.Latitude,
+		Longitude:           r.Longitude,
+		AdvertInterval:      r.AdvertInterval,
+		FloodAdvertInterval: r.FloodAdvertInterval,
+		DisableFwd:          r.DisableFwd,
+		FloodMax:            r.FloodMax,
+		FloodMaxUnscoped:    r.FloodMaxUnscoped,
+		FloodMaxAdvert:      r.FloodMaxAdvert,
+		LoopDetect:          r.LoopDetect,
+		PathHashMode:        r.PathHashMode,
+		DefaultRegion:       r.DefaultRegion,
+		AdminPassword:       r.AdminPassword,
+		GuestPassword:       r.GuestPassword,
+		OwnerInfo:           r.OwnerInfo,
+		Regions:             regions,
+	})
 }
 
 // replaceCompanionChildren rewrites a companion's channels and triggers from
@@ -464,7 +534,7 @@ func initConfigTables(ctx context.Context, st *store.Store) (*config.Config, err
 		if perr != nil {
 			return nil, fmt.Errorf("parsing legacy config blob: %w", perr)
 		}
-		if err := cfg.EnsureCompanionKeys(); err != nil {
+		if err := cfg.EnsureNodeKeys(); err != nil {
 			return nil, err
 		}
 		if err := persistToTables(ctx, st, cfg); err != nil {

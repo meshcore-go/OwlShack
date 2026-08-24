@@ -777,16 +777,18 @@ func TestPacketRepo_ListFilter(t *testing.T) {
 }
 
 // TestStore_MigrateUserVersion confirms Open ran every migration and stamped
-// the schema version to the migration count.
+// the schema version to the migration count. Bump wantVersion whenever a
+// migration is appended to the slice in migrate().
 func TestStore_MigrateUserVersion(t *testing.T) {
 	t.Parallel()
+	const wantVersion = 7 // migrateV1, 2 squashed noop slots, migrateV2..migrateV5
 	st := newTestStore(t)
 	var v int
 	if err := st.db.QueryRowContext(t.Context(), "PRAGMA user_version").Scan(&v); err != nil {
 		t.Fatalf("reading user_version: %v", err)
 	}
-	if v != 5 {
-		t.Errorf("user_version = %d, want 5", v)
+	if v != wantVersion {
+		t.Errorf("user_version = %d, want %d", v, wantVersion)
 	}
 }
 

@@ -8,6 +8,7 @@ import (
 	"path/filepath"
 	"strings"
 
+	meshcore "github.com/meshcore-go/meshcore-go"
 	"github.com/pelletier/go-toml/v2"
 	"gopkg.in/yaml.v3"
 )
@@ -182,6 +183,75 @@ func (c *Config) Validate() error {
 					return fmt.Errorf("companion %q channel[%d] %q: %w", comp.Name, j, ch.Name, err)
 				}
 			}
+		}
+	}
+
+	// At most one repeater (a single radio can host only one relay identity).
+	// Its name shares the companion namespace so the two never collide in the
+	// UI / registry, and it can't reuse a companion's private key.
+	if r := c.Repeater; r != nil {
+		if r.Name == "" {
+			return fmt.Errorf("repeater: name is required")
+		}
+		if seen[r.Name] {
+			return fmt.Errorf("repeater name %q clashes with a companion name", r.Name)
+		}
+		if r.PrivateKey != "" {
+			if err := validateSeedHex(r.PrivateKey); err != nil {
+				return fmt.Errorf("repeater %q: %w", r.Name, err)
+			}
+			if other, dup := seenKeys[r.PrivateKey]; dup {
+				return fmt.Errorf("repeater %q and companion %q share the same privateKey", r.Name, other)
+			}
+		}
+		if r.LoopDetect != nil && *r.LoopDetect != "" && !loopDetectLevels[*r.LoopDetect] {
+			return fmt.Errorf("repeater %q: invalid loopDetect %q (want off|minimal|moderate|strict)", r.Name, *r.LoopDetect)
+		}
+		if r.FloodMax != nil && (*r.FloodMax < 1 || *r.FloodMax > 64) {
+			return fmt.Errorf("repeater %q: floodMax must be between 1 and 64", r.Name)
+		}
+		if r.FloodMaxAdvert != nil && (*r.FloodMaxAdvert < 1 || *r.FloodMaxAdvert > 64) {
+			return fmt.Errorf("repeater %q: floodMaxAdvert must be between 1 and 64", r.Name)
+		}
+		if r.FloodMaxUnscoped != nil && (*r.FloodMaxUnscoped < 0 || *r.FloodMaxUnscoped > 64) {
+			return fmt.Errorf("repeater %q: floodMaxUnscoped must be between 0 and 64", r.Name)
+		}
+		if r.DefaultRegion != "" {
+			if r.DefaultRegion == WildcardRegion {
+				return fmt.Errorf(`repeater %q: defaultRegion cannot be "*"`, r.Name)
+			}
+			found := false
+			for _, rg := range r.Regions {
+				if rg.Name == r.DefaultRegion {
+					found = true
+					break
+				}
+			}
+			if !found {
+				return fmt.Errorf("repeater %q: defaultRegion %q is not a configured region", r.Name, r.DefaultRegion)
+			}
+		}
+		if r.PathHashMode != nil && (*r.PathHashMode < 0 || *r.PathHashMode > 3) {
+			return fmt.Errorf("repeater %q: pathHashMode must be 0 (1B), 1 (2B) or 3 (4B)", r.Name)
+		}
+		if r.AdvertInterval != nil && *r.AdvertInterval < 0 {
+			return fmt.Errorf("repeater %q: advertInterval must be >= 0", r.Name)
+		}
+		if r.FloodAdvertInterval != nil && *r.FloodAdvertInterval < 0 {
+			return fmt.Errorf("repeater %q: floodAdvertInterval must be >= 0", r.Name)
+		}
+		if len(r.Regions) > meshcore.MaxRegions {
+			return fmt.Errorf("repeater %q: at most %d regions", r.Name, meshcore.MaxRegions)
+		}
+		seenRegion := make(map[string]bool, len(r.Regions))
+		for i, rg := range r.Regions {
+			if err := validateRegionName(rg.Name); err != nil {
+				return fmt.Errorf("repeater %q region[%d]: %w", r.Name, i, err)
+			}
+			if seenRegion[rg.Name] {
+				return fmt.Errorf("repeater %q: duplicate region %q", r.Name, rg.Name)
+			}
+			seenRegion[rg.Name] = true
 		}
 	}
 
