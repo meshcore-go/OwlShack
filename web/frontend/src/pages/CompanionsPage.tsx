@@ -302,8 +302,9 @@ function CompanionEditor({
               placeholder="blank = generate a new identity"
               hint={
                 <>
-                  the node identity (64-hex ed25519 seed) — want a specific
-                  pubkey prefix? generate one with{" "}
+                  the node identity — a 32-hex seed, or a MeshCore private key
+                  (128 hex, from <code>get prv.key</code>) to import an existing
+                  identity. Blank generates one; for a vanity pubkey use{" "}
                   <a
                     href="https://gessaman.com/mc-keygen/"
                     target="_blank"

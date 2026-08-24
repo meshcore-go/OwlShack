@@ -90,6 +90,12 @@ const TELEMETRY: NavItem[] = [
 
 const SYSTEM: NavItem[] = [
   {
+    to: "/repeater",
+    label: "Repeater",
+    icon: Radio,
+    match: (p) => p === "/repeater",
+  },
+  {
     to: "/mqtt",
     label: "MQTT",
     icon: Rss,

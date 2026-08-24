@@ -40,6 +40,11 @@ type Backend interface {
 	// Repeater returns the repeater operations for a named companion.
 	Repeater(name string) (*RepeaterOps, bool)
 
+	// RepeaterNode returns runtime operations for the single repeater node the
+	// bot runs (relay stats, neighbours, advertise-now), or ok=false when none
+	// is running. This is the local repeater we ARE, not a remote one we drive.
+	RepeaterNode() (*RepeaterNodeOps, bool)
+
 	// PersistChannels writes the companions' current channels back to the
 	// config file.
 	PersistChannels(ctx context.Context) error
@@ -61,6 +66,32 @@ type Backend interface {
 	DeleteChannel(ctx context.Context, id int64) error
 	SaveTrigger(ctx context.Context, in TriggerInput) (int64, error)
 	DeleteTrigger(ctx context.Context, id int64) error
+
+	// Repeater node config is edited per-section so a save touches only its own
+	// slice (no whole-config bulk update). CreateRepeater sets up the singleton
+	// (PrivateKey nil generates one, seeds the "*" region); the Update* methods
+	// patch one section of an existing repeater; the region ops are item-level.
+	// Each validates the whole assembled config and reloads. DeleteRepeater
+	// removes it entirely.
+	CreateRepeater(ctx context.Context, in RepeaterCreateInput) error
+	UpdateRepeaterNode(ctx context.Context, in RepeaterNodeInput) error
+	UpdateRepeaterRelay(ctx context.Context, in RepeaterRelayInput) error
+	UpdateRepeaterAdmin(ctx context.Context, in RepeaterAdminInput) error
+	AddRepeaterRegion(ctx context.Context, in RepeaterRegionInput) error
+	SetRepeaterRegionFlood(ctx context.Context, name string, denyFlood bool) error
+	RemoveRepeaterRegion(ctx context.Context, name string) error
+	DeleteRepeater(ctx context.Context) error
+}
+
+// RepeaterNodeOps are runtime operations on the running repeater node, wired to
+// the domain by the app package (the api package never imports the domain).
+type RepeaterNodeOps struct {
+	Name      string
+	Stats     func() any // live relay counters + uptime + neighbour count
+	Neighbors func() any // directly-heard repeaters
+	Advert    func(flood bool) error
+	ACL       func() any                // admin clients in the ACL (name-resolved)
+	RevokeACL func(pubkey string) error // drop a client's access
 }
 
 // --- per-resource config write inputs (JSON request bodies) ---
@@ -123,6 +154,49 @@ type ChannelInput struct {
 	CompanionID int64   `json:"companionId"`
 	Name        string  `json:"name"`
 	PrivateKey  *string `json:"privateKey"` // nil = keep existing
+}
+
+// RepeaterCreateInput sets up the singleton. Only identity is needed on create;
+// everything else is edited afterward through the section endpoints.
+type RepeaterCreateInput struct {
+	Name       string  `json:"name"`
+	PrivateKey *string `json:"privateKey"` // nil/empty = generate
+}
+
+// RepeaterNodeInput is the Node section: identity + position. PrivateKey nil =
+// keep the current identity; a value rotates it.
+type RepeaterNodeInput struct {
+	Name       string   `json:"name"`
+	PrivateKey *string  `json:"privateKey"`
+	Latitude   *float64 `json:"latitude"`
+	Longitude  *float64 `json:"longitude"`
+}
+
+// RepeaterRelayInput is the Relay-policy section: forwarding + advert cadence.
+type RepeaterRelayInput struct {
+	DisableFwd          *bool   `json:"disableFwd"`
+	FloodMax            *int    `json:"floodMax"`
+	FloodMaxUnscoped    *int    `json:"floodMaxUnscoped"`
+	FloodMaxAdvert      *int    `json:"floodMaxAdvert"`
+	LoopDetect          *string `json:"loopDetect"`
+	PathHashMode        *int    `json:"pathHashMode"`
+	DefaultRegion       string  `json:"defaultRegion"` // "" = unscoped flood adverts
+	AdvertInterval      *int    `json:"advertInterval"`
+	FloodAdvertInterval *int    `json:"floodAdvertInterval"`
+}
+
+// RepeaterAdminInput is the Owner & access section. Passwords are nil = keep,
+// "" = clear.
+type RepeaterAdminInput struct {
+	OwnerInfo     string  `json:"ownerInfo"`
+	AdminPassword *string `json:"adminPassword"`
+	GuestPassword *string `json:"guestPassword"`
+}
+
+// RepeaterRegionInput is a region add (POST) or deny-flood toggle (PATCH) body.
+type RepeaterRegionInput struct {
+	Name      string `json:"name"`
+	DenyFlood bool   `json:"denyFlood"`
 }
 
 type TriggerInput struct {

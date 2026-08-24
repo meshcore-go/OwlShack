@@ -1,7 +1,6 @@
 package companion
 
 import (
-	"crypto/ed25519"
 	"encoding/hex"
 	"fmt"
 	"strings"
@@ -12,16 +11,7 @@ import (
 )
 
 func identityFromHexSeed(seedHex string) (meshcore.LocalIdentity, error) {
-	seed, err := hex.DecodeString(strings.TrimSpace(seedHex))
-	if err != nil {
-		return meshcore.LocalIdentity{}, fmt.Errorf("privateKey must be a hex seed: %w", err)
-	}
-	if len(seed) != ed25519.SeedSize {
-		return meshcore.LocalIdentity{}, fmt.Errorf("privateKey: expected %d byte seed, got %d", ed25519.SeedSize, len(seed))
-	}
-	var s [ed25519.SeedSize]byte
-	copy(s[:], seed)
-	return meshcore.NewLocalIdentityFromSeed(s), nil
+	return config.LocalIdentityFromHex(seedHex)
 }
 
 func channelFromRef(ref config.ChannelRef) (*meshcore.ChannelEntry, error) {

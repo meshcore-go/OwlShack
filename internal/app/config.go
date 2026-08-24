@@ -48,7 +48,7 @@ func importConfigFile(ctx context.Context, db *store.Store, path string) (*confi
 	if err := cfg.MigrateKeyFiles(filepath.Dir(resolved)); err != nil {
 		return nil, err
 	}
-	if err := cfg.EnsureCompanionKeys(); err != nil {
+	if err := cfg.EnsureNodeKeys(); err != nil {
 		return nil, err
 	}
 	if err := cfg.Validate(); err != nil {

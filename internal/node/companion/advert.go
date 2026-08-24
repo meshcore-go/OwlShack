@@ -2,10 +2,9 @@ package companion
 
 import (
 	"context"
-	"math"
 	"time"
 
-	meshcore "github.com/meshcore-go/meshcore-go"
+	"github.com/meshcore-go/meshcore-bot/internal/node/advert"
 )
 
 func (c *Companion) advertLoop(ctx context.Context) {
@@ -56,56 +55,8 @@ func (c *Companion) SendAdvert(flood bool) error {
 }
 
 func (c *Companion) sendAdvert(flood bool) error {
-	appData := meshcore.AdvertAppData{
-		Type: "CHAT",
-		Name: c.cfg.Name,
-		Lat:  0,
-		Lon:  0,
-	}
-
-	if c.cfg.HasLatLon() {
-		appData.Lat = int32(math.Round(*c.cfg.Latitude * 1_000_000.0))
-		appData.Lon = int32(math.Round(*c.cfg.Longitude * 1_000_000.0))
-	}
-
-	rawAppData, err := appData.ToBytes()
-	if err != nil {
-		return err
-	}
-
-	advert := meshcore.Advert{
-		PublicKey:  c.node.Identity().Identity,
-		Timestamp:  uint32(time.Now().Unix()),
-		RawAppData: rawAppData,
-	}
-	advert.Sign(c.node.Identity().PrivateKey())
-
-	payload, err := advert.ToBytes()
-	if err != nil {
-		return err
-	}
-
-	// Flood: ROUTE_TYPE_FLOOD with the path-hash-size nibble and a zero hop
-	// count. Zero-hop: ROUTE_TYPE_DIRECT with path length 0 (path_len==0 is what
-	// the firmware reads as "zero hop"), so neighbours accept but never relay it.
-	routeType := meshcore.RouteTypeFlood
-	pathLength := byte(meshcore.PathHashSize - 1)
-	if !flood {
-		routeType = meshcore.RouteTypeDirect
-		pathLength = 0
-	}
-
-	pkt := meshcore.Packet{
-		Header:     meshcore.MakeHeader(routeType, meshcore.PayloadTypeAdvert, 0),
-		PathLength: pathLength,
-		Payload:    payload,
-	}
-
-	mode := "flood"
-	if !flood {
-		mode = "zero-hop"
-	}
-	c.log.Info("sending self-advert", "mode", mode)
-
-	return c.node.SendPacket(&pkt)
+	// Companions always use 1-byte path hashes (mode 0); everything else is the
+	// shared self-advert build.
+	return advert.SendSelf(c.node, c.log, "CHAT", c.cfg.Name,
+		c.cfg.Latitude, c.cfg.Longitude, flood, 0, nil) // companions don't scope their floods
 }

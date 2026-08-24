@@ -2,6 +2,8 @@ package app
 
 import (
 	"context"
+	"errors"
+	"slices"
 
 	"github.com/meshcore-go/meshcore-bot/internal/api"
 	"github.com/meshcore-go/meshcore-bot/internal/config"
@@ -16,25 +18,35 @@ import (
 // configMutate is the shared write transaction: snapshot → apply → validate →
 // persist → reload, serialized on the store's writer goroutine.
 func (b *backend) configMutate(ctx context.Context, apply func(*configRows), persist func(*store.Store) error) error {
+	return writeConfigTx(ctx, b.db, b.reload, func(rows *configRows) error {
+		apply(rows)
+		if verr := assembleFromRows(rows).Validate(); verr != nil {
+			return verr
+		}
+		return persist(b.db)
+	})
+}
+
+// writeConfigTx is the shared config-write transaction skeleton: inside the
+// single writer it loads the row snapshot and runs work (which mutates,
+// validates, and persists), then reloads only if work succeeded. Both
+// backend.configMutate and the node's repeaterReconfigurer route through it so
+// the "load → validate → persist → reload" contract lives in one place.
+func writeConfigTx(ctx context.Context, db *store.Store, reload func() error, work func(*configRows) error) error {
 	var resultErr error
-	b.db.WriteSync(func() {
-		rows, err := loadConfigRows(ctx, b.db)
+	db.WriteSync(func() {
+		rows, err := loadConfigRows(ctx, db)
 		if err != nil {
 			resultErr = err
 			return
 		}
-		apply(rows)
-		if verr := assembleFromRows(rows).Validate(); verr != nil {
-			resultErr = verr
-			return
-		}
-		resultErr = persist(b.db)
+		resultErr = work(rows)
 	})
 	if resultErr != nil {
 		return resultErr
 	}
-	if b.reload != nil {
-		return b.reload()
+	if reload != nil {
+		return reload()
 	}
 	return nil
 }
@@ -306,6 +318,163 @@ func (b *backend) SaveTrigger(ctx context.Context, in api.TriggerInput) (int64, 
 		},
 	)
 	return row.ID, err
+}
+
+// CreateRepeater sets up the singleton repeater. Only identity is taken here;
+// the rest is edited via the section endpoints. A blank key is generated, and
+// the "*" wildcard scope is seeded so the new repeater relays plain unscoped
+// flood by default (firmware's implicit wildcard). Errors if one already exists.
+func (b *backend) CreateRepeater(ctx context.Context, in api.RepeaterCreateInput) error {
+	var row store.Repeater
+	exists := false
+	return b.configMutate(ctx,
+		func(rows *configRows) {
+			if rows.repeater != nil {
+				exists = true
+				return
+			}
+			row = store.Repeater{
+				Name:    in.Name,
+				Regions: []store.RepeaterRegion{{Name: config.WildcardRegion}},
+			}
+			if in.PrivateKey != nil && *in.PrivateKey != "" {
+				row.PrivateKey = *in.PrivateKey
+			} else {
+				row.PrivateKey, _ = config.GenerateSeedHex()
+			}
+			row.PubKey, _ = config.PubKeyHexFromSeed(row.PrivateKey)
+			rows.repeater = &row
+		},
+		func(st *store.Store) error {
+			if exists {
+				return errors.New("repeater already configured")
+			}
+			return st.Repeater.Set(ctx, &row)
+		},
+	)
+}
+
+// mutateRepeater applies a partial change to the existing repeater through one
+// validated, reloaded write (the per-section / per-region edit primitive). It
+// errors when no repeater is configured — sections can't be edited before one
+// exists — and that error short-circuits before the reload (persist returns it).
+func (b *backend) mutateRepeater(ctx context.Context, mutate func(*store.Repeater)) error {
+	var row store.Repeater
+	found := false
+	return b.configMutate(ctx,
+		func(rows *configRows) {
+			if rows.repeater == nil {
+				return
+			}
+			found = true
+			row = *rows.repeater
+			mutate(&row)
+			rows.repeater = &row
+		},
+		func(st *store.Store) error {
+			if !found {
+				return errors.New("no repeater configured")
+			}
+			return st.Repeater.Set(ctx, &row)
+		},
+	)
+}
+
+// UpdateRepeaterNode edits the Node section: name, position, and (only when a
+// value is given) rotates the identity key.
+func (b *backend) UpdateRepeaterNode(ctx context.Context, in api.RepeaterNodeInput) error {
+	return b.mutateRepeater(ctx, func(r *store.Repeater) {
+		r.Name = in.Name
+		r.Latitude = in.Latitude
+		r.Longitude = in.Longitude
+		if in.PrivateKey != nil && *in.PrivateKey != "" {
+			r.PrivateKey = *in.PrivateKey
+			r.PubKey, _ = config.PubKeyHexFromSeed(r.PrivateKey)
+		}
+	})
+}
+
+// UpdateRepeaterRelay edits the Relay-policy section.
+func (b *backend) UpdateRepeaterRelay(ctx context.Context, in api.RepeaterRelayInput) error {
+	return b.mutateRepeater(ctx, func(r *store.Repeater) {
+		r.DisableFwd = in.DisableFwd
+		r.FloodMax = in.FloodMax
+		r.FloodMaxUnscoped = in.FloodMaxUnscoped
+		r.FloodMaxAdvert = in.FloodMaxAdvert
+		r.LoopDetect = in.LoopDetect
+		r.PathHashMode = in.PathHashMode
+		r.DefaultRegion = in.DefaultRegion
+		r.AdvertInterval = in.AdvertInterval
+		r.FloodAdvertInterval = in.FloodAdvertInterval
+	})
+}
+
+// UpdateRepeaterAdmin edits the Owner & access section (nil password = keep).
+func (b *backend) UpdateRepeaterAdmin(ctx context.Context, in api.RepeaterAdminInput) error {
+	return b.mutateRepeater(ctx, func(r *store.Repeater) {
+		r.OwnerInfo = in.OwnerInfo
+		r.AdminPassword = keepSecret(in.AdminPassword, r.AdminPassword)
+		r.GuestPassword = keepSecret(in.GuestPassword, r.GuestPassword)
+	})
+}
+
+// AddRepeaterRegion adds a region (or updates its deny-flood flag if it already
+// exists, so a re-add is idempotent). Empty/invalid names are rejected by
+// Validate() inside mutateRepeater.
+func (b *backend) AddRepeaterRegion(ctx context.Context, in api.RepeaterRegionInput) error {
+	return b.mutateRepeater(ctx, func(r *store.Repeater) {
+		for i := range r.Regions {
+			if r.Regions[i].Name == in.Name {
+				r.Regions[i].DenyFlood = in.DenyFlood
+				return
+			}
+		}
+		r.Regions = append(r.Regions, store.RepeaterRegion{Name: in.Name, DenyFlood: in.DenyFlood})
+	})
+}
+
+// SetRepeaterRegionFlood toggles a region's deny-flood flag.
+func (b *backend) SetRepeaterRegionFlood(ctx context.Context, name string, denyFlood bool) error {
+	return b.mutateRepeater(ctx, func(r *store.Repeater) {
+		for i := range r.Regions {
+			if r.Regions[i].Name == name {
+				r.Regions[i].DenyFlood = denyFlood
+			}
+		}
+	})
+}
+
+// RemoveRepeaterRegion deletes a region. Removing "*" stops relaying unscoped
+// flood (see regionsFromConfig); removing the default advert scope clears it,
+// keeping DefaultRegion pointing at a configured region (Validate enforces it).
+func (b *backend) RemoveRepeaterRegion(ctx context.Context, name string) error {
+	return b.mutateRepeater(ctx, func(r *store.Repeater) {
+		r.Regions = slices.DeleteFunc(r.Regions, func(rg store.RepeaterRegion) bool { return rg.Name == name })
+		if r.DefaultRegion == name {
+			r.DefaultRegion = ""
+		}
+	})
+}
+
+func (b *backend) DeleteRepeater(ctx context.Context) error {
+	return b.configMutate(ctx,
+		func(rows *configRows) { rows.repeater = nil },
+		func(st *store.Store) error {
+			if err := st.RepeaterACL.Clear(ctx); err != nil { // drop admin-over-mesh clients
+				return err
+			}
+			return st.Repeater.Clear(ctx)
+		},
+	)
+}
+
+// keepSecret returns *in when the pointer is set (set/clear), else the stored
+// value — the "omit to keep" contract for redacted secret fields.
+func keepSecret(in *string, prev string) string {
+	if in != nil {
+		return *in
+	}
+	return prev
 }
 
 func (b *backend) DeleteTrigger(ctx context.Context, id int64) error {

@@ -355,6 +355,32 @@ func TestTriggerConfig_Validate(t *testing.T) {
 	}
 }
 
+func TestValidateRegionName(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		name    string
+		region  string
+		wantErr bool
+	}{
+		{"wildcard is exempt", "*", false},
+		{"named ok", "alpha", false},
+		{"empty invalid", "", true},
+		{"bad char invalid", "a b", true},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			err := validateRegionName(tt.region)
+			if tt.wantErr && err == nil {
+				t.Errorf("validateRegionName(%q) = nil, want error", tt.region)
+			}
+			if !tt.wantErr && err != nil {
+				t.Errorf("validateRegionName(%q) = %v, want nil", tt.region, err)
+			}
+		})
+	}
+}
+
 func TestChannelRef_Validate(t *testing.T) {
 	t.Parallel()
 

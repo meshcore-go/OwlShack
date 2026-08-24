@@ -88,6 +88,67 @@ export interface Trigger {
   schedule: string | null;
 }
 
+// The single repeater NODE (the relay the bot runs). Secret-redacted like a
+// companion. `configured` is false when no repeater is set up; `running`
+// reflects whether the live node is up.
+export interface ConfigRepeater {
+  configured: boolean;
+  running: boolean;
+  name: string;
+  pubkey: string;
+  privateKeySet: boolean;
+  latitude: number | null;
+  longitude: number | null;
+  advertInterval: number | null;
+  floodAdvertInterval: number | null;
+  disableFwd: boolean | null;
+  floodMax: number | null;
+  floodMaxUnscoped: number | null;
+  floodMaxAdvert: number | null;
+  loopDetect: string | null;
+  pathHashMode: number | null;
+  defaultRegion: string;
+  adminPasswordSet: boolean;
+  guestPasswordSet: boolean;
+  ownerInfo: string;
+  regions: RepeaterRegion[];
+}
+
+// A transport scope the repeater relays. The key derives from the name
+// (SHA256(name)[:16]); denyFlood excludes it from flood relaying.
+export interface RepeaterRegion {
+  name: string;
+  denyFlood: boolean;
+}
+
+// Live relay stats from the running repeater node (GET /api/repeater/status).
+export interface RepeaterNodeStats {
+  name: string;
+  pubkey: string;
+  uptimeSecs: number;
+  packetsReceived: number;
+  packetsForwarded: number;
+  txQueueLen: number;
+  neighbors: number;
+  latitude: number;
+  longitude: number;
+}
+
+export interface RepeaterNodeNeighbor {
+  pubkey: string;
+  name: string;
+  snr: number;
+  secsAgo: number;
+}
+
+// An admin client in the repeater's ACL (GET /api/repeater/acl).
+export interface RepeaterAclEntry {
+  pubkey: string;
+  name: string;
+  permission: number; // 0=guest 1=read-only 2=read-write 3=admin
+  lastSeen: number; // unix seconds
+}
+
 // --- write shapes (request bodies). Omit a secret field to keep it. ---
 
 export interface SettingsInput {
@@ -146,6 +207,37 @@ export interface CompanionInput {
 export interface ChannelInput {
   name: string;
   privateKey?: string; // omit = keep existing
+}
+
+// Repeater node config is edited per-section (no whole-config bulk write).
+export interface RepeaterCreateInput {
+  name: string;
+  privateKey?: string; // omit/blank = generate
+}
+
+export interface RepeaterNodeInput {
+  name: string;
+  privateKey?: string; // omit = keep identity; a value rotates it
+  latitude?: number | null;
+  longitude?: number | null;
+}
+
+export interface RepeaterRelayInput {
+  disableFwd?: boolean | null;
+  floodMax?: number | null;
+  floodMaxUnscoped?: number | null;
+  floodMaxAdvert?: number | null;
+  loopDetect?: string | null;
+  pathHashMode?: number | null;
+  defaultRegion?: string; // "" = unscoped flood adverts
+  advertInterval?: number | null;
+  floodAdvertInterval?: number | null;
+}
+
+export interface RepeaterAdminInput {
+  ownerInfo: string;
+  adminPassword?: string; // omit = keep, "" = clear
+  guestPassword?: string;
 }
 
 export interface TriggerInput {
@@ -219,4 +311,23 @@ export const configApi = {
       ? requestId(`/api/config/triggers/${id}`, "PUT", input)
       : requestId("/api/config/triggers", "POST", input),
   deleteTrigger: (id: number) => request(`/api/config/triggers/${id}`, "DELETE"),
+
+  createRepeater: (input: RepeaterCreateInput) =>
+    request("/api/config/repeater", "POST", input),
+  updateRepeaterNode: (input: RepeaterNodeInput) =>
+    request("/api/config/repeater/node", "PUT", input),
+  updateRepeaterRelay: (input: RepeaterRelayInput) =>
+    request("/api/config/repeater/relay", "PUT", input),
+  updateRepeaterAdmin: (input: RepeaterAdminInput) =>
+    request("/api/config/repeater/admin", "PUT", input),
+  addRepeaterRegion: (name: string, denyFlood: boolean) =>
+    request("/api/config/repeater/regions", "POST", { name, denyFlood }),
+  setRepeaterRegionFlood: (name: string, denyFlood: boolean) =>
+    request(`/api/config/repeater/regions/${encodeURIComponent(name)}`, "PATCH", { denyFlood }),
+  removeRepeaterRegion: (name: string) =>
+    request(`/api/config/repeater/regions/${encodeURIComponent(name)}`, "DELETE"),
+  deleteRepeater: () => request("/api/config/repeater", "DELETE"),
+  repeaterAdvert: (flood: boolean) => request("/api/repeater/advert", "POST", { flood }),
+  revokeRepeaterAcl: (pubkey: string) =>
+    request(`/api/repeater/acl/${encodeURIComponent(pubkey)}`, "DELETE"),
 };

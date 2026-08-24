@@ -62,6 +62,11 @@ const MqttPage = lazy(() =>
 const RadioPage = lazy(() =>
   import("@/pages/RadioPage").then((m) => ({ default: m.RadioPage })),
 );
+const RepeaterNodePage = lazy(() =>
+  import("@/pages/RepeaterNodePage").then((m) => ({
+    default: m.RepeaterNodePage,
+  })),
+);
 // Lazy so Leaflet (pulled in by the position picker) stays out of the main
 // bundle — the wizard only renders on first run.
 const SetupWizard = lazy(() =>
@@ -120,6 +125,7 @@ export function App() {
           <Route path="/bots" element={<BotsPage />} />
           <Route path="/mqtt" element={<MqttPage />} />
           <Route path="/radio" element={<RadioPage />} />
+          <Route path="/repeater" element={<RepeaterNodePage />} />
           <Route path="/companions" element={<CompanionsPage />} />
           <Route path="/companions/:name" element={<CompanionDetailPage />} />
           <Route
