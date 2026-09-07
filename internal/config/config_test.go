@@ -931,3 +931,42 @@ func TestChannelRefKeyLength(t *testing.T) {
 		}
 	}
 }
+
+// An spi:// radio is driven by this process, so the board's wiring is not
+// something a default can supply: the wrong reset or busy pin is a dead radio,
+// and the wrong RF-switch pin is a node nobody can hear. Absence must be
+// rejected rather than guessed.
+func TestValidate_SPIConnectionRequiresBoard(t *testing.T) {
+	board := "ultrapeaterzero-e22p"
+	for _, tc := range []struct {
+		name    string
+		conn    string
+		board   *string
+		wantErr bool
+	}{
+		{"spi without board", "spi://SPI0.0", nil, true},
+		{"spi with empty board", "spi://SPI0.0", strPtr(""), true},
+		{"spi with board", "spi://SPI0.0", &board, false},
+		{"serial needs no board", "serial:///dev/ttyACM0", nil, false},
+		{"tcp needs no board", "tcp://10.0.0.5:5000", nil, false},
+		{"unknown scheme", "usb://whatever", &board, true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			c := &Config{Connection: &tc.conn, SPIBoard: tc.board}
+			err := c.Validate()
+			if tc.wantErr && err == nil {
+				t.Fatalf("Validate() = nil, want an error for %q", tc.conn)
+			}
+			if !tc.wantErr && err != nil {
+				t.Fatalf("Validate() = %v, want nil for %q", err, tc.conn)
+			}
+		})
+	}
+}
+
+func TestParseConnection_SPI(t *testing.T) {
+	scheme, addr, ok := ParseConnection("spi://SPI0.0")
+	if !ok || scheme != "spi" || addr != "SPI0.0" {
+		t.Errorf("ParseConnection(spi://SPI0.0) = (%q, %q, %v), want (spi, SPI0.0, true)", scheme, addr, ok)
+	}
+}

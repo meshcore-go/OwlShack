@@ -836,3 +836,77 @@ func TestRegionPrefixLookup(t *testing.T) {
 		}
 	}
 }
+
+// The firmware does not ACL-gate telemetry. It reads the first reserved byte as
+// an INVERSE mask the requester supplies (perm_mask = ~payload[0]) and answers
+// admin and guest alike. Treating that byte as granted permissions, or gating
+// on the client's role, would drop readings a real client asked for.
+func TestTelemetryHonoursTheRequestersInverseMask(t *testing.T) {
+	newRepeater := func() *Repeater {
+		r := &Repeater{}
+		r.batteryMV.Store(4168)
+		r.mcuTempC.Store(215)
+		r.haveMCUTemp.Store(true)
+		return r
+	}
+
+	for _, tc := range []struct {
+		name   string
+		params []byte
+		want   int // readings on the self channel
+	}{
+		{"no params means everything", nil, 2},
+		{"zero mask means everything", []byte{0x00}, 2},
+		{"excluding environment leaves base alone", []byte{permTelemEnvironment}, 2},
+		{"excluding location leaves base alone", []byte{permTelemLocation}, 2},
+		{"excluding base drops it", []byte{permTelemBase}, 0},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			body, ok := newRepeater().buildReqResponse(
+				&store.RepeaterACLEntry{Permissions: permGuest}, reqTypeGetTelemetryData, tc.params)
+			if !ok {
+				t.Fatal("telemetry request was not answered; the firmware answers a guest too")
+			}
+			readings, err := meshcore.LPPDecode(body)
+			if err != nil {
+				t.Fatalf("LPPDecode: %v", err)
+			}
+			if len(readings) != tc.want {
+				t.Fatalf("got %d readings, want %d: %+v", len(readings), tc.want, readings)
+			}
+			for _, rd := range readings {
+				if rd.Channel != telemChannelSelf {
+					t.Errorf("reading on channel %d, want %d", rd.Channel, telemChannelSelf)
+				}
+			}
+		})
+	}
+}
+
+// A host with no battery must omit the voltage rather than publish 0 V, which
+// every client would read as a dead cell. This diverges from the firmware,
+// where getBattMilliVolts cannot express "no battery" and returns 0.
+func TestTelemetryOmitsBatteryWhenTheHostHasNone(t *testing.T) {
+	r := &Repeater{} // batteryMV left at 0, as on a Raspberry Pi
+	r.mcuTempC.Store(352)
+	r.haveMCUTemp.Store(true)
+
+	body, _ := r.buildReqResponse(&store.RepeaterACLEntry{Permissions: permAdmin}, reqTypeGetTelemetryData, nil)
+	readings, err := meshcore.LPPDecode(body)
+	if err != nil {
+		t.Fatalf("LPPDecode: %v", err)
+	}
+	// The temperature still reports: the battery is omitted, not the channel.
+	if len(readings) != 1 || readings[0].Value != 35.2 {
+		t.Fatalf("got %+v, want only the 35.2 C temperature", readings)
+	}
+
+	// A board that does report a battery still publishes it.
+	r.batteryMV.Store(4168)
+	body, _ = r.buildReqResponse(&store.RepeaterACLEntry{Permissions: permAdmin}, reqTypeGetTelemetryData, nil)
+	readings, _ = meshcore.LPPDecode(body)
+	// LPP voltage has 0.01 V resolution, so 4168 mV comes back as 4.16.
+	if len(readings) != 2 || readings[0].Value != 4.16 {
+		t.Errorf("got %+v, want the battery plus the temperature", readings)
+	}
+}

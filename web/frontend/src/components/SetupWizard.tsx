@@ -20,7 +20,7 @@ import { RadioPresetSelect } from "@/components/RadioPresetSelect";
 import { PositionPicker } from "@/components/PositionPicker";
 import { toast } from "sonner";
 import { cn } from "@/lib/utils";
-import { configApi, type Settings } from "@/lib/configApi";
+import { configApi, type Settings, type SpiBoard } from "@/lib/configApi";
 import { RestoreEntryButton, RestoreFromBackup } from "@/components/RestoreFromBackup";
 
 const BANDWIDTHS = [7.8, 10.4, 15.6, 20.8, 31.25, 41.7, 62.5, 125, 250, 500];
@@ -72,6 +72,11 @@ function StepDots({ current }: { current: Step }) {
   );
 }
 
+const SETUP_CONNECTION_TYPES = [
+  { value: "kiss", label: "KISS modem (serial / TCP)" },
+  { value: "spi", label: "SPI radio hat" },
+];
+
 export function SetupWizard({
   settings,
   onComplete,
@@ -83,10 +88,15 @@ export function SetupWizard({
   const [busy, setBusy] = useState(false);
 
   // Radio (pre-filled from the bootstrapped defaults).
+  const [connectionType, setConnectionType] = useState(
+    settings.connectionType || "kiss",
+  );
   const [connection, setConnection] = useState(
     settings.connection ?? "serial:///dev/ttyACM0",
   );
   const [baudRate, setBaudRate] = useState(String(settings.baudRate ?? 115200));
+  const [spiBoard, setSpiBoard] = useState(settings.spiBoard ?? "");
+  const [boards, setBoards] = useState<SpiBoard[]>([]);
   const [freq, setFreq] = useState(
     settings.freq != null ? String(settings.freq) : "917.375",
   );
@@ -104,8 +114,20 @@ export function SetupWizard({
   const [privateKey, setPrivateKey] = useState("");
   const [advertInterval, setAdvertInterval] = useState("");
 
+  const spi = connectionType === "spi";
+
+  useEffect(() => {
+    configApi
+      .getSpiBoards()
+      .then(setBoards)
+      .catch(() => setBoards([]));
+  }, []);
+
   const radioValid =
     connection.trim() !== "" &&
+    // An SPI radio is driven by this process, so it cannot start without
+    // knowing the board's wiring.
+    (!spi || spiBoard !== "") &&
     Number.isFinite(parseFloat(freq)) &&
     bw !== "" &&
     sf !== "" &&
@@ -129,11 +151,12 @@ export function SetupWizard({
       }
       await configApi.putSettings({
         // Round-trip the values the wizard doesn't edit so saving setupComplete never clears them.
-        connectionType: settings.connectionType,
+        connectionType,
         logLevel: settings.logLevel,
         listenAddr: settings.listenAddr,
         connection: connection.trim(),
         baudRate: parseInt(baudRate, 10) || 115200,
+        ...(spi ? { spiBoard } : {}),
         freq: parseFloat(freq) || null,
         bw: parseFloat(bw) || null,
         sf: parseInt(sf, 10) || null,
@@ -193,20 +216,58 @@ export function SetupWizard({
         {step === "radio" && (
           <div className="space-y-5">
             <div className="space-y-3">
-              <span className="label-overline">kiss modem · connection</span>
+              <span className="label-overline">
+                {spi ? "spi radio · connection" : "kiss modem · connection"}
+              </span>
               <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
+                <SelectField
+                  label="Radio backend"
+                  value={connectionType}
+                  options={SETUP_CONNECTION_TYPES}
+                  onChange={(v) => {
+                    setConnectionType(v);
+                    if (v === "spi") {
+                      if (!connection.startsWith("spi://")) {
+                        setConnection(`spi://${boards[0]?.spiPort ?? "SPI0.0"}`);
+                      }
+                      if (!spiBoard && boards.length > 0) setSpiBoard(boards[0].name);
+                    } else if (connection.startsWith("spi://")) {
+                      setConnection("serial:///dev/ttyACM0");
+                    }
+                  }}
+                />
                 <TextField
-                  label="Connection"
+                  label={spi ? "SPI port" : "Connection"}
                   value={connection}
                   onChange={setConnection}
-                  placeholder="serial:///dev/ttyACM0 or tcp://host:port"
+                  placeholder={
+                    spi ? "spi://SPI0.0" : "serial:///dev/ttyACM0 or tcp://host:port"
+                  }
                 />
-                <TextField
-                  label="Baud rate"
-                  value={baudRate}
-                  onChange={setBaudRate}
-                  placeholder="115200"
-                />
+                {spi ? (
+                  boards.length > 0 ? (
+                    <SelectField
+                      label="Radio hat"
+                      value={spiBoard}
+                      options={boards.map((b) => ({ value: b.name, label: b.label }))}
+                      onChange={setSpiBoard}
+                    />
+                  ) : (
+                    <TextField
+                      label="Radio hat"
+                      value={spiBoard}
+                      onChange={setSpiBoard}
+                      placeholder="ultrapeaterzero-e22p"
+                    />
+                  )
+                ) : (
+                  <TextField
+                    label="Baud rate"
+                    value={baudRate}
+                    onChange={setBaudRate}
+                    placeholder="115200"
+                  />
+                )}
               </div>
             </div>
             <div className="space-y-3">
@@ -350,6 +411,16 @@ export function SetupWizard({
                 </span>
                 <span className="truncate text-right">{connection}</span>
               </div>
+              {spi && (
+                <div className="flex justify-between gap-4 px-3 py-2">
+                  <span className="text-muted-foreground uppercase tracking-[0.08em]">
+                    Radio hat
+                  </span>
+                  <span className="truncate text-right">
+                    {boards.find((b) => b.name === spiBoard)?.label ?? spiBoard}
+                  </span>
+                </div>
+              )}
               <div className="flex justify-between gap-4 px-3 py-2">
                 <span className="text-muted-foreground uppercase tracking-[0.08em]">
                   Radio

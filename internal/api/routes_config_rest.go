@@ -16,6 +16,7 @@ type settingsDTO struct {
 	ConnectionType string   `json:"connectionType"`
 	Connection     *string  `json:"connection"`
 	BaudRate       *int     `json:"baudRate"`
+	SPIBoard       *string  `json:"spiBoard"`
 	Freq           *float64 `json:"freq"`
 	BW             *float64 `json:"bw"`
 	SF             *int     `json:"sf"`
@@ -133,7 +134,8 @@ func (s *Server) handleGetSettings(w http.ResponseWriter, r *http.Request) {
 	}
 	writeJSON(w, http.StatusOK, settingsDTO{
 		LogLevel: st.LogLevel, ConnectionType: st.ConnectionType, Connection: st.Connection,
-		BaudRate: st.BaudRate, Freq: st.Freq, BW: st.BW, SF: st.SF, CR: st.CR, TX: st.TX,
+		BaudRate: st.BaudRate, SPIBoard: st.SPIBoard,
+		Freq: st.Freq, BW: st.BW, SF: st.SF, CR: st.CR, TX: st.TX,
 		ListenAddr: st.ListenAddr, MapTileKey: st.MapTileKey, PathHashSize: st.PathHashSize,
 		DutyCycle: st.DutyCyclePct, SetupComplete: st.SetupComplete,
 	})
@@ -469,4 +471,16 @@ func (s *Server) handleMqttStatus(w http.ResponseWriter, r *http.Request) {
 		brokers = []MqttBrokerStatus{}
 	}
 	writeJSON(w, http.StatusOK, map[string]any{"running": true, "brokers": brokers})
+}
+
+// handleSPIBoards lists the radio hats this build supports. Empty when the
+// backend is not up yet, which the UI shows as "no boards available" rather
+// than an empty picker that looks like a working choice.
+func (s *Server) handleSPIBoards(w http.ResponseWriter, r *http.Request) {
+	b := s.backendRef()
+	if b == nil {
+		writeJSON(w, http.StatusOK, []SPIBoardInfo{})
+		return
+	}
+	writeJSON(w, http.StatusOK, b.SPIBoards())
 }

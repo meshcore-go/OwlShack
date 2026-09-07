@@ -29,4 +29,6 @@ require (
 	modernc.org/libc v1.75.6 // indirect
 	modernc.org/mathutil v1.7.1 // indirect
 	modernc.org/memory v1.12.1 // indirect
+	periph.io/x/conn/v3 v3.7.3
+	periph.io/x/host/v3 v3.8.5
 )

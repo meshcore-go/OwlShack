@@ -9,6 +9,7 @@ import (
 
 	"github.com/meshcore-go/OwlShack/internal/api"
 	"github.com/meshcore-go/OwlShack/internal/config"
+	"github.com/meshcore-go/OwlShack/internal/modem"
 	"github.com/meshcore-go/OwlShack/internal/node/companion"
 	"github.com/meshcore-go/OwlShack/internal/node/repeater"
 	"github.com/meshcore-go/OwlShack/internal/store"
@@ -299,3 +300,20 @@ func (b *backend) PersistChannels(ctx context.Context) error {
 }
 
 var _ api.Backend = (*backend)(nil)
+
+// SPIBoards lists the radio hats this build can wire, so the settings UI never
+// has to hardcode a board name the binary does not actually support.
+func (b *backend) SPIBoards() []api.SPIBoardInfo {
+	boards := modem.Boards()
+	out := make([]api.SPIBoardInfo, 0, len(boards))
+	for _, bd := range boards {
+		out = append(out, api.SPIBoardInfo{
+			Name:       bd.Name,
+			Label:      bd.Label,
+			Chip:       bd.Chip,
+			SPIPort:    bd.SPIPort,
+			MaxTxPower: int(bd.MaxTxPower),
+		})
+	}
+	return out
+}

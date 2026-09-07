@@ -95,7 +95,7 @@ func Marshal(path string, cfg *Config) ([]byte, error) {
 
 // ParseConnection splits "serial://<addr>" or "tcp://<addr>" into scheme and address.
 func ParseConnection(conn string) (scheme, addr string, ok bool) {
-	for _, prefix := range []string{"serial://", "tcp://"} {
+	for _, prefix := range []string{"serial://", "tcp://", "spi://"} {
 		if strings.HasPrefix(conn, prefix) {
 			return strings.TrimSuffix(prefix, "://"), conn[len(prefix):], true
 		}
@@ -106,9 +106,14 @@ func ParseConnection(conn string) (scheme, addr string, ok bool) {
 // Validate checks field ranges; nil pointers mean "use default" and are skipped.
 func (c *Config) Validate() error {
 	if c.Connection != nil {
-		_, _, ok := ParseConnection(*c.Connection)
+		scheme, _, ok := ParseConnection(*c.Connection)
 		if !ok {
-			return fmt.Errorf("invalid connection string %q: must start with serial:// or tcp://", *c.Connection)
+			return fmt.Errorf("invalid connection string %q: must start with serial://, tcp:// or spi://", *c.Connection)
+		}
+		// An spi:// radio is driven by this process, so it needs to know the
+		// board's wiring. Without it the pins are unknown, not defaultable.
+		if scheme == "spi" && (c.SPIBoard == nil || *c.SPIBoard == "") {
+			return fmt.Errorf("connection %q needs spiBoard set", *c.Connection)
 		}
 	}
 

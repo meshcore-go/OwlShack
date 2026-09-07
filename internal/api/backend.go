@@ -6,6 +6,10 @@ import "context"
 type Backend interface {
 	Companions() []CompanionInfo
 
+	// SPIBoards lists the radio hats this build knows how to wire, for the
+	// settings UI to choose from.
+	SPIBoards() []SPIBoardInfo
+
 	// ChannelByHash resolves a channel hash byte across every companion; nil when unknown.
 	ChannelByHash(hash byte) *ChannelInfo
 
@@ -100,19 +104,31 @@ type MqttBrokerStatus struct {
 
 // --- per-resource config write inputs (JSON request bodies) ---
 
+// SPIBoardInfo describes one supported radio hat.
+type SPIBoardInfo struct {
+	Name       string `json:"name"`
+	Label      string `json:"label"`
+	Chip       string `json:"chip"`
+	SPIPort    string `json:"spiPort"`
+	MaxTxPower int    `json:"maxTxPower"`
+}
+
 type SettingsInput struct {
-	LogLevel       *string  `json:"logLevel"`
-	ConnectionType *string  `json:"connectionType"`
-	Connection     *string  `json:"connection"`
-	BaudRate       *int     `json:"baudRate"`
-	Freq           *float64 `json:"freq"`
-	BW             *float64 `json:"bw"`
-	SF             *int     `json:"sf"`
-	CR             *int     `json:"cr"`
-	TX             *int     `json:"tx"`
-	ListenAddr     *string  `json:"listenAddr"`
-	MapTileKey     *string  `json:"mapTileKey"` // omit = keep, "" = clear
-	PathHashSize   *int     `json:"pathHashSize"`
+	LogLevel       *string `json:"logLevel"`
+	ConnectionType *string `json:"connectionType"`
+	Connection     *string `json:"connection"`
+	BaudRate       *int    `json:"baudRate"`
+	// SPIBoard names the radio hat for an spi:// connection. Omitted keeps the
+	// stored value: dropping it would leave a working SPI node with no wiring.
+	SPIBoard     *string  `json:"spiBoard"`
+	Freq         *float64 `json:"freq"`
+	BW           *float64 `json:"bw"`
+	SF           *int     `json:"sf"`
+	CR           *int     `json:"cr"`
+	TX           *int     `json:"tx"`
+	ListenAddr   *string  `json:"listenAddr"`
+	MapTileKey   *string  `json:"mapTileKey"` // omit = keep, "" = clear
+	PathHashSize *int     `json:"pathHashSize"`
 	// DutyCycle is a TX airtime cap percentage (0 < pct <= 100); null means the default, not "keep".
 	DutyCycle     *float64 `json:"dutyCycle"`
 	SetupComplete *bool    `json:"setupComplete"`

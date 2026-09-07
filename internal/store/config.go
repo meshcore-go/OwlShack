@@ -27,14 +27,16 @@ type Settings struct {
 	ConnectionType string
 	Connection     *string
 	BaudRate       *int
-	Freq           *float64
-	BW             *float64
-	SF             *int
-	CR             *int
-	TX             *int
-	ListenAddr     *string
-	MapTileKey     *string // CARTO basemap API key; nil/"" = keyless tiles
-	PathHashSize   *int    // default flood path hash width in bytes; nil = 1
+	// SPIBoard names the radio hat when Connection is spi://; nil for KISS.
+	SPIBoard     *string
+	Freq         *float64
+	BW           *float64
+	SF           *int
+	CR           *int
+	TX           *int
+	ListenAddr   *string
+	MapTileKey   *string // CARTO basemap API key; nil/"" = keyless tiles
+	PathHashSize *int    // default flood path hash width in bytes; nil = 1
 	// DutyCyclePct caps TX airtime per hour as a percentage; nil = library default (50%).
 	DutyCyclePct  *float64
 	SetupComplete bool
@@ -45,9 +47,9 @@ type SettingsRepo struct{ db *sql.DB }
 func (r *SettingsRepo) Get(ctx context.Context) (*Settings, error) {
 	var s Settings
 	err := r.db.QueryRowContext(ctx, `
-		SELECT log_level, connection_type, connection, baud_rate, freq, bw, sf, cr, tx, listen_addr, map_tile_key, path_hash_size, duty_cycle_pct, setup_complete
+		SELECT log_level, connection_type, connection, baud_rate, spi_board, freq, bw, sf, cr, tx, listen_addr, map_tile_key, path_hash_size, duty_cycle_pct, setup_complete
 		FROM settings WHERE id = 1`).Scan(
-		&s.LogLevel, &s.ConnectionType, &s.Connection, &s.BaudRate,
+		&s.LogLevel, &s.ConnectionType, &s.Connection, &s.BaudRate, &s.SPIBoard,
 		&s.Freq, &s.BW, &s.SF, &s.CR, &s.TX, &s.ListenAddr, &s.MapTileKey, &s.PathHashSize,
 		&s.DutyCyclePct, &s.SetupComplete,
 	)
@@ -60,16 +62,17 @@ func (r *SettingsRepo) Get(ctx context.Context) (*Settings, error) {
 func (r *SettingsRepo) Set(ctx context.Context, s *Settings) error {
 	_, err := r.db.ExecContext(ctx, `
 		INSERT INTO settings
-			(id, log_level, connection_type, connection, baud_rate, freq, bw, sf, cr, tx, listen_addr, map_tile_key, path_hash_size, duty_cycle_pct, setup_complete)
-		VALUES (1, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+			(id, log_level, connection_type, connection, baud_rate, spi_board, freq, bw, sf, cr, tx, listen_addr, map_tile_key, path_hash_size, duty_cycle_pct, setup_complete)
+		VALUES (1, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
 		ON CONFLICT(id) DO UPDATE SET
 			log_level=excluded.log_level, connection_type=excluded.connection_type,
+			spi_board=excluded.spi_board,
 			connection=excluded.connection, baud_rate=excluded.baud_rate, freq=excluded.freq,
 			bw=excluded.bw, sf=excluded.sf, cr=excluded.cr, tx=excluded.tx,
 			listen_addr=excluded.listen_addr, map_tile_key=excluded.map_tile_key,
 			path_hash_size=excluded.path_hash_size, duty_cycle_pct=excluded.duty_cycle_pct,
 			setup_complete=excluded.setup_complete`,
-		s.LogLevel, s.ConnectionType, s.Connection, s.BaudRate,
+		s.LogLevel, s.ConnectionType, s.Connection, s.BaudRate, s.SPIBoard,
 		s.Freq, s.BW, s.SF, s.CR, s.TX, s.ListenAddr, s.MapTileKey, s.PathHashSize,
 		s.DutyCyclePct, s.SetupComplete,
 	)

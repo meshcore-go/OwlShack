@@ -7,6 +7,7 @@ export interface Settings {
   connectionType: string;
   connection: string | null;
   baudRate: number | null;
+  spiBoard: string | null;
   freq: number | null;
   bw: number | null;
   sf: number | null;
@@ -18,6 +19,15 @@ export interface Settings {
   // TX airtime cap as a percentage, the unit the firmware uses. null = 50%.
   dutyCycle: number | null;
   setupComplete: boolean;
+}
+
+// One supported SPI radio hat, from GET /api/spi/boards.
+export interface SpiBoard {
+  name: string;
+  label: string;
+  chip: string;
+  spiPort: string;
+  maxTxPower: number;
 }
 
 export interface MqttSettings {
@@ -164,6 +174,7 @@ export interface SettingsInput {
   connectionType?: string | null;
   connection?: string | null;
   baudRate?: number | null;
+  spiBoard?: string | null; // omit = keep
   freq?: number | null;
   bw?: number | null;
   sf?: number | null;
@@ -290,6 +301,11 @@ async function request(
 }
 
 // Write handlers that create a resource return { id } of the new/affected row.
+async function requestJSON<T>(url: string, method: string, body?: unknown): Promise<T> {
+  const res = await request(url, method, body);
+  return (await res.json()) as T;
+}
+
 async function requestId(url: string, method: string, body?: unknown): Promise<number> {
   const res = await request(url, method, body);
   const json = (await res.json().catch(() => null)) as { id?: number } | null;
@@ -300,6 +316,9 @@ async function requestId(url: string, method: string, body?: unknown): Promise<n
 
 export const configApi = {
   putSettings: (input: SettingsInput) => request("/api/config/settings", "PUT", input),
+  // The radio hats this binary knows how to wire. Empty until the backend is
+  // up, which the UI shows as "no boards" rather than an empty picker.
+  getSpiBoards: () => requestJSON<SpiBoard[]>("/api/spi/boards", "GET"),
   putMqtt: (input: MqttInput) => request("/api/config/mqtt", "PUT", input),
 
   saveBroker: (input: BrokerInput, id?: number) =>

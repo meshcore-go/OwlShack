@@ -1,0 +1,124 @@
+package store
+
+import (
+	"testing"
+)
+
+func strPtr(s string) *string   { return &s }
+func intPtr2(i int) *int        { return &i }
+func fltPtr(f float64) *float64 { return &f }
+
+// Every settings column is written and read back with a distinct value. The
+// INSERT lists its columns and its placeholders separately and Scan lists the
+// destinations a third time, so adding a column in two of those three places
+// compiles, runs, and silently shifts every value after it into the wrong
+// field. A round trip is the only thing that notices.
+func TestSettings_RoundTripsEveryColumn(t *testing.T) {
+	t.Parallel()
+	st := newTestStore(t)
+	ctx := t.Context()
+
+	want := &Settings{
+		LogLevel:       strPtr("debug"),
+		ConnectionType: "spi",
+		Connection:     strPtr("spi://SPI0.0"),
+		BaudRate:       intPtr2(57600),
+		SPIBoard:       strPtr("ultrapeaterzero-e22p"),
+		Freq:           fltPtr(917.375),
+		BW:             fltPtr(62.5),
+		SF:             intPtr2(7),
+		CR:             intPtr2(5),
+		TX:             intPtr2(22),
+		ListenAddr:     strPtr(":8081"),
+		MapTileKey:     strPtr("tile-key"),
+		PathHashSize:   intPtr2(2),
+		DutyCyclePct:   fltPtr(12.5),
+		SetupComplete:  true,
+	}
+	if err := st.Settings.Set(ctx, want); err != nil {
+		t.Fatalf("Set: %v", err)
+	}
+	got, err := st.Settings.Get(ctx)
+	if err != nil {
+		t.Fatalf("Get: %v", err)
+	}
+
+	eqStr := func(field string, a, b *string) {
+		t.Helper()
+		switch {
+		case a == nil && b == nil:
+		case a == nil || b == nil:
+			t.Errorf("%s: got %v, want %v", field, deref(b), deref(a))
+		case *a != *b:
+			t.Errorf("%s: got %q, want %q", field, *b, *a)
+		}
+	}
+	eqStr("logLevel", want.LogLevel, got.LogLevel)
+	eqStr("connection", want.Connection, got.Connection)
+	eqStr("spiBoard", want.SPIBoard, got.SPIBoard)
+	eqStr("listenAddr", want.ListenAddr, got.ListenAddr)
+	eqStr("mapTileKey", want.MapTileKey, got.MapTileKey)
+	if got.ConnectionType != want.ConnectionType {
+		t.Errorf("connectionType: got %q, want %q", got.ConnectionType, want.ConnectionType)
+	}
+	for _, c := range []struct {
+		field string
+		a, b  *int
+	}{
+		{"baudRate", want.BaudRate, got.BaudRate},
+		{"sf", want.SF, got.SF},
+		{"cr", want.CR, got.CR},
+		{"tx", want.TX, got.TX},
+		{"pathHashSize", want.PathHashSize, got.PathHashSize},
+	} {
+		if c.a == nil || c.b == nil || *c.a != *c.b {
+			t.Errorf("%s: got %v, want %v", c.field, c.b, c.a)
+		}
+	}
+	for _, c := range []struct {
+		field string
+		a, b  *float64
+	}{
+		{"freq", want.Freq, got.Freq},
+		{"bw", want.BW, got.BW},
+		{"dutyCyclePct", want.DutyCyclePct, got.DutyCyclePct},
+	} {
+		if c.a == nil || c.b == nil || *c.a != *c.b {
+			t.Errorf("%s: got %v, want %v", c.field, c.b, c.a)
+		}
+	}
+	if !got.SetupComplete {
+		t.Error("setupComplete: got false, want true")
+	}
+}
+
+// A KISS install leaves spi_board NULL, and it must stay NULL rather than come
+// back as the empty string: the config layer rejects an spi:// connection whose
+// board is unset, and "" would read as set.
+func TestSettings_SPIBoardStaysNullForKiss(t *testing.T) {
+	t.Parallel()
+	st := newTestStore(t)
+	ctx := t.Context()
+
+	if err := st.Settings.Set(ctx, &Settings{
+		ConnectionType: "kiss",
+		Connection:     strPtr("serial:///dev/ttyACM0"),
+		Freq:           fltPtr(917.375),
+	}); err != nil {
+		t.Fatalf("Set: %v", err)
+	}
+	got, err := st.Settings.Get(ctx)
+	if err != nil {
+		t.Fatalf("Get: %v", err)
+	}
+	if got.SPIBoard != nil {
+		t.Errorf("spiBoard = %q, want nil for a KISS connection", *got.SPIBoard)
+	}
+}
+
+func deref(s *string) string {
+	if s == nil {
+		return "<nil>"
+	}
+	return *s
+}

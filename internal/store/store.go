@@ -201,6 +201,7 @@ var migrations = []func(context.Context, dbExecer) error{
 	migrateV5,   // 7 — repeater flood_max_unscoped + default_region columns
 	migrateV6,   // 8 — map tile key, home region, advert clamp, path hash size, relay timing
 	migrateV7,   // 9 — settings.duty_cycle_pct (TX airtime budget)
+	migrateV8,   // 10 — settings.spi_board (SPI radio hat wiring)
 }
 
 // dbExecer is the subset of *sql.DB / *sql.Tx a migration needs.
@@ -600,6 +601,13 @@ func migrateV5(ctx context.Context, db dbExecer) error {
 		ALTER TABLE repeater ADD COLUMN flood_max_unscoped INTEGER;
 		ALTER TABLE repeater ADD COLUMN default_region TEXT NOT NULL DEFAULT '';
 	`)
+	return err
+}
+
+// migrateV8 adds the SPI radio hat selector. Only meaningful when connection
+// is spi://; NULL for a KISS modem, which is every pre-existing install.
+func migrateV8(ctx context.Context, db dbExecer) error {
+	_, err := db.ExecContext(ctx, `ALTER TABLE settings ADD COLUMN spi_board TEXT`)
 	return err
 }
 
