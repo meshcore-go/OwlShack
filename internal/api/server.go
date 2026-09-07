@@ -54,6 +54,14 @@ type RepeaterOps struct {
 	NeighborsReq func(pubkeyHex string, count uint8, offset uint16) (any, error)
 	OwnerInfoReq func(pubkeyHex string) (any, error)
 	TelemetryReq func(pubkeyHex string) (any, error)
+	// RoomStatusReq is StatusReq for a room server (ServerStats trailer).
+	RoomStatusReq func(pubkeyHex string) (any, error)
+	// RoomKeepAlive sends REQ_TYPE_KEEP_ALIVE (direct only) so the room resumes
+	// pushing posts newer than since (0 = its stored cursor).
+	RoomKeepAlive func(pubkeyHex string, since uint32) error
+	// SeriesReq is the sensor min/max/avg history (GET_AVG_MIN_MAX); bounds are
+	// seconds before now, start being the older edge.
+	SeriesReq func(pubkeyHex string, startSecsAgo, endSecsAgo uint32) (any, error)
 	// ContactTelemetryReq requests telemetry from a non-repeater contact
 	// (no login session — uses the ECDH secret with the contact).
 	ContactTelemetryReq func(pubkeyHex string) (any, error)
@@ -103,6 +111,11 @@ func (s *Server) routes() {
 	s.mux.HandleFunc("GET /api/config/settings", s.handleGetSettings)
 	s.mux.HandleFunc("GET /api/config/mqtt", s.handleGetMqtt)
 	s.mux.HandleFunc("GET /api/config/mqtt/brokers", s.handleGetBrokers)
+	s.mux.HandleFunc("GET /api/mqtt/status", s.handleMqttStatus)
+
+	s.mux.HandleFunc("POST /api/backup", s.handleBackupExport)
+	s.mux.HandleFunc("POST /api/backup/estimate", s.handleBackupEstimate)
+	s.mux.HandleFunc("POST /api/backup/import", s.handleBackupImport)
 	s.mux.HandleFunc("GET /api/config/companions", s.handleGetCompanions)
 	s.mux.HandleFunc("GET /api/config/companions/{id}/channels", s.handleGetCompanionChannels)
 	s.mux.HandleFunc("GET /api/config/channels", s.handleGetAllChannels)
@@ -166,17 +179,23 @@ func (s *Server) routes() {
 	s.mux.HandleFunc("GET /api/companions/{name}/repeaters/{pubkey}/neighbors", s.handleRepeaterNeighbors)
 	s.mux.HandleFunc("GET /api/companions/{name}/repeaters/{pubkey}/owner", s.handleRepeaterOwnerInfo)
 	s.mux.HandleFunc("GET /api/companions/{name}/repeaters/{pubkey}/telemetry", s.handleRepeaterTelemetry)
+	s.mux.HandleFunc("GET /api/companions/{name}/repeaters/{pubkey}/history", s.handleRepeaterSeries)
 	s.mux.HandleFunc("GET /api/companions/{name}/repeaters/{pubkey}/access", s.handleRepeaterAccessList)
 	s.mux.HandleFunc("PUT /api/companions/{name}/repeaters/{pubkey}/access/{target}", s.handleRepeaterAccessSet)
 	s.mux.HandleFunc("DELETE /api/companions/{name}/repeaters/{pubkey}/access/{target}", s.handleRepeaterAccessRemove)
 	s.mux.HandleFunc("POST /api/companions/{name}/rooms/{pubkey}/login", s.handleRoomLogin)
 	s.mux.HandleFunc("GET /api/companions/{name}/rooms/{pubkey}/session", s.handleRepeaterSession)
 	s.mux.HandleFunc("DELETE /api/companions/{name}/rooms/{pubkey}/session", s.handleRepeaterLogout)
+	s.mux.HandleFunc("GET /api/companions/{name}/rooms/{pubkey}/status", s.handleRoomStatus)
+	s.mux.HandleFunc("POST /api/companions/{name}/rooms/{pubkey}/keepalive", s.handleRoomKeepAlive)
 	s.mux.HandleFunc("GET /api/repeater/status", s.handleRepeaterNodeStatus)
 	s.mux.HandleFunc("GET /api/repeater/neighbors", s.handleRepeaterNodeNeighbors)
 	s.mux.HandleFunc("GET /api/repeater/acl", s.handleRepeaterNodeACL)
 	s.mux.HandleFunc("DELETE /api/repeater/acl/{pubkey}", s.handleRepeaterNodeRevoke)
 	s.mux.HandleFunc("POST /api/repeater/advert", s.handleRepeaterNodeAdvert)
+	s.mux.HandleFunc("POST /api/repeater/discover", s.handleRepeaterNodeDiscover)
+	s.mux.HandleFunc("PUT /api/repeater/acl/{pubkey}", s.handleRepeaterNodeSetACL)
+	s.mux.HandleFunc("DELETE /api/repeater/stats", s.handleRepeaterNodeClearStats)
 	s.mux.HandleFunc("GET /api/nodes/monitored", s.handleListMonitoredNodes)
 	s.mux.HandleFunc("GET /api/nodes/neighbor-links", s.handleListNeighborLinks)
 	s.mux.HandleFunc("GET /api/nodes/{pubkey}/metrics", s.handleListNodeMetricNames)
@@ -267,6 +286,15 @@ func (s *Server) ChannelLookup() ChannelLookup {
 	return nil
 }
 
+// peerAdder returns the in-memory peer registration op, or nil when no backend
+// is wired (the contact row still persists; hydration picks it up on restart).
+func (s *Server) peerAdder() func([]byte, string, string) {
+	if b := s.backendRef(); b != nil {
+		return b.AddPeer
+	}
+	return nil
+}
+
 // peerRemover returns the in-memory peer eviction op, or nil when no backend is
 // wired (the DB delete still runs; in-memory cleanup is best-effort).
 func (s *Server) peerRemover() func([][]byte) {
@@ -336,7 +364,7 @@ func (s *Server) spaHandler() http.Handler {
 		} else {
 			w.Header().Set("Cache-Control", "no-cache")
 		}
-		f, err := s.assets.Open(r.URL.Path[1:])
+		f, err := s.assets.Open(strings.TrimPrefix(r.URL.Path, "/"))
 		if err != nil {
 			r.URL.Path = "/"
 			fileServer.ServeHTTP(w, r)

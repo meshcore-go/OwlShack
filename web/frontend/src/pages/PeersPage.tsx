@@ -1,5 +1,12 @@
 import { useCallback, useMemo, useState } from "react";
-import { Check, CircleDashed, RefreshCw, Search, Users } from "lucide-react";
+import {
+  Check,
+  ChevronDown,
+  CircleDashed,
+  RefreshCw,
+  Search,
+  Users,
+} from "lucide-react";
 import { toast } from "sonner";
 import { useWebSocket } from "@/hooks/useWebSocket";
 import { useApiList } from "@/hooks/useApiList";
@@ -20,6 +27,13 @@ import {
   TableHeader,
   TableRow,
 } from "@/components/ui/table";
+import {
+  DropdownMenu,
+  DropdownMenuContent,
+  DropdownMenuRadioGroup,
+  DropdownMenuRadioItem,
+  DropdownMenuTrigger,
+} from "@/components/ui/dropdown-menu";
 import { PageHeader } from "@/components/PageHeader";
 import { ConnectionPill, PeerTypePill } from "@/components/StatusIndicator";
 import { SignalStrength } from "@/components/SignalStrength";
@@ -64,7 +78,7 @@ function SelectBox({
         onChange();
       }}
       className={cn(
-        "flex size-4 shrink-0 items-center justify-center border transition-colors",
+        "relative flex size-4 shrink-0 items-center justify-center border transition-colors before:absolute before:-inset-3 before:content-[''] sm:before:hidden",
         checked
           ? "border-primary bg-primary text-primary-foreground"
           : "border-border hover:border-primary/60",
@@ -257,12 +271,18 @@ export function PeersPage() {
               onChange={(e: React.ChangeEvent<HTMLInputElement>) =>
                 setSearch(e.target.value)
               }
-              className="pl-9 font-mono text-xs"
+              className="pl-9 font-mono text-base md:text-xs"
             />
           </div>
         </div>
 
-        <div className="flex flex-wrap gap-1 px-4 py-3 border-b border-border">
+        <div className="flex flex-wrap items-center gap-1 px-4 py-3 border-b border-border">
+          <span className="label-overline mr-2 sm:hidden">Filter</span>
+          <PeerTypeMenu
+            value={typeFilter}
+            onChange={setTypeFilter}
+            countFor={(t) => (t === "ALL" ? peers.length : typeCounts[t] || 0)}
+          />
           {TYPE_FILTERS.map((t) => {
             const active = typeFilter === t;
             const count = t === "ALL" ? peers.length : typeCounts[t] || 0;
@@ -272,7 +292,7 @@ export function PeersPage() {
                 type="button"
                 onClick={() => setTypeFilter(t)}
                 className={cn(
-                  "inline-flex items-center gap-1.5 px-2 py-1 border font-mono text-[10px] uppercase tracking-[0.12em] transition-colors",
+                  "hidden sm:inline-flex items-center gap-1.5 px-2 py-1 border font-mono text-[10px] uppercase tracking-[0.12em] transition-colors",
                   active
                     ? "border-primary/50 bg-primary/10 text-primary"
                     : "border-border bg-transparent text-muted-foreground hover:text-foreground hover:border-border",
@@ -517,5 +537,53 @@ export function PeersPage() {
 
       <PeerDetailSheet {...sheetProps} companions={companions} />
     </div>
+  );
+}
+
+// PeerTypeMenu is the phone-sized form of the type chips — single-select, so
+// radio items. Mirrors PacketsPage's PacketTypeMenu and MapPage's FilterMenu.
+function PeerTypeMenu({
+  value,
+  onChange,
+  countFor,
+}: {
+  value: TypeFilter;
+  onChange: (v: TypeFilter) => void;
+  countFor: (t: TypeFilter) => number;
+}) {
+  return (
+    <DropdownMenu>
+      <DropdownMenuTrigger asChild>
+        <button
+          type="button"
+          className="sm:hidden relative inline-flex items-center gap-1.5 border border-border bg-card px-2 py-1 font-mono text-[10px] uppercase tracking-[0.12em] text-muted-foreground before:absolute before:inset-x-0 before:-inset-y-2 before:content-['']"
+        >
+          <span className="text-foreground">{value}</span>
+          <span className="tabular-nums text-muted-foreground/60">
+            {countFor(value)}
+          </span>
+          <ChevronDown className="size-3" />
+        </button>
+      </DropdownMenuTrigger>
+      <DropdownMenuContent align="start" className="rounded-sm">
+        <DropdownMenuRadioGroup
+          value={value}
+          onValueChange={(v) => onChange(v as TypeFilter)}
+        >
+          {TYPE_FILTERS.map((t) => (
+            <DropdownMenuRadioItem
+              key={t}
+              value={t}
+              className="font-mono text-[11px] uppercase tracking-[0.08em]"
+            >
+              {t}
+              <span className="ml-auto pl-3 tabular-nums text-muted-foreground/70">
+                {countFor(t)}
+              </span>
+            </DropdownMenuRadioItem>
+          ))}
+        </DropdownMenuRadioGroup>
+      </DropdownMenuContent>
+    </DropdownMenu>
   );
 }

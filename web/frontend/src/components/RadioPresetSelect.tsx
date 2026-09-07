@@ -8,6 +8,10 @@ export interface RadioPreset {
   bw: number;
   sf: number;
   cr: number;
+  // Path hash width the region runs, in bytes. Shown in the label but not
+  // applied: it's a per-node routing setting (the repeater's Path hash mode),
+  // not part of the shared RF config these fields write.
+  pathHashSize?: number;
 }
 
 const PRESETS = RADIO_PRESETS as RadioPreset[];
@@ -21,7 +25,8 @@ function matches(p: RadioPreset, freq: string, bw: string, sf: string, cr: strin
   );
 }
 
-// Community radio presets (mirrors the official app's "Select Radio Settings").
+// Community radio presets, generated from the official app's config feed
+// (https://api.meshcore.nz/api/v1/config → suggested_radio_settings.entries).
 // The selection is derived from the live RF fields, so manually typing values
 // that match a preset shows that preset; anything else shows "Custom". An
 // explicit pick is remembered only to disambiguate presets that share the same
@@ -64,7 +69,9 @@ export function RadioPresetSelect({
         { value: "custom", label: "Custom" },
         ...PRESETS.map((p) => ({
           value: p.name,
-          label: `${p.name} · ${p.freq} / SF${p.sf} / BW${p.bw} / CR${p.cr}`,
+          label:
+            `${p.name} · ${p.freq} / SF${p.sf} / BW${p.bw} / CR${p.cr}` +
+            (p.pathHashSize ? ` / ${p.pathHashSize}B` : ""),
         })),
       ]}
       onChange={apply}

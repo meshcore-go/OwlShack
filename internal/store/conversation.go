@@ -15,6 +15,9 @@ type Conversation struct {
 	LastMessage *ConversationMessage
 	UnreadCount int
 	LastActive  time.Time
+	// LastMessageID orders threads by when we learned of the newest message: a
+	// remote node's clock can be wrong, so LastActive is not a sort key.
+	LastMessageID int64
 }
 
 type ConversationMessage struct {
@@ -62,15 +65,16 @@ func (r *ConversationRepo) channelConversation(ctx context.Context, companionID 
 		Name: channel,
 	}
 
+	var lastID sql.NullInt64
 	var text, sender, direction sql.NullString
 	var ts sql.NullTime
 	err := r.db.QueryRowContext(ctx, `
-		SELECT text, sender, direction, timestamp
+		SELECT id, text, sender, direction, timestamp
 		FROM messages
 		WHERE companion_id = ? AND channel = ?
 		ORDER BY id DESC LIMIT 1`,
 		companionID, channel,
-	).Scan(&text, &sender, &direction, &ts)
+	).Scan(&lastID, &text, &sender, &direction, &ts)
 
 	if err == nil && text.Valid {
 		conv.LastMessage = &ConversationMessage{
@@ -80,6 +84,7 @@ func (r *ConversationRepo) channelConversation(ctx context.Context, companionID 
 			Timestamp: ts.Time,
 		}
 		conv.LastActive = ts.Time
+		conv.LastMessageID = lastID.Int64
 	} else if err != nil && !errors.Is(err, sql.ErrNoRows) {
 		return nil, fmt.Errorf("querying last channel message: %w", err)
 	}
@@ -116,15 +121,16 @@ func (r *ConversationRepo) contactConversation(ctx context.Context, companionID 
 		Name: ct.Name,
 	}
 
+	var lastID sql.NullInt64
 	var text, sender, direction sql.NullString
 	var ts sql.NullTime
 	err := r.db.QueryRowContext(ctx, `
-		SELECT text, sender, direction, timestamp
+		SELECT id, text, sender, direction, timestamp
 		FROM messages
 		WHERE companion_id = ? AND channel = ?
 		ORDER BY id DESC LIMIT 1`,
 		companionID, channelKey,
-	).Scan(&text, &sender, &direction, &ts)
+	).Scan(&lastID, &text, &sender, &direction, &ts)
 
 	if err == nil && text.Valid {
 		conv.LastMessage = &ConversationMessage{
@@ -134,6 +140,7 @@ func (r *ConversationRepo) contactConversation(ctx context.Context, companionID 
 			Timestamp: ts.Time,
 		}
 		conv.LastActive = ts.Time
+		conv.LastMessageID = lastID.Int64
 	} else if err != nil && !errors.Is(err, sql.ErrNoRows) {
 		return nil, fmt.Errorf("querying last contact message: %w", err)
 	}

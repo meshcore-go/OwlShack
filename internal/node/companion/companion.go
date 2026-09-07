@@ -107,7 +107,7 @@ func NewCompanion(cfg config.CompanionConfig, mux *node.RadioMux, st *store.Stor
 		store:       st,
 		hub:         hub,
 		echoTracker: echoTracker,
-		repeaters:   repeater.NewClient(n, st, log),
+		repeaters:   repeater.NewClient(n, st, cfg.ID, log),
 	}
 
 	// Register the companion's channels — the single source of truth for which
@@ -145,6 +145,15 @@ func NewCompanion(cfg config.CompanionConfig, mux *node.RadioMux, st *store.Stor
 	companion.registerPacketHandlers()
 
 	return companion, nil
+}
+
+// MqttStatus reports the connection state of this companion's MQTT brokers,
+// or ok=false when it isn't the node feeding MQTT.
+func (c *Companion) MqttStatus() ([]mqtt.BrokerStatus, bool) {
+	if c.obs == nil {
+		return nil, false
+	}
+	return c.obs.BrokerStatuses(), true
 }
 
 func (c *Companion) Start(ctx context.Context) error {
@@ -224,3 +233,8 @@ func (c *Companion) Node() *node.Node {
 func (c *Companion) Repeaters() *repeater.Client {
 	return c.repeaters
 }
+
+// Observer returns this companion's MQTT observer, or nil when it isn't the
+// feeding node. Callers use it to push what only the process knows: the TX
+// stream (from the modem's outbound handler) and the relay flag.
+func (c *Companion) Observer() *mqtt.Observer { return c.obs }

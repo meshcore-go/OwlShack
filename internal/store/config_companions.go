@@ -16,13 +16,14 @@ type Companion struct {
 	Latitude       *float64
 	Longitude      *float64
 	AdvertInterval *int
+	PathHashSize   *int // nil = inherit the global settings default
 }
 
 type CompanionRepo struct{ db *sql.DB }
 
 func scanCompanion(s interface{ Scan(...any) error }) (*Companion, error) {
 	var c Companion
-	if err := s.Scan(&c.ID, &c.Name, &c.PrivateKey, &c.PubKey, &c.Latitude, &c.Longitude, &c.AdvertInterval); err != nil {
+	if err := s.Scan(&c.ID, &c.Name, &c.PrivateKey, &c.PubKey, &c.Latitude, &c.Longitude, &c.AdvertInterval, &c.PathHashSize); err != nil {
 		return nil, err
 	}
 	return &c, nil
@@ -30,7 +31,7 @@ func scanCompanion(s interface{ Scan(...any) error }) (*Companion, error) {
 
 func (r *CompanionRepo) List(ctx context.Context) ([]Companion, error) {
 	rows, err := r.db.QueryContext(ctx, `
-		SELECT id, name, private_key, pubkey, latitude, longitude, advert_interval
+		SELECT id, name, private_key, pubkey, latitude, longitude, advert_interval, path_hash_size
 		FROM companions ORDER BY id ASC`)
 	if err != nil {
 		return nil, fmt.Errorf("querying companions: %w", err)
@@ -52,7 +53,7 @@ func (r *CompanionRepo) List(ctx context.Context) ([]Companion, error) {
 
 func (r *CompanionRepo) Get(ctx context.Context, id int64) (*Companion, error) {
 	c, err := scanCompanion(r.db.QueryRowContext(ctx, `
-		SELECT id, name, private_key, pubkey, latitude, longitude, advert_interval
+		SELECT id, name, private_key, pubkey, latitude, longitude, advert_interval, path_hash_size
 		FROM companions WHERE id = ?`, id))
 	if err != nil {
 		return nil, fmt.Errorf("getting companion: %w", err)
@@ -75,9 +76,9 @@ func (r *CompanionRepo) IDByName(ctx context.Context, name string) (int64, error
 // Create inserts a companion and sets c.ID to the new surrogate key.
 func (r *CompanionRepo) Create(ctx context.Context, c *Companion) error {
 	res, err := r.db.ExecContext(ctx, `
-		INSERT INTO companions (name, private_key, pubkey, latitude, longitude, advert_interval)
-		VALUES (?, ?, ?, ?, ?, ?)`,
-		c.Name, c.PrivateKey, c.PubKey, c.Latitude, c.Longitude, c.AdvertInterval)
+		INSERT INTO companions (name, private_key, pubkey, latitude, longitude, advert_interval, path_hash_size)
+		VALUES (?, ?, ?, ?, ?, ?, ?)`,
+		c.Name, c.PrivateKey, c.PubKey, c.Latitude, c.Longitude, c.AdvertInterval, c.PathHashSize)
 	if err != nil {
 		return fmt.Errorf("inserting companion: %w", err)
 	}
@@ -90,9 +91,9 @@ func (r *CompanionRepo) Create(ctx context.Context, c *Companion) error {
 
 func (r *CompanionRepo) Update(ctx context.Context, c *Companion) error {
 	_, err := r.db.ExecContext(ctx, `
-		UPDATE companions SET name=?, private_key=?, pubkey=?, latitude=?, longitude=?, advert_interval=?
+		UPDATE companions SET name=?, private_key=?, pubkey=?, latitude=?, longitude=?, advert_interval=?, path_hash_size=?
 		WHERE id=?`,
-		c.Name, c.PrivateKey, c.PubKey, c.Latitude, c.Longitude, c.AdvertInterval, c.ID)
+		c.Name, c.PrivateKey, c.PubKey, c.Latitude, c.Longitude, c.AdvertInterval, c.PathHashSize, c.ID)
 	if err != nil {
 		return fmt.Errorf("updating companion: %w", err)
 	}

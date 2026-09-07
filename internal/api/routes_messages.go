@@ -270,7 +270,12 @@ func (s *Server) handleRetryMessage(w http.ResponseWriter, r *http.Request) {
 	}
 
 	// Delete the failed message — dmSender will create a new one with fresh status tracking
-	_ = s.store.Messages.Delete(r.Context(), messageID)
+	var delErr error
+	s.store.WriteSync(func() { delErr = s.store.Messages.Delete(r.Context(), messageID) })
+	if delErr != nil {
+		s.serverError(w, "failed to delete message", delErr)
+		return
+	}
 
 	pubkeyHex := strings.TrimPrefix(msg.Channel, "dm:")
 	if sendErr := dmSender(pubkeyHex, msg.Text); sendErr != nil {

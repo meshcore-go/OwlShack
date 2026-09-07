@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import type { Dispatch, SetStateAction } from "react";
 
 interface ApiList<T> {
@@ -22,8 +22,10 @@ export function useApiList<T>(
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
 
+  const seq = useRef(0);
   const reload = useCallback(() => {
     if (!url) return;
+    const id = ++seq.current;
     setLoading(true);
     setError(null);
     fetch(url)
@@ -31,13 +33,22 @@ export function useApiList<T>(
         if (!r.ok) throw new Error(errorMessage);
         return r.json();
       })
-      .then((data: T[] | null) => setItems(data || []))
-      .catch(() => setError(errorMessage))
-      .finally(() => setLoading(false));
+      .then((data: T[] | null) => {
+        if (seq.current === id) setItems(data || []);
+      })
+      .catch(() => {
+        if (seq.current === id) setError(errorMessage);
+      })
+      .finally(() => {
+        if (seq.current === id) setLoading(false);
+      });
   }, [url, errorMessage]);
 
   useEffect(() => {
     reload();
+    return () => {
+      seq.current++;
+    };
   }, [reload]);
 
   return { items, setItems, loading, error, reload };

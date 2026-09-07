@@ -1,4 +1,4 @@
-import { useEffect, useState } from "react";
+import { useCallback, useEffect, useState } from "react";
 import {
   CircleDashed,
   Loader2,
@@ -21,6 +21,8 @@ import {
   DialogHeader,
   DialogTitle,
 } from "@/components/ui/dialog";
+import { timeAgo } from "@/lib/format";
+import { cn } from "@/lib/utils";
 import { useApiList } from "@/hooks/useApiList";
 import { useApiObject } from "@/hooks/useApiObject";
 import {
@@ -30,6 +32,24 @@ import {
   type ConfigCompanion,
   type MqttSettings,
 } from "@/lib/configApi";
+
+// Live connection state from GET /api/mqtt/status. Keyed by broker NAME, which
+// is what the observer knows — it never sees the config table's surrogate id.
+interface BrokerStatus {
+  name: string;
+  connected: boolean;
+  enabled: boolean;
+  lastError?: string;
+  lastErrorTs?: number;
+  connectedTs?: number;
+  published: number;
+  dropped: number;
+}
+
+interface MqttStatus {
+  running: boolean;
+  brokers: BrokerStatus[];
+}
 
 // A broker draft is the editable form state: every broker field except the
 // secret, which is entered separately (blank = keep the stored one).
@@ -169,6 +189,36 @@ export function MqttPage() {
   const loading = mqttLoading || brokersLoading;
   const error = mqttError || brokersError;
 
+  // Connection state is runtime, not config, so it polls rather than riding
+  // the config reload. 5s matches the repeater page's live tab.
+  const [status, setStatus] = useState<MqttStatus | null>(null);
+  useEffect(() => {
+    let live = true;
+    let inFlight = false;
+    const poll = async () => {
+      if (inFlight) return; // a slow poll must not stack up behind the interval
+      inFlight = true;
+      try {
+        const r = await fetch("/api/mqtt/status");
+        const json = r.ok ? await r.json() : null;
+        if (live) setStatus(json);
+      } catch {
+        if (live) setStatus(null);
+      } finally {
+        inFlight = false;
+      }
+    };
+    poll();
+    const id = setInterval(poll, 5000);
+    return () => {
+      live = false;
+      clearInterval(id);
+    };
+  }, []);
+  const statusFor = (name: string) =>
+    status?.brokers.find((b) => b.name === name);
+  const feed: FeedState = !status ? "unknown" : status.running ? "live" : "stopped";
+
   const saveFeed = async () => {
     setSavingFeed(true);
     try {
@@ -207,8 +257,17 @@ export function MqttPage() {
         title="MQTT"
         meta={
           brokers && (
-            <span className="font-mono text-sm text-muted-foreground tabular-nums">
-              {list.length} broker{list.length === 1 ? "" : "s"}
+            <span className="flex items-center gap-3">
+              <span className="font-mono text-sm text-muted-foreground tabular-nums">
+                {list.length} broker{list.length === 1 ? "" : "s"}
+              </span>
+              {status && list.length > 0 && (
+                <span className="font-mono text-[10px] uppercase tracking-[0.12em] text-muted-foreground">
+                  {status.running
+                    ? `${status.brokers.filter((b) => b.connected).length}/${status.brokers.filter((b) => b.enabled).length} connected`
+                    : "observer stopped"}
+                </span>
+              )}
             </span>
           )
         }
@@ -317,11 +376,16 @@ export function MqttPage() {
                 {list.map((b) => (
                   <div key={b.id} className="flex items-center gap-4 px-4 py-3">
                     <div
-                      className={
-                        b.enabled
-                          ? "size-9 grid place-items-center rounded-sm border border-primary/30 bg-primary/10 text-primary shrink-0"
-                          : "size-9 grid place-items-center rounded-sm border border-border bg-muted/40 text-muted-foreground/50 shrink-0"
-                      }
+                      className={cn(
+                        "size-9 grid place-items-center rounded-sm border shrink-0",
+                        !b.enabled || feed === "stopped"
+                          ? "border-border bg-muted/40 text-muted-foreground/50"
+                          : statusFor(b.name)?.connected
+                            ? "border-success/40 bg-success/10 text-success"
+                            : feed === "live"
+                              ? "border-destructive/40 bg-destructive/10 text-destructive"
+                              : "border-primary/30 bg-primary/10 text-primary",
+                      )}
                     >
                       <Rss className="size-4" strokeWidth={1.6} />
                     </div>
@@ -330,10 +394,12 @@ export function MqttPage() {
                         <span className="font-mono text-sm font-semibold truncate">
                           {b.name}
                         </span>
-                        {!b.enabled && (
+                        {!b.enabled ? (
                           <span className="font-mono text-[10px] uppercase tracking-widest text-muted-foreground/60">
                             disabled
                           </span>
+                        ) : (
+                          <BrokerStatusPill st={statusFor(b.name)} feed={feed} />
                         )}
                       </div>
                       <code className="font-mono text-xs text-muted-foreground block truncate">
@@ -342,6 +408,11 @@ export function MqttPage() {
                         {b.packetTopic || "meshcore/{iata}/{pubkey}/…"} · auth{" "}
                         {b.authType || "none"}
                       </code>
+                      <BrokerStatusLine
+                        st={statusFor(b.name)}
+                        enabled={b.enabled}
+                        feed={feed}
+                      />
                     </div>
                     <div className="flex items-center gap-1 shrink-0">
                       <Button
@@ -446,7 +517,7 @@ function BrokerEditor({
 
   return (
     <Dialog open onOpenChange={(o) => !o && onClose()}>
-      <DialogContent className="rounded-none sm:max-w-xl max-h-[85vh] overflow-y-auto">
+      <DialogContent className="rounded-none sm:max-w-xl max-h-[85dvh] overflow-y-auto">
         <DialogHeader>
           <DialogTitle className="font-mono text-sm uppercase tracking-widest">
             {broker ? `Edit broker — ${broker.name}` : "Add broker"}
@@ -623,5 +694,93 @@ function BrokerEditor({
         </div>
       </DialogContent>
     </Dialog>
+  );
+}
+
+// FeedState separates "no answer yet" and "the observer isn't running" from a
+// real connection failure — only the last of those is red.
+type FeedState = "unknown" | "stopped" | "live";
+
+// BrokerStatusPill answers "are we connected" at a glance.
+function BrokerStatusPill({ st, feed }: { st?: BrokerStatus; feed: FeedState }) {
+  if (feed === "unknown") return null;
+  if (feed === "stopped") {
+    return (
+      <span className="inline-flex items-center gap-1.5 border border-border px-1.5 py-0.5 font-mono text-[10px] uppercase tracking-[0.12em] text-muted-foreground/60">
+        <span className="size-1.5 rounded-full bg-muted-foreground/40" aria-hidden />
+        feed off
+      </span>
+    );
+  }
+  const connected = !!st?.connected;
+  return (
+    <span
+      className={cn(
+        "inline-flex items-center gap-1.5 border px-1.5 py-0.5 font-mono text-[10px] uppercase tracking-[0.12em]",
+        connected
+          ? "border-success/40 bg-success/5 text-success"
+          : "border-destructive/40 bg-destructive/5 text-destructive",
+      )}
+    >
+      <span
+        className={cn(
+          "size-1.5 rounded-full",
+          connected ? "bg-success animate-pulse" : "bg-destructive",
+        )}
+        aria-hidden
+      />
+      {connected ? "connected" : "offline"}
+    </span>
+  );
+}
+
+// BrokerStatusLine carries the detail behind the pill: why it is offline, and
+// what it has published. The error shows even while connected, so a broker that
+// is flapping or dropping publishes is still visible.
+function BrokerStatusLine({
+  st,
+  enabled,
+  feed,
+}: {
+  st?: BrokerStatus;
+  enabled: boolean;
+  feed: FeedState;
+}) {
+  if (!enabled || !st || feed !== "live") return null;
+  const parts: string[] = [];
+  if (st.connected) {
+    if (st.connectedTs) {
+      parts.push(`up ${timeAgo(new Date(st.connectedTs * 1000).toISOString())}`);
+    }
+  } else {
+    // The observer retries a failed broker indefinitely with backoff, so an
+    // offline broker recovers on its own — say so rather than looking dead.
+    parts.push("retrying");
+  }
+  if (st.published) parts.push(`${st.published} published`);
+  if (st.dropped) parts.push(`${st.dropped} dropped`);
+  if (!parts.length && !st.lastError) return null;
+  return (
+    <div className="space-y-0.5">
+      {parts.length > 0 && (
+        <span className="block font-mono text-[10px] uppercase tracking-[0.12em] text-muted-foreground/60 tabular-nums">
+          {parts.join(" · ")}
+        </span>
+      )}
+      {st.lastError && (
+        <span
+          className={cn(
+            "block font-mono text-[10px] truncate",
+            st.connected ? "text-muted-foreground/60" : "text-destructive",
+          )}
+          title={st.lastError}
+        >
+          {st.lastError}
+          {st.lastErrorTs
+            ? ` · ${timeAgo(new Date(st.lastErrorTs * 1000).toISOString())}`
+            : ""}
+        </span>
+      )}
+    </div>
   );
 }

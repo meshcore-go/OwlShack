@@ -197,6 +197,8 @@ function ChannelRow({
           onAskRemove={onAskRemove}
           onCancel={onCancel}
           onConfirm={onConfirm}
+          iconOnly
+          ariaLabel="Remove channel"
         />
       </div>
     </div>

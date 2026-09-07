@@ -21,17 +21,32 @@ import (
 
 const (
 	reqTypeGetStatus        = 0x01
+	reqTypeKeepAlive        = 0x02 // rooms: resume the post push stream
 	reqTypeGetTelemetryData = 0x03
+	reqTypeGetAvgMinMax     = 0x04 // sensors only
 	reqTypeGetAccessList    = 0x05
 	reqTypeGetNeighbors     = 0x06
 	reqTypeGetOwnerInfo     = 0x07
 	txtTypeCliData          = 1
 	cliPrefixLen            = 3
+	respServerLoginOK       = 0 // login reply byte 4
 )
 
+// isLoginReply distinguishes a login reply ([ts:4][RESP_OK][0][isAdmin][perms]
+// [rand:4][ver]) from a tagged REQ response arriving while a login is pending.
+// Byte 4 alone also matched a status body whose batt_milli_volts low byte is 0;
+// byte 5 is the firmware's always-zero legacy keep-alive field.
+func isLoginReply(data []byte) bool {
+	return len(data) >= 13 && data[4] == respServerLoginOK && data[5] == 0
+}
+
 type Session struct {
-	PubKeyHex    string    `json:"pubkeyHex"`
-	IsAdmin      bool      `json:"isAdmin"`
+	PubKeyHex string `json:"pubkeyHex"`
+	IsAdmin   bool   `json:"isAdmin"`
+	// Permissions is the ACL byte the node reported at login (reply byte 7 on
+	// repeaters and sensors): low 2 bits role, and on sensors bits 6–7 the
+	// alert subscription.
+	Permissions  int       `json:"permissions"`
 	Role         string    `json:"role,omitempty"` // room sessions: "admin" | "read-write" | "read-only"
 	IsRoom       bool      `json:"isRoom,omitempty"`
 	LoggedInAt   time.Time `json:"loggedInAt"`
@@ -59,9 +74,10 @@ type pendingLogin struct {
 }
 
 type Client struct {
-	node  *node.Node
-	store *store.Store
-	log   *slog.Logger
+	node        *node.Node
+	store       *store.Store
+	companionID int64 // owner of the contact rows that persist learned routes
+	log         *slog.Logger
 
 	mu       sync.Mutex
 	sessions map[string]*Session
@@ -74,22 +90,43 @@ type Client struct {
 
 	cliMu      sync.Mutex
 	cliPending map[string]chan string
+
+	tsMu   sync.Mutex
+	lastTS uint32
 }
 
-func NewClient(n *node.Node, st *store.Store, log *slog.Logger) *Client {
+// UniqueTimestamp returns a strictly increasing epoch-seconds value for the
+// timestamps we stamp on requests, logins and CLI messages — the firmware's
+// getCurrentTimeUnique(). Remote nodes drop a timestamp <= the last one they
+// saw from us as a replay, and treat an equal CLI timestamp as a retry that is
+// not executed and not answered, so two sends in one wall-clock second must
+// still differ.
+func (rm *Client) UniqueTimestamp() uint32 {
+	rm.tsMu.Lock()
+	defer rm.tsMu.Unlock()
+	ts := uint32(time.Now().Unix())
+	if ts <= rm.lastTS {
+		ts = rm.lastTS + 1
+	}
+	rm.lastTS = ts
+	return ts
+}
+
+func NewClient(n *node.Node, st *store.Store, companionID int64, log *slog.Logger) *Client {
 	return &Client{
-		node:       n,
-		store:      st,
-		log:        log,
-		sessions:   make(map[string]*Session),
-		pending:    make(map[uint32]*pendingRequest),
-		cliPending: make(map[string]chan string),
+		node:        n,
+		store:       st,
+		companionID: companionID,
+		log:         log,
+		sessions:    make(map[string]*Session),
+		pending:     make(map[uint32]*pendingRequest),
+		cliPending:  make(map[string]chan string),
 	}
 }
 
 func (rm *Client) persistOutPath(pubkey []byte, path []byte, hashSize uint8) {
 	rm.store.WriteAsync(func() {
-		if err := rm.store.Peers.UpdateOutPath(context.Background(), pubkey, path, hashSize); err != nil {
+		if err := rm.store.Contacts.UpdateOutPath(context.Background(), rm.companionID, pubkey, path, hashSize); err != nil {
 			rm.log.Error("failed to persist out_path", "error", err)
 		}
 	})
@@ -165,7 +202,7 @@ func (rm *Client) sendBinaryRequest(pubkeyHex string, body []byte, timeout time.
 // OutPath is known, else flood), and awaits the tagged response (tag stripped).
 // storeSecret carries the secret on the pending entry for sessionless matching.
 func (rm *Client) roundtripRequest(peerPub [32]byte, peer *node.Peer, sharedSecret []byte, localPubByte byte, body []byte, timeout time.Duration, label string, storeSecret bool) ([]byte, error) {
-	tag := uint32(time.Now().Unix())
+	tag := rm.UniqueTimestamp()
 
 	plaintext := make([]byte, 4+len(body))
 	binary.LittleEndian.PutUint32(plaintext[:4], tag)

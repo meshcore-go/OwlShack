@@ -34,10 +34,41 @@ func resolveConfig(ctx context.Context, db *store.Store, importPath string) (*co
 	if err != nil {
 		return nil, err
 	}
+	// A restored database can arrive with identity keys stripped (the operator
+	// chose not to export them). Mint them before Validate, which would
+	// otherwise see two blank keys as duplicates and stop startup.
+	if err := mintMissingKeys(ctx, db, cfg); err != nil {
+		return nil, err
+	}
 	if verr := cfg.Validate(); verr != nil {
 		return nil, fmt.Errorf("stored config invalid: %w", verr)
 	}
 	return cfg, nil
+}
+
+// mintMissingKeys generates and persists identities for stored nodes that have
+// none, so they survive the next restart rather than being regenerated.
+func mintMissingKeys(ctx context.Context, db *store.Store, cfg *config.Config) error {
+	missing := 0
+	for _, c := range cfg.Companions {
+		if c.PrivateKey == "" {
+			missing++
+		}
+	}
+	if cfg.Repeater != nil && cfg.Repeater.PrivateKey == "" {
+		missing++
+	}
+	if missing == 0 {
+		return nil
+	}
+	if err := cfg.EnsureNodeKeys(); err != nil {
+		return err
+	}
+	if err := persistToTables(ctx, db, cfg); err != nil {
+		return fmt.Errorf("persisting generated identities: %w", err)
+	}
+	slog.Warn("generated missing node identities; this node has a new address on the mesh", "count", missing)
+	return nil
 }
 
 func importConfigFile(ctx context.Context, db *store.Store, path string) (*config.Config, error) {

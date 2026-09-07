@@ -284,7 +284,7 @@ export function NodeStatGrid({
     );
   }
   return (
-    <div className={cn("grid gap-px bg-border", className || "grid-cols-3")}>
+    <div className={cn("grid gap-px bg-border", className || "grid-cols-2 sm:grid-cols-3")}>
       {tiles.map((t) => {
         const series = t.metric && history ? history[t.metric] : undefined;
         const spark =

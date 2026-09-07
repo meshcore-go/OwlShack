@@ -6,7 +6,16 @@ import {
   type ReactNode,
 } from "react";
 import { Link, useNavigate, useParams } from "react-router-dom";
-import { Check, Copy, MapPin, MessageSquare, Pencil } from "lucide-react";
+import {
+  Activity,
+  Check,
+  Copy,
+  DoorOpen,
+  MapPin,
+  MessageSquare,
+  Pencil,
+  Radio,
+} from "lucide-react";
 import { toast } from "sonner";
 import { Alert, AlertDescription, AlertTitle } from "@/components/ui/alert";
 import { Button } from "@/components/ui/button";
@@ -14,6 +23,7 @@ import { Input } from "@/components/ui/input";
 import { Skeleton } from "@/components/ui/skeleton";
 import { BackLink } from "@/components/BackLink";
 import { PeerAvatar } from "@/components/PeerAvatar";
+import { PositionPicker, round6 } from "@/components/PositionPicker";
 import { PeerTypePill } from "@/components/StatusIndicator";
 import { TelemetryPanel } from "@/components/TelemetryPanel";
 import { advertPathInfo } from "@/components/PeerDetailSheet";
@@ -94,6 +104,20 @@ export function ContactDetailPage() {
     ? "Flood"
     : `${route.hops} hop${route.hops === 1 ? "" : "s"}`;
 
+  const contactType = contact?.type?.toUpperCase();
+  const isRepeater = contactType === "REPEATER";
+  const isSensor = contactType === "SENSOR";
+  const isRoom = contactType === "ROOM";
+  // Repeaters and sensors speak the admin protocol, not chat: their action is
+  // Manage. (Sensor firmware treats an inbound TXT_MSG as a CLI command.) A
+  // room is both — its chat is the dm: thread — so it gets Message and Manage.
+  const manageTo = isSensor
+    ? `/companions/${encodeURIComponent(companion)}/sensors/${contactPubkey}`
+    : isRoom
+      ? `/companions/${encodeURIComponent(companion)}/rooms/${contactPubkey}`
+      : `/companions/${encodeURIComponent(companion)}/repeaters/${contactPubkey}`;
+  const messageTo = `/companions/${encodeURIComponent(companion)}?channel=${encodeURIComponent(`dm:${contactPubkey}`)}`;
+
   return (
     <div className="space-y-8">
       <div className="flex flex-col gap-3">
@@ -102,30 +126,52 @@ export function ContactDetailPage() {
           label="Contacts"
         />
 
-        <div className="flex items-start gap-4">
+        <div className="flex flex-wrap items-start gap-4">
           <PeerAvatar name={displayName} size="lg" />
-          <div className="min-w-0 space-y-1">
-            <div className="flex items-center gap-2">
+          <div className="min-w-0 flex-1 space-y-1">
+            <div className="flex items-center gap-2 min-w-0">
               <h1 className="text-lg font-semibold truncate">{displayName}</h1>
-              {contact?.type && <PeerTypePill type={contact.type} />}
+              {contact?.type && (
+                <span className="shrink-0">
+                  <PeerTypePill type={contact.type} />
+                </span>
+              )}
             </div>
             <code className="font-mono text-xs text-muted-foreground break-all">
               {truncateMid(contactPubkey, 10, 8)}
             </code>
           </div>
-          <div className="ml-auto shrink-0">
+          <div className="basis-full sm:basis-auto sm:ml-auto shrink-0 flex items-center gap-2">
+            {isRoom && (
+              <Button
+                asChild
+                variant="outline"
+                size="sm"
+                className="font-mono text-xs uppercase tracking-widest"
+              >
+                <Link to={manageTo}>
+                  <DoorOpen className="size-3.5" />
+                  Manage
+                </Link>
+              </Button>
+            )}
             <Button
               asChild
               variant="default"
               size="sm"
               className="font-mono text-xs uppercase tracking-widest"
             >
-              <Link
-                to={`/companions/${encodeURIComponent(companion)}?channel=${encodeURIComponent(`dm:${contactPubkey}`)}`}
-              >
-                <MessageSquare className="size-3.5" />
-                Message
-              </Link>
+              {isRepeater || isSensor ? (
+                <Link to={manageTo}>
+                  {isSensor ? <Activity className="size-3.5" /> : <Radio className="size-3.5" />}
+                  Manage
+                </Link>
+              ) : (
+                <Link to={messageTo}>
+                  <MessageSquare className="size-3.5" />
+                  Message
+                </Link>
+              )}
             </Button>
           </div>
         </div>
@@ -156,7 +202,7 @@ export function ContactDetailPage() {
                 <button
                   type="button"
                   onClick={copyKey}
-                  className="inline-flex items-center gap-1.5 font-mono text-xs hover:text-primary transition-colors"
+                  className="inline-flex items-center gap-1.5 py-3 -my-3 sm:py-0 sm:my-0 font-mono text-xs hover:text-primary transition-colors"
                 >
                   <span className="break-all">
                     {truncateMid(contactPubkey, 10, 10)}
@@ -215,12 +261,19 @@ export function ContactDetailPage() {
           </section>
 
           <section className="panel p-4">
-            <TelemetryPanel apiBase={apiBase} />
+            <TelemetryPanel
+              apiBase={apiBase}
+              errorHint={
+                isSensor
+                  ? "A sensor only answers clients in its ACL — log in once via Manage, then retry."
+                  : undefined
+              }
+            />
           </section>
 
-          {/* Only chat nodes have a monitoring collector (sessionless telemetry);
-              rooms/sensors aren't pollable yet, so no panel for them. */}
-          {contact.type?.toUpperCase() === "CHAT" && (
+          {/* Chat nodes, sensors and rooms all answer the sessionless telemetry
+              request the companion collector sends. */}
+          {(contact.type?.toUpperCase() === "CHAT" || isSensor || isRoom) && (
             <MonitoringSettings
               companionName={companion}
               pubkey={contactPubkey}
@@ -326,16 +379,24 @@ function LocationPanel({
               onChange={(e) => setLatStr(e.target.value)}
               placeholder="lat"
               inputMode="decimal"
-              className="font-mono text-xs"
+              className="font-mono text-base md:text-xs"
             />
             <Input
               value={lonStr}
               onChange={(e) => setLonStr(e.target.value)}
               placeholder="lon"
               inputMode="decimal"
-              className="font-mono text-xs"
+              className="font-mono text-base md:text-xs"
             />
           </div>
+          <PositionPicker
+            lat={parseFloat(latStr)}
+            lon={parseFloat(lonStr)}
+            onPick={(la, lo) => {
+              setLatStr(round6(la));
+              setLonStr(round6(lo));
+            }}
+          />
           <div className="flex justify-end gap-2">
             <Button
               variant="ghost"

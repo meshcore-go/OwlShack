@@ -11,16 +11,17 @@ import (
 )
 
 type conversationJSON struct {
-	ID          string               `json:"id"`
-	Type        string               `json:"type"`
-	Name        string               `json:"name"`
-	Channel     string               `json:"channel"`
-	LastMessage *conversationMsgJSON `json:"lastMessage,omitempty"`
-	UnreadCount int                  `json:"unreadCount"`
-	LastActive  string               `json:"lastActive,omitempty"`
-	PeerType    string               `json:"peerType,omitempty"`
-	IsRepeater  bool                 `json:"isRepeater,omitempty"`
-	PubKey      string               `json:"pubkey,omitempty"`
+	ID            string               `json:"id"`
+	Type          string               `json:"type"`
+	Name          string               `json:"name"`
+	Channel       string               `json:"channel"`
+	LastMessage   *conversationMsgJSON `json:"lastMessage,omitempty"`
+	UnreadCount   int                  `json:"unreadCount"`
+	LastActive    string               `json:"lastActive,omitempty"`
+	LastMessageID int64                `json:"lastMessageId,omitempty"`
+	PeerType      string               `json:"peerType,omitempty"`
+	IsRepeater    bool                 `json:"isRepeater,omitempty"`
+	PubKey        string               `json:"pubkey,omitempty"`
 }
 
 type conversationMsgJSON struct {
@@ -102,12 +103,13 @@ func (s *Server) handleListConversations(w http.ResponseWriter, r *http.Request)
 			channel = "dm:" + pubkey
 		}
 		cj := conversationJSON{
-			ID:          c.ID,
-			Type:        c.Type,
-			Name:        c.Name,
-			Channel:     channel,
-			UnreadCount: c.UnreadCount,
-			PubKey:      pubkey,
+			ID:            c.ID,
+			Type:          c.Type,
+			Name:          c.Name,
+			Channel:       channel,
+			UnreadCount:   c.UnreadCount,
+			PubKey:        pubkey,
+			LastMessageID: c.LastMessageID,
 		}
 		if pubkey != "" {
 			cj.PeerType = peerTypes[pubkey]

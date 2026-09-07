@@ -12,6 +12,8 @@ import (
 	"github.com/meshcore-go/OwlShack/internal/node/companion"
 	"github.com/meshcore-go/OwlShack/internal/node/repeater"
 	"github.com/meshcore-go/OwlShack/internal/store"
+	meshcore "github.com/meshcore-go/meshcore-go"
+	"github.com/meshcore-go/meshcore-go/node"
 )
 
 // repeaterReqTimeout bounds every repeater round-trip initiated from the API.
@@ -74,6 +76,21 @@ func (b *backend) ChannelByHash(hash byte) *api.ChannelInfo {
 		}
 	}
 	return nil
+}
+
+// AddPeer registers a manually added contact with every companion's in-memory
+// peer table, so it is reachable without waiting for an advert.
+func (b *backend) AddPeer(pubkey []byte, name, peerType string) {
+	id, err := meshcore.NewIdentityFromBytes(pubkey)
+	if err != nil {
+		return
+	}
+	for _, c := range b.companions {
+		if c.Node().Peers().Lookup(id.PublicKey()) != nil {
+			continue // already known — don't clobber a heard advert
+		}
+		c.Node().Peers().Insert(&node.Peer{Identity: id, Name: name, Type: peerType, LastSeen: time.Now()})
+	}
 }
 
 // RemovePeers evicts the given peers from every companion's in-memory peer
@@ -178,6 +195,15 @@ func (b *backend) Repeater(name string) (*api.RepeaterOps, bool) {
 		TelemetryReq: func(pubkeyHex string) (any, error) {
 			return rm.SendTelemetryReq(pubkeyHex, repeaterReqTimeout)
 		},
+		RoomStatusReq: func(pubkeyHex string) (any, error) {
+			return rm.SendRoomStatusReq(pubkeyHex, repeaterReqTimeout)
+		},
+		RoomKeepAlive: func(pubkeyHex string, since uint32) error {
+			return rm.SendRoomKeepAlive(pubkeyHex, since)
+		},
+		SeriesReq: func(pubkeyHex string, startSecsAgo, endSecsAgo uint32) (any, error) {
+			return rm.SendSeriesReq(pubkeyHex, startSecsAgo, endSecsAgo, repeaterReqTimeout)
+		},
 		ContactTelemetryReq: func(pubkeyHex string) (any, error) {
 			return rm.SendContactTelemetryReq(pubkeyHex, repeaterReqTimeout)
 		},
@@ -190,6 +216,43 @@ func (b *backend) Repeater(name string) (*api.RepeaterOps, bool) {
 	}, true
 }
 
+// MqttStatus finds the companion running the MQTT observer (only one does) and
+// converts its broker states to the api DTO.
+func (b *backend) MqttStatus() ([]api.MqttBrokerStatus, bool) {
+	for _, c := range b.companions {
+		sts, ok := c.MqttStatus()
+		if !ok {
+			continue
+		}
+		out := make([]api.MqttBrokerStatus, 0, len(sts))
+		for _, s := range sts {
+			st := api.MqttBrokerStatus{
+				Name:        s.Name,
+				Host:        s.Host,
+				Port:        s.Port,
+				Transport:   s.Transport,
+				TLS:         s.TLS,
+				AuthType:    s.AuthType,
+				Enabled:     s.Enabled,
+				Connected:   s.Connected,
+				LastError:   s.LastError,
+				Published:   s.Published,
+				Dropped:     s.Dropped,
+				StatusTopic: s.StatusTopic,
+			}
+			if !s.LastErrorAt.IsZero() {
+				st.LastErrorTs = s.LastErrorAt.Unix()
+			}
+			if !s.ConnectedAt.IsZero() {
+				st.ConnectedTs = s.ConnectedAt.Unix()
+			}
+			out = append(out, st)
+		}
+		return out, true
+	}
+	return nil, false
+}
+
 // RepeaterNode exposes the single running repeater node's runtime operations,
 // or ok=false when no repeater is configured/running.
 func (b *backend) RepeaterNode() (*api.RepeaterNodeOps, bool) {
@@ -198,12 +261,15 @@ func (b *backend) RepeaterNode() (*api.RepeaterNodeOps, bool) {
 	}
 	rep := b.repeater
 	return &api.RepeaterNodeOps{
-		Name:      rep.Name(),
-		Stats:     func() any { return rep.Stats() },
-		Neighbors: func() any { return rep.Neighbors() },
-		Advert:    rep.SendAdvert,
-		ACL:       func() any { return rep.ACLList() },
-		RevokeACL: rep.RevokeACL,
+		Name:       rep.Name(),
+		Stats:      func() any { return rep.Stats() },
+		Neighbors:  func() any { return rep.Neighbors() },
+		Advert:     rep.SendAdvert,
+		Discover:   rep.SendDiscover,
+		ACL:        func() any { return rep.ACLList() },
+		RevokeACL:  rep.RevokeACL,
+		SetACL:     rep.SetACL,
+		ClearStats: rep.ClearStats,
 	}, true
 }
 
@@ -215,9 +281,14 @@ func (b *backend) PersistChannels(ctx context.Context) error {
 		return fmt.Errorf("reading config for persist: %w", err)
 	}
 
-	for i, comp := range b.companions {
-		if i >= len(cfg.Companions) {
-			break
+	byName := make(map[string]int, len(cfg.Companions))
+	for i, cc := range cfg.Companions {
+		byName[cc.Name] = i
+	}
+	for _, comp := range b.companions {
+		i, ok := byName[comp.Name()]
+		if !ok {
+			continue
 		}
 		channels := comp.StandaloneChannels()
 		if len(channels) > 0 {

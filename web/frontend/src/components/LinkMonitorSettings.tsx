@@ -15,6 +15,7 @@ import {
 import { InlineConfirm } from "@/components/InlineConfirm";
 import { cn } from "@/lib/utils";
 import { RETRY_OPTS, MAX_RETRIES_OPTS } from "@/lib/monitorOptions";
+import { apiErrorMessage } from "@/lib/apiError";
 
 export interface LinkMonitorInfo {
   id: number;
@@ -149,11 +150,11 @@ export function LinkMonitorSettings({
     setDeleting(true);
     try {
       const r = await fetch(`/api/links/${link.id}`, { method: "DELETE" });
-      if (!r.ok && r.status !== 204) throw new Error(await r.text());
+      if (!r.ok && r.status !== 204) throw new Error(await apiErrorMessage(r));
       toast.success("Link monitor deleted");
       onDeleted?.();
-    } catch {
-      toast.error("Failed to delete link monitor");
+    } catch (e) {
+      toast.error(e instanceof Error ? e.message : "Failed to delete link monitor");
       setDeleting(false);
     }
   };

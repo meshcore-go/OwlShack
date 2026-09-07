@@ -1,8 +1,4 @@
 import { useEffect, useRef, useState } from "react";
-import L from "leaflet";
-import markerIcon from "leaflet/dist/images/marker-icon.png";
-import markerIcon2x from "leaflet/dist/images/marker-icon-2x.png";
-import markerShadow from "leaflet/dist/images/marker-shadow.png";
 import {
   Radio,
   Loader2,
@@ -19,114 +15,23 @@ import {
   DialogTitle,
 } from "@/components/ui/dialog";
 import { Button } from "@/components/ui/button";
-import { Label } from "@/components/ui/label";
 import { TextField, SelectField } from "@/components/ConfigFields";
 import { RadioPresetSelect } from "@/components/RadioPresetSelect";
+import { PositionPicker } from "@/components/PositionPicker";
 import { toast } from "sonner";
-import { themeTileLayer, useThemeTiles } from "@/lib/leaflet";
 import { cn } from "@/lib/utils";
 import { configApi, type Settings } from "@/lib/configApi";
-
-// Leaflet's default marker icon URLs break under bundlers; rebind once at load.
-type MarkerProto = L.Icon.Default & { _getIconUrl?: () => string };
-delete (L.Icon.Default.prototype as MarkerProto)._getIconUrl;
-L.Icon.Default.mergeOptions({
-  iconUrl: markerIcon,
-  iconRetinaUrl: markerIcon2x,
-  shadowUrl: markerShadow,
-});
+import { RestoreEntryButton, RestoreFromBackup } from "@/components/RestoreFromBackup";
 
 const BANDWIDTHS = [7.8, 10.4, 15.6, 20.8, 31.25, 41.7, 62.5, 125, 250, 500];
 
-type Step = "welcome" | "radio" | "companion" | "review";
+type Step = "welcome" | "restore" | "radio" | "companion" | "review";
 const STEPS: { id: Step; label: string }[] = [
   { id: "welcome", label: "Welcome" },
   { id: "radio", label: "Radio" },
   { id: "companion", label: "Companion" },
   { id: "review", label: "Review" },
 ];
-
-// Interactive position picker (mirrors RepeaterDetailPage): click to set,
-// drag the pin, manual input re-centres.
-function PositionMap({
-  lat,
-  lon,
-  onPick,
-}: {
-  lat: number;
-  lon: number;
-  onPick: (lat: number, lon: number) => void;
-}) {
-  const containerRef = useRef<HTMLDivElement>(null);
-  const mapRef = useRef<L.Map | null>(null);
-  const markerRef = useRef<L.Marker | null>(null);
-  const tileRef = useRef<L.TileLayer | null>(null);
-  const onPickRef = useRef(onPick);
-  onPickRef.current = onPick;
-
-  const validLat = Number.isFinite(lat);
-  const validLon = Number.isFinite(lon);
-  const initialLat = validLat ? lat : 0;
-  const initialLon = validLon ? lon : 0;
-
-  useEffect(() => {
-    if (!containerRef.current || mapRef.current) return;
-    const map = L.map(containerRef.current, {
-      zoomControl: true,
-      attributionControl: true,
-    }).setView([initialLat, initialLon], validLat && validLon ? 13 : 2);
-    tileRef.current = themeTileLayer().addTo(map);
-
-    map.on("click", (e) => {
-      onPickRef.current(e.latlng.lat, e.latlng.lng);
-    });
-
-    mapRef.current = map;
-
-    return () => {
-      map.remove();
-      mapRef.current = null;
-      tileRef.current = null;
-      markerRef.current = null;
-    };
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, []);
-
-  useThemeTiles(mapRef, tileRef);
-
-  useEffect(() => {
-    const map = mapRef.current;
-    if (!map) return;
-    if (!validLat || !validLon) {
-      if (markerRef.current) {
-        markerRef.current.remove();
-        markerRef.current = null;
-      }
-      return;
-    }
-    if (!markerRef.current) {
-      markerRef.current = L.marker([lat, lon], { draggable: true })
-        .addTo(map)
-        .on("dragend", (e) => {
-          const m = e.target as L.Marker;
-          const { lat: la, lng: ln } = m.getLatLng();
-          onPickRef.current(la, ln);
-        });
-      map.setView([lat, lon], Math.max(map.getZoom(), 12));
-    } else {
-      markerRef.current.setLatLng([lat, lon]);
-    }
-  }, [lat, lon, validLat, validLon]);
-
-  return (
-    <div className="space-y-1">
-      <Label className="font-mono text-[10px] uppercase tracking-[0.12em] text-muted-foreground">
-        Pick from map · click or drag pin
-      </Label>
-      <div ref={containerRef} className="h-56 border border-border bg-muted" />
-    </div>
-  );
-}
 
 function StepDots({ current }: { current: Step }) {
   const activeIdx = STEPS.findIndex((s) => s.id === current);
@@ -253,7 +158,7 @@ export function SetupWizard({
     <Dialog open onOpenChange={() => {}}>
       <DialogContent
         showCloseButton={false}
-        className="rounded-none border-border sm:max-w-2xl max-h-[88vh] overflow-y-auto gap-5"
+        className="rounded-none border-border sm:max-w-2xl max-h-[88dvh] overflow-y-auto gap-5"
       >
         <DialogHeader className="gap-3">
           <div className="flex items-center gap-2.5">
@@ -267,14 +172,20 @@ export function SetupWizard({
               </DialogTitle>
             </div>
           </div>
-          <StepDots current={step} />
+          {step !== "restore" && <StepDots current={step} />}
         </DialogHeader>
+
+        {step === "restore" && <RestoreFromBackup onRestored={onComplete} />}
 
         {step === "welcome" && (
           <div className="space-y-4">
             <p className="font-mono text-sm leading-relaxed text-muted-foreground">
               Welcome. Two quick steps: configure the radio, then create your
               first companion (the identity you run on the mesh).
+            </p>
+            <p className="font-mono text-xs leading-relaxed text-muted-foreground/70">
+              Moving from another node? Restore its backup instead — this is the
+              only time you can, so a running node is never overwritten.
             </p>
             <p className="font-mono text-xs leading-relaxed text-muted-foreground/70">
               Nothing is broadcast until you create a companion. You can skip
@@ -390,7 +301,7 @@ export function SetupWizard({
                 placeholder="blank = no position"
               />
             </div>
-            <PositionMap
+            <PositionPicker
               lat={parseFloat(lat)}
               lon={parseFloat(lon)}
               onPick={(la, lo) => {
@@ -492,7 +403,7 @@ export function SetupWizard({
                 disabled={busy}
                 onClick={() =>
                   setStep(
-                    step === "radio"
+                    step === "radio" || step === "restore"
                       ? "welcome"
                       : step === "companion"
                         ? "radio"
@@ -522,6 +433,9 @@ export function SetupWizard({
               </Button>
             )}
 
+            {step === "welcome" && (
+              <RestoreEntryButton onClick={() => setStep("restore")} />
+            )}
             {step === "welcome" && (
               <Button
                 size="sm"

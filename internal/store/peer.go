@@ -9,13 +9,14 @@ import (
 )
 
 type Peer struct {
-	PubKey          []byte
-	Name            string
-	Type            string
-	Lat             int32
-	Lon             int32
-	Feat1           uint16
-	Feat2           uint16
+	PubKey []byte
+	Name   string
+	Type   string
+	Lat    int32
+	Lon    int32
+	Feat1  uint16
+	Feat2  uint16
+	// Advert path, peer's neighbour first.
 	OutPath         []byte
 	OutPathHashSize uint8
 	LastAdvertTS    uint32

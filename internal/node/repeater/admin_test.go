@@ -3,12 +3,15 @@ package repeater
 import (
 	"context"
 	"encoding/binary"
+	"strings"
 	"testing"
 	"time"
 
 	meshcore "github.com/meshcore-go/meshcore-go"
+	"github.com/meshcore-go/meshcore-go/node"
 
 	"github.com/meshcore-go/OwlShack/internal/config"
+	"github.com/meshcore-go/OwlShack/internal/store"
 )
 
 func TestCString(t *testing.T) {
@@ -37,8 +40,8 @@ func TestRunCLIPrefix(t *testing.T) {
 	if got := r.runCLI("  get name"); got != "> rp" { // leading spaces skipped
 		t.Errorf("indented = %q, want %q", got, "> rp")
 	}
-	if got := r.runCLI("bogus"); got != "ERR: unknown command" {
-		t.Errorf("unknown = %q, want %q", got, "ERR: unknown command")
+	if got := r.runCLI("bogus"); got != "Unknown command" {
+		t.Errorf("unknown = %q, want %q", got, "Unknown command")
 	}
 }
 
@@ -94,9 +97,27 @@ func TestSetMutation(t *testing.T) {
 		{"repeat", "on", "OK - repeat is now ON", true},
 		{"name", "good", "OK", true},
 		{"name", "bad,name", "Error, bad chars", false},
-		{"path.hash.mode", "3", "OK", true},
-		{"path.hash.mode", "2", "Error, must be 0, 1 or 3", false},
-		{"nonsense", "x", "ERR: not supported on this node", false},
+		// Firmware CommonCLI checks `mode < 3`, so 0-2 (= 1-3 byte hashes).
+		{"path.hash.mode", "2", "OK", true},
+		{"path.hash.mode", "3", "Error, must be 0,1, or 2", false},
+		{"af", "1.5", "ERR: not supported on this node", false}, // firmware key we don't model
+		{"txdelay", "1.5", "OK", true},
+		{"txdelay", "2.5", "Error, must be 0-2", false},
+		{"direct.txdelay", "0", "OK", true},
+		{"rxdelay", "10", "OK", true},
+		{"rxdelay", "21", "Error, must be 0-20", false},
+		{"multi.acks", "1", "OK", true},
+		{"nonsense", "x", "unknown config: nonsense x", false},
+		// C atoi/atof leniency + uint8 truncation, as the firmware parses them.
+		{"flood.max", "-1", "Error, max 64", false}, // (uint8_t)-1 = 255
+		{"flood.max", "abc", "OK", true},            // atoi → 0
+		{"flood.max", "300", "OK", true},            // (uint8_t)300 = 44
+		{"path.hash.mode", "256", "OK", true},       // (uint8_t)256 = 0
+		{"path.hash.mode", "-1", "Error, must be 0,1, or 2", false},
+		{"advert.interval", "abc", "OK", true},           // _atoi → 0 = off
+		{"lat", "abc", "OK", true},                       // atof → 0.0
+		{"loop.detect", "offline", "OK", true},           // memcmp prefix match
+		{"repeat", "foo", "OK - repeat is now ON", true}, // anything but "off" is on
 	}
 	for _, c := range cases {
 		mutate, reply := r.setMutation(c.key, c.val)
@@ -124,7 +145,7 @@ func TestUnsupportedCmd(t *testing.T) {
 			t.Errorf("%q = %q, want not-supported error", cmd, got)
 		}
 	}
-	if got := r.runCLI("totallybogus"); got != "ERR: unknown command" {
+	if got := r.runCLI("totallybogus"); got != "Unknown command" {
 		t.Errorf("unknown = %q, want unknown-command error", got)
 	}
 }
@@ -138,8 +159,8 @@ func TestRegionReads(t *testing.T) {
 	if got := r.runCLI("region list allowed"); got != "alpha" {
 		t.Errorf("region list allowed = %q, want %q", got, "alpha")
 	}
-	if got := r.runCLI("region list denied"); got != "bravo" {
-		t.Errorf("region list denied = %q, want %q", got, "bravo")
+	if got := r.runCLI("region list denied"); got != "*,bravo" { // no "*" entry ⇒ the wildcard denies
+		t.Errorf("region list denied = %q, want %q", got, "*,bravo")
 	}
 	if got := r.runCLI("region remove ghost"); got != "Err - not found" {
 		t.Errorf("region remove ghost = %q, want %q", got, "Err - not found")
@@ -195,14 +216,55 @@ func TestClearStats(t *testing.T) {
 	r.fwdCount.Store(3)
 	r.haveSignal.Store(true)
 	r.clearStats()
-	if r.recvCount.Load() != 0 || r.fwdCount.Load() != 0 || r.haveSignal.Load() {
+	if r.recvCount.Load() != 0 || r.fwdCount.Load() != 0 {
 		t.Errorf("clearStats left non-zero counters")
+	}
+	if !r.haveSignal.Load() {
+		t.Errorf("clearStats cleared the last signal reading; the firmware's doesn't")
 	}
 }
 
 // TestNeighboursBody pins the neighbours response layout the client decodes:
 // [total:2][results:2] then [prefix:N][secsAgo:4][snr:i8] entries, SNR in
 // firmware quarter-dB.
+// Telemetry (REQ 0x03) reports battery voltage then MCU temperature on the
+// self channel, mirroring simple_repeater MyMesh.cpp: addVoltage first, and
+// addTemperature only when the board can measure one (its isnan check).
+func TestTelemetryBody(t *testing.T) {
+	r := &Repeater{}
+	r.batteryMV.Store(4168)
+
+	body, ok := r.buildReqResponse(&store.RepeaterACLEntry{Permissions: permAdmin}, reqTypeGetTelemetryData, nil)
+	if !ok {
+		t.Fatal("telemetry request answered nothing")
+	}
+	readings, err := meshcore.LPPDecode(body)
+	if err != nil {
+		t.Fatalf("LPPDecode: %v", err)
+	}
+	if len(readings) != 1 {
+		t.Fatalf("got %d readings without an MCU temp, want 1 (voltage only)", len(readings))
+	}
+	// LPP voltage resolution is 0.01 V, so 4168 mV encodes as 4.16.
+	if readings[0].Channel != telemChannelSelf || readings[0].Value != 4.16 {
+		t.Errorf("voltage = ch%d %v, want ch%d 4.16", readings[0].Channel, readings[0].Value, telemChannelSelf)
+	}
+
+	r.mcuTempC.Store(227)
+	r.haveMCUTemp.Store(true)
+	body, _ = r.buildReqResponse(&store.RepeaterACLEntry{Permissions: permAdmin}, reqTypeGetTelemetryData, nil)
+	readings, err = meshcore.LPPDecode(body)
+	if err != nil {
+		t.Fatalf("LPPDecode with temp: %v", err)
+	}
+	if len(readings) != 2 {
+		t.Fatalf("got %d readings with an MCU temp, want 2", len(readings))
+	}
+	if readings[1].Channel != telemChannelSelf || readings[1].Value != 22.7 {
+		t.Errorf("temperature = ch%d %v, want ch%d 22.7", readings[1].Channel, readings[1].Value, telemChannelSelf)
+	}
+}
+
 func TestNeighboursBody(t *testing.T) {
 	r := &Repeater{}
 	r.neighbors.m = map[[32]byte]*neighbor{}
@@ -304,7 +366,7 @@ func TestNeighboursOrderBy(t *testing.T) {
 // write lands asynchronously (after the reply-TX delay), so poll for it.
 func TestRegionDefaultCLI(t *testing.T) {
 	r := &Repeater{cfg: config.RepeaterConfig{Name: "rp"}}
-	r.reconfigure = func(m func(*config.RepeaterConfig)) error { m(&r.cfg); return nil }
+	r.reconfigure = testReconfigure(r)
 	ctx, cancel := context.WithCancel(context.Background()) // applyCfg's goroutine selects on runCtx
 	defer cancel()
 	r.runCtx = ctx
@@ -313,13 +375,14 @@ func TestRegionDefaultCLI(t *testing.T) {
 		t.Helper()
 		deadline := time.Now().Add(3 * time.Second)
 		for time.Now().Before(deadline) {
-			if r.cfg.DefaultRegion == region && len(r.cfg.Regions) == nRegions {
+			if cfg := r.cfgSnapshot(); cfg.DefaultRegion == region && len(cfg.Regions) == nRegions {
 				return
 			}
 			time.Sleep(5 * time.Millisecond)
 		}
+		cfg := r.cfgSnapshot()
 		t.Fatalf("cfg never became {region=%q nRegions=%d}; have region=%q regions=%+v",
-			region, nRegions, r.cfg.DefaultRegion, r.cfg.Regions)
+			region, nRegions, cfg.DefaultRegion, cfg.Regions)
 	}
 
 	if got := r.runCLI("region default"); got != " default scope is <null>" {
@@ -329,8 +392,8 @@ func TestRegionDefaultCLI(t *testing.T) {
 		t.Fatalf("set = %q", got)
 	}
 	await("alpha", 1)
-	if r.cfg.Regions[0].Name != "alpha" || r.cfg.Regions[0].DenyFlood {
-		t.Fatalf("auto-created region wrong: %+v", r.cfg.Regions[0])
+	if rg := r.cfgSnapshot().Regions[0]; rg.Name != "alpha" || rg.DenyFlood {
+		t.Fatalf("auto-created region wrong: %+v", rg)
 	}
 	if got := r.runCLI("region default"); got != " default scope is alpha" {
 		t.Fatalf("read set = %q", got)
@@ -339,4 +402,477 @@ func TestRegionDefaultCLI(t *testing.T) {
 		t.Fatalf("clear = %q", got)
 	}
 	await("", 1) // clearing keeps the region itself
+}
+
+// TestSetACLPrefix pins the firmware's asymmetry (ClientACL::applyPermissions):
+// a revoke may name the client by a pubkey prefix, a grant may not.
+func TestSetACLPrefix(t *testing.T) {
+	full := "aabbccddeeff00112233445566778899aabbccddeeff00112233445566778899"
+	r := &Repeater{}
+	r.acl.m = map[string]*store.RepeaterACLEntry{full: {PubKey: full, Permissions: permAdmin}}
+
+	if got, ok := r.aclMatchPrefix("aabbccddeeff"); !ok || got != full {
+		t.Errorf("prefix match = %q,%v, want %q,true", got, ok, full)
+	}
+	if got, ok := r.aclMatchPrefix(full); !ok || got != full {
+		t.Errorf("exact match = %q,%v, want %q,true", got, ok, full)
+	}
+	if _, ok := r.aclMatchPrefix("ffffffffffff"); ok {
+		t.Error("unknown prefix matched")
+	}
+
+	if err := r.SetACL("aabbccddeeff", permAdmin); err == nil {
+		t.Error("granting a role by prefix should fail")
+	}
+	if err := r.SetACL("ffffffffffff", 0); err == nil {
+		t.Error("revoking an unknown prefix should fail")
+	}
+	if err := r.SetACL("zz", 0); err == nil {
+		t.Error("non-hex pubkey should fail")
+	}
+}
+
+// TestNeighborRemove pins `neighbor.remove` matching on the bytes supplied
+// (the firmware accepts a prefix, not just the full key).
+func TestNeighborRemove(t *testing.T) {
+	r := &Repeater{}
+	r.neighbors.m = map[[32]byte]*neighbor{}
+	var a [32]byte
+	a[0], a[1] = 0xAA, 0xBB
+	r.neighbors.m[a] = &neighbor{pubkey: a}
+
+	if got := r.runCLI("neighbor.remove zz"); got != "ERR: bad pubkey" {
+		t.Errorf("bad hex = %q", got)
+	}
+	if got := r.runCLI("neighbor.remove aabb"); got != "OK" {
+		t.Errorf("prefix remove = %q, want OK", got)
+	}
+	if len(r.neighbors.m) != 0 {
+		t.Errorf("neighbour not removed: %+v", r.neighbors.m)
+	}
+	if got := r.runCLI("neighbor.remove aabb"); got != "OK" {
+		t.Errorf("removing a missing neighbour = %q, want OK (firmware always replies OK)", got)
+	}
+}
+
+// TestRegionTree pins the bare `region` reply against the firmware's exportTo:
+// wildcard first, children indented one space, "^" marks home, " F" means
+// flood is allowed.
+func TestRegionTree(t *testing.T) {
+	r := &Repeater{cfg: config.RepeaterConfig{
+		HomeRegion: "alpha",
+		Regions: []config.RepeaterRegion{
+			{Name: "*"}, {Name: "alpha"}, {Name: "bravo", DenyFlood: true},
+		},
+	}}
+	want := "* F\n alpha^ F\n bravo\n"
+	if got := r.runCLI("region"); got != want {
+		t.Errorf("region tree = %q, want %q", got, want)
+	}
+
+	r.cfg.Regions = []config.RepeaterRegion{{Name: "alpha"}} // no "*" ⇒ unscoped flood denied
+	if got := r.runCLI("region"); got != "*\n alpha^ F\n" {
+		t.Errorf("region tree without wildcard = %q", got)
+	}
+}
+
+func TestRegionGetHomeSaveLoad(t *testing.T) {
+	r := &Repeater{cfg: config.RepeaterConfig{Regions: []config.RepeaterRegion{
+		{Name: "alpha"}, {Name: "bravo", DenyFlood: true},
+	}}}
+	r.reconfigure = testReconfigure(r)
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	r.runCtx = ctx
+
+	if got := r.runCLI("region get alpha"); got != " alpha F" {
+		t.Errorf("get alpha = %q", got)
+	}
+	if got := r.runCLI("region get bravo"); got != " bravo " { // sprintf(" %s %s") leaves a trailing space
+		t.Errorf("get bravo = %q", got)
+	}
+	if got := r.runCLI("region get ghost"); got != "Err - unknown region" {
+		t.Errorf("get ghost = %q", got)
+	}
+	if got := r.runCLI("region save"); got != "OK" {
+		t.Errorf("save = %q", got)
+	}
+	if got := r.runCLI("region load"); got != "" {
+		t.Errorf("load = %q, want empty (firmware replies nothing)", got)
+	}
+	if got := r.runCLI("region home"); got != " home is *" {
+		t.Errorf("home read = %q", got)
+	}
+	if got := r.runCLI("region home ghost"); got != "Err - unknown region" {
+		t.Errorf("home ghost = %q", got)
+	}
+	if got := r.runCLI("region home alpha"); got != " home is now alpha" {
+		t.Errorf("home set = %q", got)
+	}
+	deadline := time.Now().Add(3 * time.Second)
+	for r.cfgSnapshot().HomeRegion != "alpha" && time.Now().Before(deadline) {
+		time.Sleep(5 * time.Millisecond)
+	}
+	if got := r.runCLI("region home"); got != " home is alpha" {
+		t.Errorf("home read back = %q", got)
+	}
+}
+
+// TestRegionRemoveClearsRefs: a dangling defaultRegion/homeRegion fails
+// Config.Validate, which would make the reload after the reply fail.
+func TestRegionRemoveClearsRefs(t *testing.T) {
+	r := &Repeater{cfg: config.RepeaterConfig{
+		DefaultRegion: "alpha", HomeRegion: "alpha",
+		Regions: []config.RepeaterRegion{{Name: "alpha"}},
+	}}
+	r.reconfigure = testReconfigure(r)
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	r.runCtx = ctx
+
+	if got := r.runCLI("region remove alpha"); got != "OK" {
+		t.Fatalf("remove = %q", got)
+	}
+	deadline := time.Now().Add(3 * time.Second)
+	for len(r.cfgSnapshot().Regions) != 0 && time.Now().Before(deadline) {
+		time.Sleep(5 * time.Millisecond)
+	}
+	if cfg := r.cfgSnapshot(); cfg.DefaultRegion != "" || cfg.HomeRegion != "" {
+		t.Errorf("dangling refs left: default=%q home=%q", cfg.DefaultRegion, cfg.HomeRegion)
+	}
+}
+
+// TestNeighboursBodyCap pins the firmware's results_buffer bound: a reply
+// carries at most what fits in 130 bytes, however many the client asks for.
+func TestNeighboursBodyCap(t *testing.T) {
+	r := &Repeater{}
+	r.neighbors.m = map[[32]byte]*neighbor{}
+	now := time.Now()
+	for i := 0; i < 40; i++ {
+		var k [32]byte
+		k[0] = byte(i)
+		r.neighbors.m[k] = &neighbor{pubkey: k, heard: now}
+	}
+	body := r.neighboursBody([]byte{0, 255, 0, 0, 0, 6})
+	if total := binary.LittleEndian.Uint16(body[0:2]); total != 40 {
+		t.Errorf("total = %d, want 40", total)
+	}
+	results := int(binary.LittleEndian.Uint16(body[2:4]))
+	if results != 130/11 {
+		t.Errorf("results = %d, want %d", results, 130/11)
+	}
+	if len(body) != 4+results*11 {
+		t.Errorf("body len = %d, want %d", len(body), 4+results*11)
+	}
+}
+
+// TestStatusBodyCounters pins the RepeaterStats field offsets for the counters
+// that were previously always zero.
+func TestStatusBodyCounters(t *testing.T) {
+	r := &Repeater{}
+	r.sentFlood.Store(11)
+	r.sentDirect.Store(22)
+	r.routeStats = func() node.RouteStats {
+		return node.RouteStats{FloodReceived: 33, DirectReceived: 44, DirectDuplicates: 55, FloodDuplicates: 66}
+	}
+
+	b := r.statusBody()
+	for _, c := range []struct {
+		name string
+		off  int
+		want uint32
+	}{
+		{"n_sent_flood", 24, 11},
+		{"n_sent_direct", 28, 22},
+		{"n_recv_flood", 32, 33},
+		{"n_recv_direct", 36, 44},
+		{"n_packets_sent", 12, 33}, // radio getPacketsSent: every TX, flood + direct
+	} {
+		if got := binary.LittleEndian.Uint32(b[c.off : c.off+4]); got != c.want {
+			t.Errorf("%s = %d, want %d", c.name, got, c.want)
+		}
+	}
+	if got := binary.LittleEndian.Uint16(b[44:46]); got != 55 {
+		t.Errorf("n_direct_dups = %d, want 55", got)
+	}
+	if got := binary.LittleEndian.Uint16(b[46:48]); got != 66 {
+		t.Errorf("n_flood_dups = %d, want 66", got)
+	}
+
+	r.clearStats()
+	b = r.statusBody()
+	for off := 24; off < 40; off += 4 {
+		if got := binary.LittleEndian.Uint32(b[off : off+4]); got != 0 {
+			t.Errorf("clearStats left offset %d = %d", off, got)
+		}
+	}
+}
+
+// TestRelayDelay pins the firmware's rand[0, 5·airtime·factor] envelope and
+// that rxdelay is off at base 0 (MyMesh::calcRxDelay).
+func TestRelayDelay(t *testing.T) {
+	for range 200 {
+		if d := relayDelay(100, 0.5); d < 0 || d > 250*time.Millisecond {
+			t.Fatalf("relayDelay = %v, want 0-250ms", d)
+		}
+	}
+	if d := relayDelay(100, 0); d != 0 {
+		t.Errorf("factor 0 delay = %v, want 0", d)
+	}
+	r := &Repeater{sf: 7}
+	if d := r.rxDelay(&meshcore.Packet{}, 40, 100); d != 0 {
+		t.Errorf("rxdelay base 0 = %v, want 0", d)
+	}
+	base := 10.0
+	r.cfg.RxDelayBase = &base
+	weak := r.rxDelay(&meshcore.Packet{SNR: -7}, 40, 100)
+	strong := r.rxDelay(&meshcore.Packet{SNR: 10}, 40, 100)
+	// score 0.042 → (10^0.808-1)×100ms ≈ 543ms; score 1 → negative, which the library treats as "now".
+	if weak < 500*time.Millisecond || weak > 600*time.Millisecond || strong > 0 {
+		t.Errorf("rxdelay weak %v strong %v", weak, strong)
+	}
+}
+
+// TestCountTx: our own sends count alongside relays, matching the firmware,
+// which counts in the Dispatcher as each packet goes out.
+func TestCountTx(t *testing.T) {
+	r := &Repeater{}
+	r.countTx(true)
+	r.countTx(false)
+	r.countTx(false)
+	if r.sentFlood.Load() != 1 || r.sentDirect.Load() != 2 {
+		t.Errorf("flood = %d direct = %d, want 1/2", r.sentFlood.Load(), r.sentDirect.Load())
+	}
+}
+
+// TestAdvertIntervalRoundTrip: what `set` accepts, `get` reports back in the
+// same firmware units. The stored value is seconds, so a UI that writes
+// seconds directly (60) makes `get` report an unsettable 1 — hence the
+// minutes/hours fields on the Repeater page.
+func TestAdvertIntervalRoundTrip(t *testing.T) {
+	r := &Repeater{cfg: config.RepeaterConfig{}}
+	r.reconfigure = testReconfigure(r)
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	r.runCtx = ctx
+
+	await := func(read, want string) {
+		t.Helper()
+		deadline := time.Now().Add(3 * time.Second)
+		for time.Now().Before(deadline) {
+			if r.runCLI(read) == want {
+				return
+			}
+			time.Sleep(5 * time.Millisecond)
+		}
+		t.Fatalf("%q never became %q; have %q", read, want, r.runCLI(read))
+	}
+
+	if got := r.runCLI("set advert.interval 60"); got != "OK" {
+		t.Fatalf("set advert.interval 60 = %q", got)
+	}
+	await("get advert.interval", "> 60")
+	if v := *r.cfgSnapshot().AdvertInterval; v != 3600 {
+		t.Errorf("stored %d seconds, want 3600", v)
+	}
+
+	// Firmware keeps this in 2-minute units, so odd minutes round down.
+	if got := r.runCLI("set advert.interval 61"); got != "OK" {
+		t.Fatalf("set advert.interval 61 = %q", got)
+	}
+	await("get advert.interval", "> 60")
+
+	if got := r.runCLI("set flood.advert.interval 12"); got != "OK" {
+		t.Fatalf("set flood.advert.interval 12 = %q", got)
+	}
+	await("get flood.advert.interval", "> 12")
+
+	// 1 minute is what a seconds-based UI used to produce; the firmware range
+	// rejects it.
+	if got := r.runCLI("set advert.interval 1"); got != "Error: interval range is 60-240 minutes" {
+		t.Errorf("set advert.interval 1 = %q, want the range error", got)
+	}
+}
+
+// TestCLIReplyFormats pins the reply shapes clients parse, against the
+// firmware's own sprintf formats: DateTime for clocks, ftoa (always a decimal
+// point) for floats, "<ver> (Build: <date>)" for ver.
+func TestCLIReplyFormats(t *testing.T) {
+	lat, lon, freq := -41.28, 174.0, 915.0
+	r := &Repeater{cfg: config.RepeaterConfig{Latitude: &lat, Longitude: &lon}}
+
+	if got := formatClock(time.Date(2026, 9, 3, 7, 5, 30, 0, time.UTC)); got != "07:05 - 3/9/2026 UTC" {
+		t.Errorf("formatClock = %q, want %q", got, "07:05 - 3/9/2026 UTC")
+	}
+	if got := r.runCLI("clock"); !strings.HasSuffix(got, " UTC") {
+		t.Errorf("clock = %q, want a DateTime string, not a unix timestamp", got)
+	}
+	if got := r.runCLI("clock sync"); !strings.HasPrefix(got, "OK - clock set: ") {
+		t.Errorf("clock sync = %q", got)
+	}
+
+	// A whole number still carries ".0", as StrHelper::ftoa does.
+	if got := r.runCLI("get lon"); got != "> 174.0" {
+		t.Errorf("get lon = %q, want %q", got, "> 174.0")
+	}
+	if got := r.runCLI("get lat"); got != "> -41.28" {
+		t.Errorf("get lat = %q, want %q", got, "> -41.28")
+	}
+	r.cfg.Latitude = nil
+	if got := r.runCLI("get lat"); got != "> 0.0" {
+		t.Errorf("unset lat = %q, want %q", got, "> 0.0")
+	}
+	if got := floatOrZero(&freq); got != "915.0" {
+		t.Errorf("freq = %q, want %q", got, "915.0")
+	}
+
+	if got := r.runCLI("ver"); !strings.Contains(got, "(Build: ") {
+		t.Errorf("ver = %q, want the firmware's \"<ver> (Build: <date>)\" shape", got)
+	}
+}
+
+// TestNeighborsListCap: the text reply stays inside the firmware's 134-byte
+// buffer however many neighbours are known.
+func TestNeighborsListCap(t *testing.T) {
+	r := &Repeater{}
+	r.neighbors.m = map[[32]byte]*neighbor{}
+	if got := r.runCLI("neighbors"); got != "-none-" {
+		t.Errorf("empty = %q, want -none-", got)
+	}
+	now := time.Now()
+	for i := 0; i < 40; i++ {
+		var k [32]byte
+		k[0] = byte(i)
+		r.neighbors.m[k] = &neighbor{pubkey: k, heard: now}
+	}
+	got := r.runCLI("neighbors")
+	lines := strings.Split(got, "\n")
+	if len(lines) < 2 {
+		t.Fatalf("expected several neighbours, got %q", got)
+	}
+	// Firmware appends while `dp - reply < 134`: everything but the last entry
+	// fits under the bound, and one more entry would not have been started.
+	if before := len(strings.Join(lines[:len(lines)-1], "\n")); before >= neighborsTextMax {
+		t.Errorf("appended an entry at %d bytes, past the %d bound", before, neighborsTextMax)
+	}
+	if len(got) < neighborsTextMax {
+		t.Errorf("stopped at %d bytes with neighbours left over", len(got))
+	}
+}
+
+// testReconfigure applies a CLI mutation straight onto r.cfg under the config
+// lock, standing in for the app's persist+reload hook.
+func testReconfigure(r *Repeater) func(func(*config.RepeaterConfig)) error {
+	return func(m func(*config.RepeaterConfig)) error {
+		r.mu.Lock()
+		defer r.mu.Unlock()
+		m(&r.cfg)
+		return nil
+	}
+}
+
+// TestReverseHops pins the send-order flip for routes learned from a flood
+// request's accumulated path (the client's neighbour comes first on the wire).
+func TestReverseHops(t *testing.T) {
+	if got := reverseHops([]byte{1, 2, 3}, 1); string(got) != string([]byte{3, 2, 1}) {
+		t.Errorf("1-byte = %x", got)
+	}
+	if got := reverseHops([]byte{1, 2, 3, 4}, 2); string(got) != string([]byte{3, 4, 1, 2}) {
+		t.Errorf("2-byte = %x", got)
+	}
+	if got := reverseHops(nil, 0); len(got) != 0 {
+		t.Errorf("empty = %x", got)
+	}
+}
+
+// TestCLIFirmwareReplies pins the reply strings the firmware uses for things it
+// doesn't know, and the parsing helpers behind `set`.
+func TestCLIFirmwareReplies(t *testing.T) {
+	r := &Repeater{cfg: config.RepeaterConfig{Name: "rp"}}
+	for cmd, want := range map[string]string{
+		"get nonsense":         "??: nonsense",
+		"get af":               "ERR: not supported on this node",
+		"get bridge.type":      "> none",
+		"set name":             "unknown config: name",
+		"discover.neighbors x": "Err - discover.neighbors has no options",
+		"region bogus":         "Err - ??",
+		"region list":          "Err - ??",
+		"region list foo":      "Err - use 'allowed' or 'denied'",
+		"region remove *":      "Err - not empty",
+		"region put":           "Err - ??",
+		"region put bad name":  "Err - unknown parent",
+		"region put a,b":       "Err - unable to put",
+		"region default":       " default scope is <null>",
+		"setperm abc":          "Err - bad params",
+		"setperm abc 3":        "Err - bad pubkey",
+		"setperm zz 3":         "Err - bad pubkey",
+		"setperm aabb 3":       "Err - invalid params",
+		"setperm aabb 0":       "Err - invalid params",
+		"neighbor.remove aab":  "ERR: bad pubkey",
+	} {
+		if got := r.runCLI(cmd); got != want {
+			t.Errorf("%q = %q, want %q", cmd, got, want)
+		}
+	}
+	for s, want := range map[string]int{"12": 12, " -7x": -7, "+3": 3, "abc": 0, "": 0, "2.9": 2} {
+		if got := atoi(s); got != want {
+			t.Errorf("atoi(%q) = %d, want %d", s, got, want)
+		}
+	}
+	for s, want := range map[string]float64{"1.5": 1.5, "-41.28abc": -41.28, "abc": 0, "": 0, " 3": 3} {
+		if got := atof(s); got != want {
+			t.Errorf("atof(%q) = %v, want %v", s, got, want)
+		}
+	}
+	if got := digits("-5"); got != 0 {
+		t.Errorf("digits(-5) = %d, want 0 (no sign in _atoi)", got)
+	}
+
+	// `password` echoes the stored value, truncated to the firmware's 15 chars.
+	r.reconfigure = testReconfigure(r)
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	r.runCtx = ctx
+	if got := r.runCLI("password 0123456789abcdefX"); got != "password now: 0123456789abcde" {
+		t.Errorf("password = %q", got)
+	}
+}
+
+// TestSetPermByte pins setperm storing the whole permission byte and revoking
+// on any guest role (perms&3 == 0), as ClientACL::applyPermissions does.
+func TestSetPermByte(t *testing.T) {
+	full := "aabbccddeeff00112233445566778899aabbccddeeff00112233445566778899"
+	r := &Repeater{} // no store: the ACL cache is memory-only
+	r.acl.m = map[string]*store.RepeaterACLEntry{full: {PubKey: full, Permissions: permAdmin}}
+	if err := r.SetACL(full, 0xC3); err != nil {
+		t.Fatalf("grant 0xC3: %v", err)
+	}
+	if got := r.acl.m[full].Permissions; got != 0xC3 {
+		t.Errorf("stored perms = %#x, want 0xc3 (whole byte)", got)
+	}
+	if err := r.SetACL("aabbccddeeff", 4); err != nil { // 4&3 == 0 → revoke by prefix
+		t.Fatalf("revoke with perms 4: %v", err)
+	}
+	if _, ok := r.acl.m[full]; ok {
+		t.Error("client not revoked")
+	}
+}
+
+// TestRegionPrefixLookup pins findByNamePrefix: exact wins, else the last
+// prefix match; the wildcard is always known and its deny state is implicit.
+func TestRegionPrefixLookup(t *testing.T) {
+	r := &Repeater{cfg: config.RepeaterConfig{Regions: []config.RepeaterRegion{
+		{Name: "alpha"}, {Name: "alphabet", DenyFlood: true}, {Name: "al"},
+	}}}
+	for cmd, want := range map[string]string{
+		"region get al":    " al F",
+		"region get alp":   " alphabet ",
+		"region get alpha": " alpha F",
+		"region get *":     " * ",
+		"region get zz":    "Err - unknown region",
+	} {
+		if got := r.runCLI(cmd); got != want {
+			t.Errorf("%q = %q, want %q", cmd, got, want)
+		}
+	}
 }

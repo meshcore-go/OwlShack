@@ -9,6 +9,9 @@ import (
 	"strings"
 	"time"
 
+	meshcore "github.com/meshcore-go/meshcore-go"
+	"github.com/meshcore-go/meshcore-go/node"
+
 	"github.com/meshcore-go/OwlShack/internal/store"
 )
 
@@ -128,8 +131,8 @@ func (s *Server) handleAddContact(w http.ResponseWriter, r *http.Request) {
 	}
 
 	pubkey, err := hex.DecodeString(body.PubKey)
-	if err != nil || len(pubkey) == 0 {
-		writeError(w, http.StatusBadRequest, "invalid pubkey hex")
+	if err != nil || len(pubkey) != meshcore.PubKeySize {
+		writeError(w, http.StatusBadRequest, "pubkey must be 64 hex chars")
 		return
 	}
 
@@ -207,13 +210,24 @@ func (s *Server) handleAddContact(w http.ResponseWriter, r *http.Request) {
 				existing.LastSeen, existing.LastAdvertTS, hasLoc,
 			)
 			if len(existing.OutPath) > 0 {
-				_ = s.store.Contacts.UpdateOutPath(r.Context(), cid, pubkey, existing.OutPath, existing.OutPathHashSize)
+				hs := existing.OutPathHashSize
+				if hs == 0 {
+					hs = 1
+				}
+				_ = s.store.Contacts.UpdateOutPath(r.Context(), cid, pubkey, node.ReverseHops(existing.OutPath, int(hs)), hs)
 			}
 		}
 	})
 	if addErr != nil {
 		writeError(w, http.StatusInternalServerError, "failed to add contact")
 		return
+	}
+
+	// Register the peer with the running nodes: without this a contact added by
+	// pubkey alone (never heard an advert) fails every radio op with "peer not
+	// found in peer table" until the next restart re-hydrates from the DB.
+	if add := s.peerAdder(); add != nil {
+		add(pubkey, storeName, storeType)
 	}
 
 	w.WriteHeader(http.StatusNoContent)

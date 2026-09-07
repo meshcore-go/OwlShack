@@ -23,7 +23,7 @@ export function EmojiButton({
       aria-label="Insert emoji"
       onClick={onClick}
       className={cn(
-        "size-9 shrink-0 grid place-items-center border border-border bg-background hover:bg-muted/60",
+        "relative size-9 shrink-0 grid place-items-center border border-border bg-background hover:bg-muted/60 before:absolute before:-inset-0.5 before:content-[''] sm:before:hidden",
         active ? "text-primary" : "text-muted-foreground hover:text-foreground",
       )}
     >
@@ -42,7 +42,7 @@ export function EmojiPicker({ onSelect }: { onSelect: (emoji: string) => void })
           type="button"
           aria-label="Insert emoji"
           className={cn(
-            "size-9 shrink-0 grid place-items-center border border-border bg-background hover:bg-muted/60",
+            "relative size-9 shrink-0 grid place-items-center border border-border bg-background hover:bg-muted/60 before:absolute before:-inset-0.5 before:content-[''] sm:before:hidden",
             open ? "text-primary" : "text-muted-foreground hover:text-foreground",
           )}
         >

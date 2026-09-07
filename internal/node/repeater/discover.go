@@ -3,7 +3,6 @@ package repeater
 import (
 	crand "crypto/rand"
 	"encoding/binary"
-	"math"
 	mrand "math/rand/v2"
 	"time"
 
@@ -47,24 +46,26 @@ func (r *Repeater) sendDiscover() error {
 		return err
 	}
 	// Zero-hop: direct route, no path — reaches direct neighbours only.
-	return r.node.SendPacket(&meshcore.Packet{
+	return r.sendPkt(&meshcore.Packet{
 		Header:  meshcore.MakeHeader(meshcore.RouteTypeDirect, meshcore.PayloadTypeControl, 0),
 		Payload: payload,
-	})
+	}, node.PrioritySend, 0)
 }
+
+func (r *Repeater) SendDiscover() error { return r.sendDiscover() }
 
 // handleControl answers NODE_DISCOVER_REQs and records discover RESPONSES that
 // match our in-flight tag as neighbours (firmware onControlDataRecv).
 func (r *Repeater) handleControl(pkt *meshcore.Packet) {
 	ctl, err := meshcore.ControlFromBytes(pkt.Payload)
-	if err != nil {
-		return
+	if err != nil || !pkt.IsRouteDirect() {
+		return // firmware: only zero-hop DIRECT control packets are handled
 	}
 	switch ctl.SubType() {
 	case meshcore.ControlSubTypeDiscoverReq:
 		r.answerDiscover(pkt, ctl)
 	case meshcore.ControlSubTypeDiscoverResp:
-		r.recordDiscoverResp(ctl)
+		r.recordDiscoverResp(pkt, ctl)
 	}
 }
 
@@ -85,8 +86,8 @@ func (r *Repeater) answerDiscover(pkt *meshcore.Packet, ctl *meshcore.Control) {
 
 	pub := r.node.Identity().PublicKeyBytes()
 	data := make([]byte, 5, 5+len(pub))
-	if pkt.HasSignalInfo { // let the sender know our inbound SNR (quarter-dB wire form)
-		data[0] = byte(int8(math.Round(float64(pkt.SNR) * 4)))
+	if pkt.HasSignalInfo { // firmware packet->_snr: (int8_t)(snr*4), truncated
+		data[0] = byte(int8(pkt.SNR * 4))
 	}
 	binary.LittleEndian.PutUint32(data[1:5], req.Tag)
 	data = append(data, pub[:]...)
@@ -108,7 +109,7 @@ func (r *Repeater) answerDiscover(pkt *meshcore.Packet, ctl *meshcore.Control) {
 		est = r.airtime(len(payload))
 	}
 	delay := time.Duration(mrand.IntN(int(5*est/2)+1)) * 4 * time.Millisecond
-	if err := r.node.SendPacketDelayed(&meshcore.Packet{
+	if err := r.sendPkt(&meshcore.Packet{
 		Header:  meshcore.MakeHeader(meshcore.RouteTypeDirect, meshcore.PayloadTypeControl, 0),
 		Payload: payload,
 	}, node.PrioritySend, delay); err != nil {
@@ -116,11 +117,12 @@ func (r *Repeater) answerDiscover(pkt *meshcore.Packet, ctl *meshcore.Control) {
 	}
 }
 
-// recordDiscoverResp records a discover RESPONSE as a neighbour when it matches
-// our in-flight discover tag (firmware onControlDataRecv → putNeighbour).
-func (r *Repeater) recordDiscoverResp(ctl *meshcore.Control) {
+// recordDiscoverResp records a repeater's discover RESPONSE as a neighbour when
+// it matches our in-flight discover tag (firmware onControlDataRecv →
+// putNeighbour with the SNR *we* heard it at, not the byte it reports).
+func (r *Repeater) recordDiscoverResp(pkt *meshcore.Packet, ctl *meshcore.Control) {
 	resp, err := ctl.DiscoverResponse()
-	if err != nil || len(resp.PubKey) < 32 {
+	if err != nil || resp.NodeType != advTypeRepeater || len(resp.PubKey) < 32 {
 		return
 	}
 
@@ -142,6 +144,6 @@ func (r *Repeater) recordDiscoverResp(ctl *meshcore.Control) {
 	if existing := r.neighbors.m[pub]; existing != nil {
 		name = existing.name // keep a name already learned from an advert
 	}
-	r.neighbors.m[pub] = &neighbor{pubkey: pub, name: name, snr: float64(resp.SNR), heard: time.Now()}
+	r.neighbors.m[pub] = &neighbor{pubkey: pub, name: name, snr: float64(pkt.SNR), heard: time.Now()}
 	r.neighbors.Unlock()
 }

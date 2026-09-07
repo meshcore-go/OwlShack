@@ -17,6 +17,10 @@ type Backend interface {
 	// across every companion. Returns nil for an unknown hash.
 	ChannelByHash(hash byte) *ChannelInfo
 
+	// AddPeer registers a peer with every companion's in-memory peer table, so a
+	// manually added contact is reachable without waiting for its advert.
+	AddPeer(pubkey []byte, name, peerType string)
+
 	// RemovePeers drops the given peers from every companion's in-memory peer
 	// table, so a deleted discovered peer doesn't linger in routing/counts until
 	// the next restart. The DB row is deleted separately by the handler.
@@ -39,6 +43,19 @@ type Backend interface {
 
 	// Repeater returns the repeater operations for a named companion.
 	Repeater(name string) (*RepeaterOps, bool)
+
+	// MqttStatus reports the live connection state of every configured broker,
+	// or ok=false when no MQTT observer is running (disabled, or no companion
+	// feeds it).
+	MqttStatus() ([]MqttBrokerStatus, bool)
+
+	// ExportBackup builds a downloadable backup honouring opts.
+	ExportBackup(ctx context.Context, opts BackupOptions) (*BackupFile, error)
+	// EstimateBackup reports what opts would capture, without building the file.
+	EstimateBackup(ctx context.Context, opts BackupOptions) (*BackupEstimate, error)
+	// ImportBackup restores an uploaded backup database, or applies an uploaded
+	// config file. filename only picks the config parser.
+	ImportBackup(ctx context.Context, data []byte, filename string) (*ImportResult, error)
 
 	// RepeaterNode returns runtime operations for the single repeater node the
 	// bot runs (relay stats, neighbours, advertise-now), or ok=false when none
@@ -86,12 +103,34 @@ type Backend interface {
 // RepeaterNodeOps are runtime operations on the running repeater node, wired to
 // the domain by the app package (the api package never imports the domain).
 type RepeaterNodeOps struct {
-	Name      string
-	Stats     func() any // live relay counters + uptime + neighbour count
-	Neighbors func() any // directly-heard repeaters
-	Advert    func(flood bool) error
-	ACL       func() any                // admin clients in the ACL (name-resolved)
-	RevokeACL func(pubkey string) error // drop a client's access
+	Name       string
+	Stats      func() any // live relay counters + uptime + neighbour count
+	Neighbors  func() any // directly-heard repeaters
+	Advert     func(flood bool) error
+	Discover   func() error                         // zero-hop NODE_DISCOVER_REQ; responses land in Neighbors
+	ACL        func() any                           // admin clients in the ACL (name-resolved)
+	RevokeACL  func(pubkey string) error            // drop a client's access
+	SetACL     func(pubkey string, perms int) error // grant / change a client's role (setperm)
+	ClearStats func()                               // reset relay counters (clear stats)
+}
+
+// MqttBrokerStatus is one broker's live connection state. Mirrors
+// mqtt.BrokerStatus; duplicated here because api must not import the domain.
+type MqttBrokerStatus struct {
+	Name        string `json:"name"`
+	Host        string `json:"host"`
+	Port        int    `json:"port"`
+	Transport   string `json:"transport"`
+	TLS         bool   `json:"tls"`
+	AuthType    string `json:"authType"`
+	Enabled     bool   `json:"enabled"`
+	Connected   bool   `json:"connected"`
+	LastError   string `json:"lastError,omitempty"`
+	LastErrorTs int64  `json:"lastErrorTs,omitempty"`
+	ConnectedTs int64  `json:"connectedTs,omitempty"`
+	Published   uint64 `json:"published"`
+	Dropped     uint64 `json:"dropped"`
+	StatusTopic string `json:"statusTopic,omitempty"`
 }
 
 // --- per-resource config write inputs (JSON request bodies) ---
@@ -107,7 +146,13 @@ type SettingsInput struct {
 	CR             *int     `json:"cr"`
 	TX             *int     `json:"tx"`
 	ListenAddr     *string  `json:"listenAddr"`
-	SetupComplete  *bool    `json:"setupComplete"`
+	MapTileKey     *string  `json:"mapTileKey"` // omit = keep, "" = clear
+	PathHashSize   *int     `json:"pathHashSize"`
+	// DutyCycle is the TX airtime cap as a percentage, 0 < pct <= 100
+	// (fractions allowed). Like PathHashSize and unlike the secret fields,
+	// null is written through and means "the default", not "keep".
+	DutyCycle     *float64 `json:"dutyCycle"`
+	SetupComplete *bool    `json:"setupComplete"`
 }
 
 type MqttInput struct {
@@ -147,6 +192,7 @@ type CompanionInput struct {
 	Latitude       *float64 `json:"latitude"`
 	Longitude      *float64 `json:"longitude"`
 	AdvertInterval *int     `json:"advertInterval"`
+	PathHashSize   *int     `json:"pathHashSize"`
 }
 
 type ChannelInput struct {
@@ -174,15 +220,19 @@ type RepeaterNodeInput struct {
 
 // RepeaterRelayInput is the Relay-policy section: forwarding + advert cadence.
 type RepeaterRelayInput struct {
-	DisableFwd          *bool   `json:"disableFwd"`
-	FloodMax            *int    `json:"floodMax"`
-	FloodMaxUnscoped    *int    `json:"floodMaxUnscoped"`
-	FloodMaxAdvert      *int    `json:"floodMaxAdvert"`
-	LoopDetect          *string `json:"loopDetect"`
-	PathHashMode        *int    `json:"pathHashMode"`
-	DefaultRegion       string  `json:"defaultRegion"` // "" = unscoped flood adverts
-	AdvertInterval      *int    `json:"advertInterval"`
-	FloodAdvertInterval *int    `json:"floodAdvertInterval"`
+	DisableFwd          *bool    `json:"disableFwd"`
+	FloodMax            *int     `json:"floodMax"`
+	FloodMaxUnscoped    *int     `json:"floodMaxUnscoped"`
+	FloodMaxAdvert      *int     `json:"floodMaxAdvert"`
+	LoopDetect          *string  `json:"loopDetect"`
+	PathHashSize        *int     `json:"pathHashSize"`
+	TxDelayFactor       *float64 `json:"txDelayFactor"`
+	DirectTxDelayFactor *float64 `json:"directTxDelayFactor"`
+	RxDelayBase         *float64 `json:"rxDelayBase"`
+	MultiAcks           *int     `json:"multiAcks"`
+	DefaultRegion       string   `json:"defaultRegion"` // "" = unscoped flood adverts
+	AdvertInterval      *int     `json:"advertInterval"`
+	FloodAdvertInterval *int     `json:"floodAdvertInterval"`
 }
 
 // RepeaterAdminInput is the Owner & access section. Passwords are nil = keep,
@@ -212,4 +262,55 @@ type TriggerInput struct {
 	MaxRetries         *int     `json:"maxRetries"`
 	PathHashSize       *int     `json:"pathHashSize"`
 	Schedule           *string  `json:"schedule"`
+}
+
+// BackupFile is a generated backup ready to stream to the browser.
+type BackupFile struct {
+	Name        string
+	ContentType string
+	Data        []byte
+}
+
+// BackupOptions is the wizard's selection. Day fields are -1 for everything,
+// 0 for none, or a positive number of days back.
+type BackupOptions struct {
+	// CompanionIDs is exactly which companions to include: [] is none, every
+	// id is all. Required — a pointer only so an omitted field is rejected
+	// rather than silently meaning something. Excluding a companion also
+	// excludes its channels, contacts and messages.
+	CompanionIDs *[]int64 `json:"companionIds"`
+	Contacts     bool     `json:"contacts"`
+	Triggers     bool     `json:"triggers"`
+	Mqtt         bool     `json:"mqtt"`
+	Repeater     bool     `json:"repeater"`
+	Peers        bool     `json:"peers"`
+	MessageDays  int      `json:"messageDays"`
+	PacketDays   int      `json:"packetDays"`
+	MetricDays   int      `json:"metricDays"`
+	// IdentityKeys keeps the node private keys, so a restore is the same node
+	// on the mesh. Off by default; startup then mints new identities.
+	IdentityKeys bool `json:"identityKeys"`
+}
+
+// BackupEstimate is the row count a selection captures, plus the current
+// database size as an upper bound on the file.
+type BackupEstimate struct {
+	Companions int64 `json:"companions"`
+	Contacts   int64 `json:"contacts"`
+	Messages   int64 `json:"messages"`
+	Packets    int64 `json:"packets"`
+	Peers      int64 `json:"peers"`
+	Metrics    int64 `json:"metrics"`
+	Bytes      int64 `json:"bytes"`
+}
+
+// ImportResult describes what a restore did, so the UI can be specific about
+// consequences instead of just saying "done".
+type ImportResult struct {
+	// Kind is "database" (a backup, staged for restart) or "config".
+	Kind            string `json:"kind"`
+	Companions      int    `json:"companions"`
+	RestartRequired bool   `json:"restartRequired"`
+	SchemaVersion   int    `json:"schemaVersion,omitempty"`
+	Detail          string `json:"detail"`
 }

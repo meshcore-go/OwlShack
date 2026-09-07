@@ -70,6 +70,7 @@ func (r *Repeater) handleAnonReq(pkt *meshcore.Packet) {
 	if plain == nil || len(plain) < 5 {
 		return // MAC failed (not for us) or too short
 	}
+	pkt.MarkDoNotRetransmit()
 
 	// [timestamp:4][password:N] — but a leading control byte (0 < b < ' ') marks
 	// an unauthenticated sub-request (regions/owner/clock).
@@ -85,9 +86,8 @@ func (r *Repeater) handleAnonReq(pkt *meshcore.Packet) {
 		return // bad password / replay — silent, matching the firmware
 	}
 
-	now := uint32(time.Now().Unix())
 	resp := make([]byte, 13)
-	binary.LittleEndian.PutUint32(resp[:4], now)
+	binary.LittleEndian.PutUint32(resp[:4], r.uniqueTimestamp())
 	resp[4] = respServerLoginOK
 	resp[5] = 0 // legacy keep-alive interval
 	if perms&permRoleMask == permAdmin {
@@ -125,12 +125,16 @@ func (r *Repeater) handleAnonSubReq(pkt *meshcore.Packet, clientPub [32]byte, se
 		return
 	}
 	pathLenByte := params[0]
+	if !meshcore.IsValidPathLen(pathLenByte) {
+		return
+	}
 	hashSize := int(pathLenByte>>6)&3 + 1
 	pathLen := int(pathLenByte&63) * hashSize
 	if len(params) < 1+pathLen {
 		return
 	}
 
+	cfg := r.cfgSnapshot()
 	body := make([]byte, 8)
 	binary.LittleEndian.PutUint32(body[:4], ts)                        // reflected tag
 	binary.LittleEndian.PutUint32(body[4:], uint32(time.Now().Unix())) // our clock
@@ -138,10 +142,10 @@ func (r *Repeater) handleAnonSubReq(pkt *meshcore.Packet, clientPub [32]byte, se
 	case anonReqTypeRegions:
 		body = append(body, r.regionsExport()...)
 	case anonReqTypeOwner:
-		body = append(body, r.cfg.Name+"\n"+r.cfg.OwnerInfo...)
+		body = append(body, cfg.Name+"\n"+cfg.OwnerInfo...)
 	case anonReqTypeBasic:
 		var feat byte
-		if r.cfg.IsFwdDisabled() {
+		if cfg.IsFwdDisabled() {
 			feat |= 0x80 // "is disabled" bit; we have no bridge bits to set
 		}
 		body = append(body, feat)
@@ -157,7 +161,7 @@ func (r *Repeater) handleAnonSubReq(pkt *meshcore.Packet, clientPub [32]byte, se
 		return
 	}
 	// pathLenByte is already the wire encoding ((hashSize-1)<<6 | hops).
-	if err := r.node.SendPacketDelayed(&meshcore.Packet{
+	if err := r.sendPkt(&meshcore.Packet{
 		Header:     meshcore.MakeHeader(meshcore.RouteTypeDirect, meshcore.PayloadTypeResponse, 0),
 		PathLength: pathLenByte,
 		Path:       params[1 : 1+pathLen],
@@ -171,22 +175,7 @@ func (r *Repeater) handleAnonSubReq(pkt *meshcore.Packet, clientPub [32]byte, se
 // mirroring RegionMap::exportNamesTo(mask=DENY_FLOOD): flood-allowed names,
 // comma-separated, "*" first when unscoped flood is allowed.
 func (r *Repeater) regionsExport() string {
-	var wildcard string
-	var names []string
-	for _, rg := range r.cfgRegions() {
-		if rg.DenyFlood {
-			continue
-		}
-		if rg.Name == config.WildcardRegion {
-			wildcard = "*"
-			continue
-		}
-		names = append(names, rg.Name)
-	}
-	if wildcard != "" {
-		names = append([]string{wildcard}, names...)
-	}
-	return strings.Join(names, ",")
+	return regionNames(r.cfgRegions(), false)
 }
 
 // handlePath learns/refreshes an ACL client's return route from an explicit PATH
@@ -203,22 +192,18 @@ func (r *Repeater) handlePath(pkt *meshcore.Packet) {
 	if !ok {
 		return // not one of our logged-in clients
 	}
-	plain := p.Decrypt(secret)
-	if len(plain) < 1 {
+	pp, err := meshcore.ParsePathPayload(p.Decrypt(secret))
+	if err != nil {
 		return
 	}
-	hashSize := int(plain[0]>>6)&3 + 1
-	n := int(plain[0]&63) * hashSize
-	if len(plain) < 1+n {
-		return
-	}
+	pkt.MarkDoNotRetransmit()
 	pub, err := hex.DecodeString(client.PubKey)
 	if err != nil || len(pub) != 32 {
 		return
 	}
 	var clientPub [32]byte
 	copy(clientPub[:], pub)
-	r.learnRoute(clientPub, plain[1:1+n], uint8(hashSize))
+	r.learnRoute(clientPub, pp.Path, pp.PathHashSize())
 }
 
 // authLogin decides a client's permission from the login password, mirroring
@@ -234,21 +219,26 @@ func (r *Repeater) authLogin(clientPub [32]byte, password string, ts uint32) (in
 		return existing.Permissions, true
 	}
 
+	cfg := r.cfgSnapshot()
 	var perms int
 	switch password {
-	case r.cfg.AdminPassword:
+	case cfg.AdminPassword:
 		perms = permAdmin
-	case r.cfg.GuestPassword:
+	case cfg.GuestPassword:
 		perms = permGuest
 	default:
 		return 0, false
 	}
 
-	// Replay guard: a re-login timestamp must strictly advance.
-	if existing != nil && ts <= existing.LastTimestamp {
+	// Replay guard: the timestamp must strictly advance (a new client starts at 0).
+	if existing == nil {
+		existing = &store.RepeaterACLEntry{PubKey: pubHex}
+	}
+	if ts <= existing.LastTimestamp {
 		return 0, false
 	}
 
+	perms |= existing.Permissions &^ permRoleMask // firmware keeps the upper (alert) bits
 	r.aclPut(&store.RepeaterACLEntry{PubKey: pubHex, Permissions: perms, LastTimestamp: ts, LastSeen: time.Now()})
 	return perms, true
 }
@@ -285,12 +275,29 @@ func (r *Repeater) aclClient(src byte, verify func(secret []byte) bool) (*store.
 	return nil, nil, false
 }
 
-// touchClient advances a client's replay timestamp + last-seen after a valid
-// authenticated request.
+// touchClient advances a client's replay timestamp + last-seen. It mutates the
+// cached entry in place: aclClient/aclGet hand out copies, and writing one back
+// would revert a concurrent setperm.
 func (r *Repeater) touchClient(e *store.RepeaterACLEntry, ts uint32) {
-	e.LastTimestamp = ts
-	e.LastSeen = time.Now()
-	r.aclPut(e)
+	r.acl.Lock()
+	cur := r.acl.m[e.PubKey]
+	if cur == nil {
+		r.acl.Unlock()
+		return // revoked between the lookup and here
+	}
+	cur.LastTimestamp = ts
+	cur.LastSeen = time.Now()
+	cp := *cur
+	r.acl.Unlock()
+
+	if r.store == nil {
+		return
+	}
+	r.store.WriteAsync(func() {
+		if err := r.store.RepeaterACL.Upsert(context.Background(), &cp); err != nil {
+			r.log.Error("acl upsert failed", "error", err)
+		}
+	})
 }
 
 // aclLoad seeds the in-memory ACL cache from the DB (called at construction,
@@ -327,6 +334,9 @@ func (r *Repeater) aclPut(e *store.RepeaterACLEntry) {
 	r.acl.Lock()
 	r.acl.m[cp.PubKey] = &cp
 	r.acl.Unlock()
+	if r.store == nil {
+		return
+	}
 	r.store.WriteAsync(func() {
 		if err := r.store.RepeaterACL.Upsert(context.Background(), &cp); err != nil {
 			r.log.Error("acl upsert failed", "error", err)
@@ -339,11 +349,30 @@ func (r *Repeater) aclDelete(pubHex string) {
 	r.acl.Lock()
 	delete(r.acl.m, pubHex)
 	r.acl.Unlock()
+	if r.store == nil {
+		return
+	}
 	r.store.WriteAsync(func() {
 		if err := r.store.RepeaterACL.Delete(context.Background(), pubHex); err != nil {
 			r.log.Error("acl delete failed", "error", err)
 		}
 	})
+}
+
+// aclMatchPrefix resolves a pubkey prefix to the full key of a cached client,
+// mirroring the firmware's ClientACL::getClient byte-prefix compare.
+func (r *Repeater) aclMatchPrefix(prefix string) (string, bool) {
+	r.acl.RLock()
+	defer r.acl.RUnlock()
+	if _, ok := r.acl.m[prefix]; ok {
+		return prefix, true
+	}
+	for k := range r.acl.m {
+		if strings.HasPrefix(k, prefix) {
+			return k, true
+		}
+	}
+	return "", false
 }
 
 // ACLEntry is an admin-client ACL row for the API, with the pubkey resolved to a
@@ -381,8 +410,7 @@ func (r *Repeater) ACLList() []ACLEntry {
 // RevokeACL removes a client's access (drops it from the cache + DB). Mirrors an
 // admin `setperm <pubkey> 0`.
 func (r *Repeater) RevokeACL(pubHex string) error {
-	r.aclDelete(strings.ToLower(pubHex))
-	return nil
+	return r.SetACL(pubHex, 0)
 }
 
 // resolveName maps a full pubkey hex to a display name via discovered_peers,
@@ -420,7 +448,7 @@ func (r *Repeater) sendServerReply(reqPkt *meshcore.Packet, clientPub [32]byte, 
 	me := r.node.Identity().PublicKey()
 
 	if reqPkt.IsRouteFlood() {
-		r.learnRoute(clientPub, reqPkt.Path, reqPkt.PathHashSize())
+		r.learnFloodRoute(clientPub, reqPkt)
 
 		// PATH-return payload: [pathLenByte][path][extraType=RESPONSE][resp].
 		inner := make([]byte, 0, 1+len(reqPkt.Path)+1+len(respPlaintext))
@@ -459,23 +487,38 @@ func (r *Repeater) sendServerReply(reqPkt *meshcore.Packet, clientPub [32]byte, 
 	if routeType == meshcore.RouteTypeFlood { // no learned route — flooded fallback gets the request's scope too
 		return r.sendFloodScoped(out, reqPkt, node.PrioritySend, serverReplyDelay)
 	}
-	return r.node.SendPacketDelayed(out, node.PrioritySend, serverReplyDelay)
+	return r.sendPkt(out, node.PrioritySend, serverReplyDelay)
 }
 
-// sendFloodScoped ports MyMesh::sendFloodReply: when the request arrived inside
-// a known non-wildcard region, a flooded reply carries that same transport
-// scope (code 1; code 2 stays 0 — the firmware's "REVISIT" home-region slot).
-// Otherwise it goes out as a plain unscoped flood.
+// sendFloodScoped ports MyMesh::sendFloodReply + mesh::chooseReplyScope: the
+// flooded reply reuses the request's path-hash width and its scope when the
+// request arrived inside a known non-wildcard region (code 1; code 2 stays 0 —
+// the firmware's "REVISIT" home-region slot); an unscoped flood request gets an
+// unscoped reply; anything else (direct request, unresolved code) falls back to
+// the default scope, or unscoped when none is set.
 func (r *Repeater) sendFloodScoped(out, reqPkt *meshcore.Packet, priority uint8, delay time.Duration) error {
-	rm := r.node.Regions()
-	if rg := rm.FindFloodMatch(reqPkt); rg != nil && rg != rm.Wildcard() {
-		out.Header = meshcore.MakeHeader(meshcore.RouteTypeTransportFlood, out.PayloadType(), 0)
-		out.TransportCode1 = rg.CalcTransportCode(out)
+	var scope *meshcore.Region
+	switch rg := r.node.Regions().FindFloodMatch(reqPkt); {
+	case !reqPkt.IsRouteFlood() || rg == nil:
+		scope = r.defaultRegionScope()
+	case rg.Name != config.WildcardRegion: // Wildcard() hands out copies, so compare by name
+		scope = rg
 	}
-	return r.node.SendPacketDelayed(out, priority, delay)
+	out.PathLength = (reqPkt.PathHashSize() - 1) << 6
+	if scope != nil {
+		out.Header = meshcore.MakeHeader(meshcore.RouteTypeTransportFlood, out.PayloadType(), 0)
+		out.TransportCode1 = scope.CalcTransportCode(out)
+	}
+	return r.sendPkt(out, priority, delay)
 }
 
-// learnRoute caches a client's return path (from its flood login/request).
+// learnFloodRoute caches the send-order return path implied by a client's flood
+// request (its accumulated path, reversed).
+func (r *Repeater) learnFloodRoute(clientPub [32]byte, pkt *meshcore.Packet) {
+	r.learnRoute(clientPub, reverseHops(pkt.Path, pkt.PathHashSize()), pkt.PathHashSize())
+}
+
+// learnRoute caches a client's return path, already in send order.
 func (r *Repeater) learnRoute(clientPub [32]byte, path []byte, hashSize uint8) {
 	cp := append([]byte(nil), path...)
 	r.routes.Lock()

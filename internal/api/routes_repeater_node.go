@@ -29,7 +29,11 @@ type repeaterDTO struct {
 	FloodMaxUnscoped    *int                `json:"floodMaxUnscoped"`
 	FloodMaxAdvert      *int                `json:"floodMaxAdvert"`
 	LoopDetect          *string             `json:"loopDetect"`
-	PathHashMode        *int                `json:"pathHashMode"`
+	PathHashSize        *int                `json:"pathHashSize"`
+	TxDelayFactor       *float64            `json:"txDelayFactor"`
+	DirectTxDelayFactor *float64            `json:"directTxDelayFactor"`
+	RxDelayBase         *float64            `json:"rxDelayBase"`
+	MultiAcks           *int                `json:"multiAcks"`
 	DefaultRegion       string              `json:"defaultRegion"`
 	AdminPasswordSet    bool                `json:"adminPasswordSet"`
 	GuestPasswordSet    bool                `json:"guestPasswordSet"`
@@ -78,7 +82,11 @@ func (s *Server) handleGetRepeater(w http.ResponseWriter, r *http.Request) {
 		FloodMaxUnscoped:    rep.FloodMaxUnscoped,
 		FloodMaxAdvert:      rep.FloodMaxAdvert,
 		LoopDetect:          rep.LoopDetect,
-		PathHashMode:        rep.PathHashMode,
+		PathHashSize:        rep.PathHashSize,
+		TxDelayFactor:       rep.TxDelayFactor,
+		DirectTxDelayFactor: rep.DirectTxDelayFactor,
+		RxDelayBase:         rep.RxDelayBase,
+		MultiAcks:           rep.MultiAcks,
 		DefaultRegion:       rep.DefaultRegion,
 		AdminPasswordSet:    rep.AdminPassword != "",
 		GuestPasswordSet:    rep.GuestPassword != "",
@@ -220,7 +228,7 @@ func (s *Server) handleRepeaterNodeRevoke(w http.ResponseWriter, r *http.Request
 		return
 	}
 	if err := ops.RevokeACL(r.PathValue("pubkey")); err != nil {
-		writeError(w, http.StatusBadGateway, err.Error())
+		writeError(w, http.StatusBadRequest, err.Error())
 		return
 	}
 	w.WriteHeader(http.StatusNoContent)
@@ -245,5 +253,45 @@ func (s *Server) handleRepeaterNodeAdvert(w http.ResponseWriter, r *http.Request
 		writeError(w, http.StatusBadGateway, err.Error())
 		return
 	}
+	w.WriteHeader(http.StatusNoContent)
+}
+
+func (s *Server) handleRepeaterNodeDiscover(w http.ResponseWriter, r *http.Request) {
+	ops, ok := s.repeaterNodeOps(w)
+	if !ok {
+		return
+	}
+	if err := ops.Discover(); err != nil {
+		writeError(w, http.StatusBadGateway, err.Error())
+		return
+	}
+	w.WriteHeader(http.StatusNoContent)
+}
+
+func (s *Server) handleRepeaterNodeSetACL(w http.ResponseWriter, r *http.Request) {
+	ops, ok := s.repeaterNodeOps(w)
+	if !ok {
+		return
+	}
+	var in struct {
+		Permission int `json:"permission"`
+	}
+	if err := readJSON(r, &in); err != nil {
+		writeError(w, http.StatusBadRequest, "invalid JSON: "+err.Error())
+		return
+	}
+	if err := ops.SetACL(r.PathValue("pubkey"), in.Permission); err != nil {
+		writeError(w, http.StatusBadRequest, err.Error())
+		return
+	}
+	w.WriteHeader(http.StatusNoContent)
+}
+
+func (s *Server) handleRepeaterNodeClearStats(w http.ResponseWriter, r *http.Request) {
+	ops, ok := s.repeaterNodeOps(w)
+	if !ok {
+		return
+	}
+	ops.ClearStats()
 	w.WriteHeader(http.StatusNoContent)
 }

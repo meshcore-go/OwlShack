@@ -141,7 +141,7 @@ func (c *Companion) makeCallback(ctx context.Context, entry triggerEntry) trigge
 		c.log.Log(ctx, logging.LevelTrace, "template rendered",
 			"trigger", evt.Type, "output", rendered)
 
-		hashSize := resolvePathHashSize(entry.config.PathHashSize, evt)
+		hashSize := resolvePathHashSize(entry.config.PathHashSize, evt, c.pathHashSize())
 
 		retryTimeout := time.Duration(*entry.config.RetryTimeout) * time.Second
 

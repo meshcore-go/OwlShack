@@ -240,7 +240,7 @@ function PeerDetailBody({
         <button
           type="button"
           onClick={onClose}
-          className="text-muted-foreground hover:text-foreground"
+          className="p-3 -m-3 text-muted-foreground hover:text-foreground"
           aria-label="Close"
         >
           <X className="size-4" />
@@ -589,7 +589,7 @@ function CopyButton({ text, label }: { text: string; label: string }) {
         setDone(true);
         window.setTimeout(() => setDone(false), 1200);
       }}
-      className="shrink-0 text-muted-foreground hover:text-primary"
+      className="shrink-0 p-3 -m-3 text-muted-foreground hover:text-primary"
       aria-label={`Copy ${label}`}
     >
       {done ? (

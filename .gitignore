@@ -178,8 +178,10 @@ meshcore.db
 meshcore.db-shm
 meshcore.db-wal
 meshcore.db-journal
-# Pre-migration DB backups (hold live secrets — never commit)
-meshcore.db.*.bak
+# Every dotted sibling of the DB holds live secrets — never commit. Covers
+# pre-migration backups (meshcore.db.bak-*), and the restore staging/rollback
+# copies the backup feature writes (meshcore.db.restore, meshcore.db.replaced).
+meshcore.db.*
 
 # Node identity private keys (ed25519 seeds — NEVER commit)
 *.key

@@ -97,6 +97,21 @@ type HashSize = 1 | 2 | 4;
 type BuilderMode = "select" | "manual";
 type PeerSort = "name" | "recent" | "signal" | "distance";
 
+// The trigger renders these instead of <SelectValue>: "Alphabetical" is wider
+// than the phone-sized trigger and was clipping to "ALPHABETICA".
+const SORT_LABEL: Record<PeerSort, string> = {
+  name: "Alphabetical",
+  recent: "Last seen",
+  signal: "Signal",
+  distance: "Distance",
+};
+const SORT_LABEL_SHORT: Record<PeerSort, string> = {
+  name: "Name",
+  recent: "Recent",
+  signal: "Signal",
+  distance: "Dist",
+};
+
 // Silence window: the final packet (last repeater in the path) must arrive
 // within this long after the trace was sent OR after the most recent echo.
 // Each progressive echo we hear resets the window; if it elapses with no
@@ -749,7 +764,7 @@ export function TracesPage() {
                   </div>
                 </div>
 
-                <div className="flex items-center gap-4">
+                <div className="flex flex-wrap items-center gap-x-4 gap-y-2">
                   <div className="flex items-center gap-1 border border-border bg-muted/30 p-0.5 w-fit">
                     <ModeToggle
                       active={runMode === "single"}
@@ -778,7 +793,7 @@ export function TracesPage() {
                       manual hex
                     </ModeToggle>
                   </div>
-                  <label className="flex items-center gap-2 font-mono text-xs uppercase tracking-[0.06em] cursor-pointer select-none">
+                  <label className="flex items-center gap-2 min-h-10 sm:min-h-0 font-mono text-xs uppercase tracking-[0.06em] cursor-pointer select-none">
                     <Switch
                       size="sm"
                       checked={mirrorReturn}
@@ -906,13 +921,25 @@ export function TracesPage() {
                         <span className="label-overline shrink-0">
                           Repeaters
                         </span>
-                        <div className="flex items-center gap-2">
+                        <div className="flex min-w-0 flex-1 sm:flex-none items-center gap-2">
                           <Select
                             value={sort}
                             onValueChange={(v) => setSort(v as PeerSort)}
                           >
-                            <SelectTrigger className="h-7 w-36 rounded-none font-mono text-[11px] uppercase tracking-[0.06em]">
-                              <SelectValue />
+                            <SelectTrigger className="h-7 w-24 sm:w-36 shrink-0 rounded-none font-mono text-[11px] uppercase tracking-[0.06em]">
+                              {/* The labels ride inside SelectValue, not in
+                                  place of it: SelectContent is item-aligned,
+                                  which measures this node to position the list
+                                  over the trigger. Without it the list renders
+                                  off the bottom of the viewport. */}
+                              <SelectValue>
+                                <span className="sm:hidden">
+                                  {SORT_LABEL_SHORT[sort]}
+                                </span>
+                                <span className="hidden sm:inline">
+                                  {SORT_LABEL[sort]}
+                                </span>
+                              </SelectValue>
                             </SelectTrigger>
                             <SelectContent className="rounded-none font-mono text-xs">
                               <SelectItem
@@ -948,7 +975,7 @@ export function TracesPage() {
                               setFilter(e.target.value)
                             }
                             placeholder="filter…"
-                            className="h-7 w-32 rounded-none font-mono text-xs"
+                            className="h-7 w-32 min-w-0 flex-1 sm:flex-none rounded-none font-mono text-base md:text-xs"
                           />
                         </div>
                       </div>
@@ -996,7 +1023,7 @@ export function TracesPage() {
                         e: React.ChangeEvent<HTMLTextAreaElement>,
                       ) => setManualHex(e.target.value)}
                       placeholder={`example: ${"ab".repeat(hashSize)} ${"cd".repeat(hashSize)}`}
-                      className="font-mono text-xs rounded-none min-h-24 break-all"
+                      className="font-mono text-base md:text-xs rounded-none min-h-24 break-all"
                     />
                     <div className="flex items-center justify-between font-mono text-[10px] tabular-nums text-muted-foreground">
                       <span>
@@ -1058,7 +1085,7 @@ export function TracesPage() {
                           setTestLabel(e.target.value)
                         }
                         placeholder="e.g. new antenna"
-                        className="h-8 rounded-none font-mono text-xs"
+                        className="h-8 rounded-none font-mono text-base md:text-xs"
                       />
                     </div>
                     <p className="sm:col-span-3 font-mono text-[10px] text-muted-foreground/60">
@@ -1288,7 +1315,7 @@ function ModeToggle({
       type="button"
       onClick={onClick}
       className={cn(
-        "px-3 py-1 font-mono text-[10px] uppercase tracking-[0.12em] transition-colors",
+        "px-3 py-1 font-mono text-[10px] uppercase tracking-[0.12em] transition-colors relative before:absolute before:inset-x-0 before:-inset-y-2 before:content-[''] sm:before:hidden",
         active
           ? "bg-primary/10 text-primary border border-primary/30"
           : "border border-transparent text-muted-foreground hover:text-foreground",
@@ -1616,13 +1643,15 @@ function SavedTestRow({
   return (
     <div>
       <div className="flex items-center gap-3 px-4 py-2.5">
-        <input
-          type="checkbox"
-          checked={selected}
-          onChange={onToggleSelect}
-          className="size-3.5 accent-primary shrink-0"
-          aria-label="Select for compare"
-        />
+        <label className="flex shrink-0 p-3 -m-3 sm:p-0 sm:m-0">
+          <input
+            type="checkbox"
+            checked={selected}
+            onChange={onToggleSelect}
+            className="size-3.5 accent-primary"
+            aria-label="Select for compare"
+          />
+        </label>
         <button
           type="button"
           onClick={toggleExpanded}
@@ -1643,7 +1672,7 @@ function SavedTestRow({
                 onChange={(e: React.ChangeEvent<HTMLInputElement>) =>
                   setLabelDraft(e.target.value)
                 }
-                className="h-7 rounded-none font-mono text-xs"
+                className="h-7 rounded-none font-mono text-base md:text-xs"
                 autoFocus
               />
               <Button

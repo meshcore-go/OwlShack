@@ -17,24 +17,25 @@ export function registerServiceWorker(): void {
     navigator.serviceWorker
       .register("/sw.js")
       .then((reg) => {
+        const offer = (sw: ServiceWorker) =>
+          toast("New version available", {
+            description: "Reload to update OwlShack.",
+            duration: Infinity,
+            action: {
+              label: "Reload",
+              onClick: () => {
+                updating = true;
+                sw.postMessage("SKIP_WAITING");
+              },
+            },
+          });
+        if (reg.waiting && navigator.serviceWorker.controller) offer(reg.waiting);
         reg.addEventListener("updatefound", () => {
           const sw = reg.installing;
           if (!sw) return;
           sw.addEventListener("statechange", () => {
             // installed + an existing controller => an update is waiting.
-            if (sw.state === "installed" && navigator.serviceWorker.controller) {
-              toast("New version available", {
-                description: "Reload to update OwlShack.",
-                duration: Infinity,
-                action: {
-                  label: "Reload",
-                  onClick: () => {
-                    updating = true;
-                    sw.postMessage("SKIP_WAITING");
-                  },
-                },
-              });
-            }
+            if (sw.state === "installed" && navigator.serviceWorker.controller) offer(sw);
           });
         });
       })

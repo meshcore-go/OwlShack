@@ -56,7 +56,7 @@ export function TextField({
         onChange={(e) => onChange(e.target.value)}
         placeholder={placeholder}
         disabled={disabled}
-        className="h-9 font-mono text-sm rounded-none border-border bg-background"
+        className="h-9 font-mono text-base md:text-sm rounded-none border-border bg-background"
       />
     </Field>
   );
@@ -122,7 +122,7 @@ export function SwitchRow({
           {label}
         </div>
         {hint && (
-          <div className="font-mono text-[10px] text-muted-foreground/60 truncate">
+          <div className="font-mono text-[10px] leading-snug text-muted-foreground/60">
             {hint}
           </div>
         )}
@@ -131,3 +131,12 @@ export function SwitchRow({
     </label>
   );
 }
+
+// PATH_HASH_SIZE_OPTIONS is the per-hop path hash width in bytes. The firmware's
+// `set path.hash.mode` takes this minus one and accepts 0-2, so 1-3 bytes. It's
+// a regional convention — the official radio presets carry it (NZ Narrow and
+// Hungary run 2 bytes).
+export const PATH_HASH_SIZE_OPTIONS = [1, 2, 3].map((n) => ({
+  value: String(n),
+  label: `${n} byte${n > 1 ? "s" : ""}`,
+}));

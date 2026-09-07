@@ -8,6 +8,7 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"log/slog"
 	"net"
@@ -64,12 +65,23 @@ func applyListenEnvOverrides(addr string) string {
 	return overridden
 }
 
+// dbPath is the SQLite file, relative to the working directory.
+const dbPath = "meshcore.db"
+
 // Run starts the bot and blocks until ctx is cancelled. The config lives in
 // the database; importPath (the -config flag) imports a config file into it.
 // It returns a non-nil error only on a fatal startup or unrecoverable failure;
 // a clean shutdown via ctx returns nil.
 func Run(ctx context.Context, importPath string, verbosity int) error {
-	db, err := store.Open(ctx, "meshcore.db")
+	// A restore uploaded through the UI is staged beside the DB: the process
+	// that accepted it held the file open, so the swap happens here instead.
+	if adopted, err := store.AdoptPendingRestore(dbPath); err != nil {
+		return fmt.Errorf("restoring database: %w", err)
+	} else if adopted {
+		slog.Info("adopted restored database", "path", dbPath, "previous", dbPath+".replaced")
+	}
+
+	db, err := store.Open(ctx, dbPath)
 	if err != nil {
 		return fmt.Errorf("database open: %w", err)
 	}
@@ -113,23 +125,24 @@ func Run(ctx context.Context, importPath string, verbosity int) error {
 		listenAddr = *cfg.ListenAddr
 	}
 	listenAddr = applyListenEnvOverrides(listenAddr)
-	httpServer := &http.Server{Addr: listenAddr, Handler: srv}
+	httpServer := &http.Server{Addr: listenAddr, Handler: srv, ReadHeaderTimeout: 10 * time.Second}
 	go func() {
 		slog.Info("web UI listening", "addr", listenAddr)
-		if err := httpServer.ListenAndServe(); err != nil && err != http.ErrServerClosed {
+		if err := httpServer.ListenAndServe(); err != nil && !errors.Is(err, http.ErrServerClosed) {
 			slog.Error("http server error", "error", err)
 		}
 	}()
 
-	wirePacketLogger(mux, db, srv)
-
 	echoTracker := echo.NewTracker(db, srv.Hub(), slog.Default())
+	go echoTracker.PruneLoop(ctx)
 
 	// The monitor service is started once and lives for the whole process: it
 	// persists across config reloads / modem reconnects (which recreate the
 	// companion set). It resolves the live companions through compReg, which we
 	// re-point on every reload, and derives its targets from contact metadata.
 	compReg := newCompanionRegistry()
+	wirePacketLogger(mux, ms.Modem, db, srv, compReg)
+
 	mon := monitor.New(db, srv.Hub(), newMergedLister(newContactLister(compReg, db), newLinkLister(compReg, db)), slog.Default())
 	mon.RegisterCollector("repeater", newRepeaterCollector(compReg, db, slog.Default()))
 	mon.RegisterCollector("companion", newCompanionCollector(compReg, slog.Default()))
@@ -191,7 +204,7 @@ func Run(ctx context.Context, importPath string, verbosity int) error {
 				stopCompanions(companions)
 				stopRepeater(rep)
 				ms.Close()
-				ms, mux, err = reconnectModem(ctx, newCfg, db, srv, reconnectCh)
+				ms, mux, err = reconnectModem(ctx, newCfg, db, srv, reconnectCh, compReg)
 				if err != nil {
 					return fmt.Errorf("modem reconnect after reload: %w", err)
 				}
@@ -230,7 +243,7 @@ func Run(ctx context.Context, importPath string, verbosity int) error {
 			stopRepeater(rep)
 			ms.Close()
 
-			ms, mux, err = reconnectModemWithBackoff(ctx, cfg, db, srv, reconnectCh)
+			ms, mux, err = reconnectModemWithBackoff(ctx, cfg, db, srv, reconnectCh, compReg)
 			if err != nil {
 				slog.Error("modem reconnect aborted", "error", err)
 				return nil
@@ -270,6 +283,14 @@ type reloadStats struct {
 // instances — including reused ones — are stopped, since the caller exits the
 // process.
 func reloadCompanions(ctx context.Context, oldCfg, newCfg *config.Config, running []*companion.Companion, ms *modem.State, mux *node.RadioMux, db *store.Store, hub *api.Hub, echoTracker *echo.Tracker) ([]*companion.Companion, reloadStats, error) {
+	// The MQTT status carries the repeater's relay flag, and the observer
+	// publishes its first "online" status the instant a broker connects inside
+	// Start — so this has to be set BEFORE Start, not after, or the first
+	// status of every restart reports repeat:off for a node that does relay.
+	// A consumer can act on that: CoreScope drops the node from its path-hop
+	// disambiguator, and the correction waits for the 5-minute heartbeat.
+	relaying := newCfg.Repeater != nil && !newCfg.Repeater.IsFwdDisabled()
+
 	oldBlocks := make(map[string]config.CompanionConfig)
 	if oldCfg != nil {
 		for _, b := range effectiveCompanionConfigs(oldCfg) {
@@ -349,6 +370,9 @@ func reloadCompanions(ctx context.Context, oldCfg, newCfg *config.Config, runnin
 			stopAll()
 			return nil, stats, fmt.Errorf("creating companion %q: %w", p.block.Name, err)
 		}
+		if obs := c.Observer(); obs != nil {
+			obs.SetRelaying(relaying)
+		}
 		if err := c.Start(ctx); err != nil {
 			stopAll()
 			return nil, stats, fmt.Errorf("starting companion %q: %w", p.block.Name, err)
@@ -360,6 +384,15 @@ func reloadCompanions(ctx context.Context, oldCfg, newCfg *config.Config, runnin
 	}
 
 	hydratePeerTables(ctx, db, fresh)
+
+	// Reused instances kept their observer across the reload, so they need the
+	// current value too — `set repeat` over the CLI persists and reloads, and
+	// lands here. Fresh ones were set before Start, above.
+	for _, c := range companions {
+		if obs := c.Observer(); obs != nil {
+			obs.SetRelaying(relaying)
+		}
+	}
 
 	return companions, stats, nil
 }
@@ -378,11 +411,15 @@ func effectiveCompanionConfigs(cfg *config.Config) []config.CompanionConfig {
 		}
 	}
 
+	pathHash := cfg.PathHashSizeOr()
 	blocks := make([]config.CompanionConfig, len(cfg.Companions))
 	copy(blocks, cfg.Companions)
 	for i := range blocks {
 		if blocks[i].Name == mqttNode && mqttNode != "" {
 			blocks[i].Mqtt = cfg.Mqtt
+		}
+		if blocks[i].PathHashSize == nil {
+			blocks[i].PathHashSize = &pathHash
 		}
 	}
 	return blocks
@@ -461,21 +498,21 @@ func hydratePeerTables(ctx context.Context, db *store.Store, companions []*compa
 
 // reconnectModem performs a single modem.Setup attempt and rebuilds the mux,
 // dead-watcher, and packet logger. Returns the new state on success.
-func reconnectModem(ctx context.Context, cfg *config.Config, db *store.Store, srv *api.Server, reconnectCh chan struct{}) (*modem.State, *node.RadioMux, error) {
+func reconnectModem(ctx context.Context, cfg *config.Config, db *store.Store, srv *api.Server, reconnectCh chan struct{}, compReg *companionRegistry) (*modem.State, *node.RadioMux, error) {
 	ms, err := modem.Setup(ctx, cfg)
 	if err != nil {
 		return nil, nil, err
 	}
 	ms.StartDeadWatcher(reconnectCh)
 	mux := node.NewRadioMux(ms.Modem, modem.MuxOptions(ms)...)
-	wirePacketLogger(mux, db, srv)
+	wirePacketLogger(mux, ms.Modem, db, srv, compReg)
 	return ms, mux, nil
 }
 
 // reconnectModemWithBackoff retries reconnectModem with capped exponential
 // backoff until the context is cancelled. Drains spurious reconnectCh sends
 // (e.g. from a half-open transport flapping) so they don't queue up.
-func reconnectModemWithBackoff(ctx context.Context, cfg *config.Config, db *store.Store, srv *api.Server, reconnectCh chan struct{}) (*modem.State, *node.RadioMux, error) {
+func reconnectModemWithBackoff(ctx context.Context, cfg *config.Config, db *store.Store, srv *api.Server, reconnectCh chan struct{}, compReg *companionRegistry) (*modem.State, *node.RadioMux, error) {
 	const (
 		initialDelay = 1 * time.Second
 		maxDelay     = 30 * time.Second
@@ -487,7 +524,7 @@ func reconnectModemWithBackoff(ctx context.Context, cfg *config.Config, db *stor
 		case <-reconnectCh:
 		default:
 		}
-		ms, mux, err := reconnectModem(ctx, cfg, db, srv, reconnectCh)
+		ms, mux, err := reconnectModem(ctx, cfg, db, srv, reconnectCh, compReg)
 		if err == nil {
 			return ms, mux, nil
 		}
@@ -497,12 +534,7 @@ func reconnectModemWithBackoff(ctx context.Context, cfg *config.Config, db *stor
 			return nil, nil, ctx.Err()
 		case <-time.After(delay):
 		}
-		if delay < maxDelay {
-			delay *= 2
-			if delay > maxDelay {
-				delay = maxDelay
-			}
-		}
+		delay = min(delay*2, maxDelay)
 	}
 }
 

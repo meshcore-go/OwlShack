@@ -2,9 +2,13 @@ package store
 
 import (
 	"context"
+	"crypto/sha256"
 	"database/sql"
+	"encoding/hex"
 	"errors"
+	"fmt"
 	"path/filepath"
+	"strings"
 	"testing"
 	"time"
 
@@ -781,7 +785,7 @@ func TestPacketRepo_ListFilter(t *testing.T) {
 // migration is appended to the slice in migrate().
 func TestStore_MigrateUserVersion(t *testing.T) {
 	t.Parallel()
-	const wantVersion = 7 // migrateV1, 2 squashed noop slots, migrateV2..migrateV5
+	const wantVersion = 9 // migrateV1, 2 squashed noop slots, migrateV2..migrateV7
 	st := newTestStore(t)
 	var v int
 	if err := st.db.QueryRowContext(t.Context(), "PRAGMA user_version").Scan(&v); err != nil {
@@ -801,5 +805,164 @@ func TestStore_ForeignKeysEnforced(t *testing.T) {
 	err := st.Messages.Insert(t.Context(), m)
 	if err == nil {
 		t.Fatalf("Insert with dangling companion_id = nil error, want FK violation")
+	}
+}
+
+// TestStore_WriteAfterClose confirms a late writer call during shutdown is a
+// no-op rather than a send on a closed channel.
+func TestStore_WriteAfterClose(t *testing.T) {
+	t.Parallel()
+	st := newTestStore(t)
+	if err := st.Close(); err != nil {
+		t.Fatalf("Close: %v", err)
+	}
+	ran := false
+	if st.WriteAsync(func() { ran = true }) {
+		t.Error("WriteAsync after Close returned true")
+	}
+	st.WriteSync(func() { ran = true })
+	if ran {
+		t.Error("closure ran after Close")
+	}
+}
+
+// An existing operator's database must survive the upgrade: the new slots have
+// to apply to a database that already has tables and rows, not just to a fresh
+// one. It builds the older shape from the shipped slots, so it does NOT detect a
+// renumbered or edited shipped slot — that is TestMigrations_ShippedSlotsFrozen's
+// job, and this test passes happily under exactly that mutation.
+func TestStore_UpgradeFromReleasedSchema(t *testing.T) {
+	t.Parallel()
+	const releasedVersion = 7 // len(migrations) at v1.1.0
+
+	path := filepath.Join(t.TempDir(), "released.db")
+
+	// Build a released database by running only the slots that shipped. Those
+	// are byte-identical to v1.1.0 apart from taking a tx, so this is a faithful
+	// stand-in for a node in the field.
+	db, err := openWritableDB(path)
+	if err != nil {
+		t.Fatalf("openWritableDB: %v", err)
+	}
+	for i := range releasedVersion {
+		if err := migrations[i](t.Context(), db); err != nil {
+			t.Fatalf("building released schema at slot %d: %v", i+1, err)
+		}
+	}
+	if _, err := db.ExecContext(t.Context(),
+		fmt.Sprintf("PRAGMA user_version = %d", releasedVersion)); err != nil {
+		t.Fatalf("stamping released version: %v", err)
+	}
+	// Operator data that must still be there afterwards.
+	if _, err := db.ExecContext(t.Context(),
+		"INSERT INTO companions (name) VALUES ('upgrade-me')"); err != nil {
+		t.Fatalf("seeding operator data: %v", err)
+	}
+	db.Close()
+
+	st, err := Open(t.Context(), path)
+	if err != nil {
+		t.Fatalf("upgrading a released database: %v", err)
+	}
+	defer st.Close()
+
+	var version int
+	if err := st.db.QueryRowContext(t.Context(), "PRAGMA user_version").Scan(&version); err != nil {
+		t.Fatalf("reading user_version: %v", err)
+	}
+	if version != len(migrations) {
+		t.Errorf("user_version after upgrade = %d, want %d", version, len(migrations))
+	}
+
+	// The columns the new slots add must exist on the upgraded table.
+	cols := map[string]bool{}
+	rows, err := st.db.QueryContext(t.Context(), "PRAGMA table_info(settings)")
+	if err != nil {
+		t.Fatalf("table_info: %v", err)
+	}
+	for rows.Next() {
+		var cid int
+		var name, typ string
+		var notNull, pk int
+		var dflt *string
+		if err := rows.Scan(&cid, &name, &typ, &notNull, &dflt, &pk); err != nil {
+			t.Fatalf("scanning table_info: %v", err)
+		}
+		cols[name] = true
+	}
+	rows.Close()
+	for _, c := range []string{"duty_cycle_pct", "map_tile_key", "path_hash_size"} {
+		if !cols[c] {
+			t.Errorf("settings.%s missing after the upgrade", c)
+		}
+	}
+
+	if id, err := st.Companions.IDByName(t.Context(), "upgrade-me"); err != nil || id <= 0 {
+		t.Errorf("companion after upgrade: id %d, err %v; want a live row", id, err)
+	}
+}
+
+// recordingExecer forwards to a real transaction while capturing the SQL, so a
+// migration's statements can be fingerprinted without vendoring the DDL.
+type recordingExecer struct {
+	inner dbExecer
+	sql   []string
+}
+
+func (r *recordingExecer) ExecContext(ctx context.Context, q string, args ...any) (sql.Result, error) {
+	r.sql = append(r.sql, q)
+	return r.inner.ExecContext(ctx, q, args...)
+}
+
+func (r *recordingExecer) QueryContext(ctx context.Context, q string, args ...any) (*sql.Rows, error) {
+	r.sql = append(r.sql, q)
+	return r.inner.QueryContext(ctx, q, args...)
+}
+
+// Once a migration has shipped, its slot is frozen: a released database has
+// already stamped that version and will never run the slot again, so editing,
+// renumbering or squashing one silently leaves a field node without the schema
+// change. Nothing else in the build notices, and the node fails later at a
+// query. This fingerprints the SQL of every slot released in v1.1.0.
+//
+// A failure here is not a test to update. It means a shipped migration changed,
+// and the fix is to append a new slot instead. The constant only changes when
+// the RELEASED set legitimately grows — i.e. after a release, extend
+// shippedSlots and re-pin.
+func TestMigrations_ShippedSlotsFrozen(t *testing.T) {
+	t.Parallel()
+	const (
+		shippedSlots    = 7 // len(migrations) at v1.1.0
+		shippedSQLDiges = "7af51d21828cd637"
+	)
+
+	if len(migrations) < shippedSlots {
+		t.Fatalf("migrations has %d slots, fewer than the %d already released",
+			len(migrations), shippedSlots)
+	}
+
+	st := newTestStore(t)
+	tx, err := st.db.BeginTx(t.Context(), nil)
+	if err != nil {
+		t.Fatalf("begin: %v", err)
+	}
+	defer tx.Rollback()
+
+	h := sha256.New()
+	for i := range shippedSlots {
+		rec := &recordingExecer{inner: tx}
+		// Errors are irrelevant: the schema already exists, so re-running a
+		// slot may fail. The SQL it attempts is what is being pinned.
+		_ = migrations[i](t.Context(), rec)
+		fmt.Fprintf(h, "slot %d\n", i+1)
+		for _, q := range rec.sql {
+			fmt.Fprintln(h, strings.Join(strings.Fields(q), " "))
+		}
+	}
+	if got := hex.EncodeToString(h.Sum(nil))[:16]; got != shippedSQLDiges {
+		t.Errorf("the SQL of released migration slots 1-%d changed (digest %s, want %s).\n"+
+			"A shipped slot must never be edited, renumbered or squashed — a database "+
+			"already at that version will skip it. Append a new slot instead.",
+			shippedSlots, got, shippedSQLDiges)
 	}
 }

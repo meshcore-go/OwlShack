@@ -272,14 +272,14 @@ func TestParseRepeaterNeighbors(t *testing.T) {
 		if got.Neighbors[0].PubkeyPrefix != "010203040506" {
 			t.Errorf("neighbor[0] prefix = %q, want 010203040506", got.Neighbors[0].PubkeyPrefix)
 		}
-		if got.Neighbors[0].SecsAgo != 120 || got.Neighbors[0].SNR != -5 {
-			t.Errorf("neighbor[0] = secsAgo %d / snr %d, want 120 / -5", got.Neighbors[0].SecsAgo, got.Neighbors[0].SNR)
+		if got.Neighbors[0].SecsAgo != 120 || got.Neighbors[0].SNR != -1.25 {
+			t.Errorf("neighbor[0] = secsAgo %d / snr %v, want 120 / -1.25", got.Neighbors[0].SecsAgo, got.Neighbors[0].SNR)
 		}
 		if got.Neighbors[1].PubkeyPrefix != "aabbccddeeff" {
 			t.Errorf("neighbor[1] prefix = %q, want aabbccddeeff", got.Neighbors[1].PubkeyPrefix)
 		}
-		if got.Neighbors[1].SecsAgo != 3600 || got.Neighbors[1].SNR != 10 {
-			t.Errorf("neighbor[1] = secsAgo %d / snr %d, want 3600 / 10", got.Neighbors[1].SecsAgo, got.Neighbors[1].SNR)
+		if got.Neighbors[1].SecsAgo != 3600 || got.Neighbors[1].SNR != 2.5 {
+			t.Errorf("neighbor[1] = secsAgo %d / snr %v, want 3600 / 2.5", got.Neighbors[1].SecsAgo, got.Neighbors[1].SNR)
 		}
 	})
 
@@ -430,5 +430,56 @@ func TestParseRepeaterOwnerInfo(t *testing.T) {
 				t.Errorf("OwnerInfo = %q, want %q", got.OwnerInfo, tt.wantOwnerInfo)
 			}
 		})
+	}
+}
+
+// TestParseRepeaterAccessListPadding: the decrypted reply is zero-padded to
+// the cipher block, and the firmware never emits a permissions==0 entry
+// (MyMesh.cpp handleRequest: "skip deleted entries"), so all-zero strides are
+// padding, not clients.
+func TestParseRepeaterAccessListPadding(t *testing.T) {
+	t.Parallel()
+	data := []byte{
+		0x01, 0x02, 0x03, 0x04, 0x05, 0x06, 0x03,
+		0xAA, 0xBB, 0xCC, 0xDD, 0xEE, 0xFF, 0xC3, // sensor admin + both alert bits
+	}
+	data = append(data, make([]byte, 14)...) // 18 -> 32 bytes
+	got := parseRepeaterAccessList(data)
+	if len(got.Entries) != 2 {
+		t.Fatalf("got %d entries, want 2 (padding must not become clients): %+v", len(got.Entries), got.Entries)
+	}
+	if got.Entries[1].Permissions != 0xC3 {
+		t.Errorf("entry[1] perms = %#x, want 0xc3", got.Entries[1].Permissions)
+	}
+}
+
+// TestIsLoginReply pins the login reply shape
+// [ts:4][RESP_SERVER_LOGIN_OK=0][0][isAdmin][permissions][rand:4][ver] against
+// the tagged REQ responses that share the same secret and source hash.
+func TestIsLoginReply(t *testing.T) {
+	t.Parallel()
+	login := make([]byte, 16) // 13 bytes + block padding
+	binary.LittleEndian.PutUint32(login[:4], 1_700_000_000)
+	login[6], login[7], login[12] = 1, 3, 2
+	status := make([]byte, 64)
+	binary.LittleEndian.PutUint32(status[:4], 1_700_000_000)
+	binary.LittleEndian.PutUint16(status[4:6], 3700) // batt mV
+	telem := append([]byte{0, 0, 0, 0, 1, 116, 0x01, 0x72}, make([]byte, 8)...)
+
+	tests := []struct {
+		name string
+		data []byte
+		want bool
+	}{
+		{"login reply", login, true},
+		{"status response", status, false},
+		{"telemetry response", telem, false},
+		{"short", login[:7], false},
+		{"nil", nil, false},
+	}
+	for _, tt := range tests {
+		if got := isLoginReply(tt.data); got != tt.want {
+			t.Errorf("%s: isLoginReply = %v, want %v", tt.name, got, tt.want)
+		}
 	}
 }

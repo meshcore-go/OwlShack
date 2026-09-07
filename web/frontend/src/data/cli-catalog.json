@@ -1,89 +1,491 @@
 {
   "topLevelCommands": [
-    { "command": "ver", "hint": "firmware version + build date" },
-    { "command": "board", "hint": "board manufacturer name" },
-    { "command": "region", "hint": "show / set radio region" },
-    { "command": "advert", "hint": "broadcast a flood advert now" },
-    { "command": "advert.zerohop", "hint": "broadcast a zero-hop advert (neighbors only)" },
-    { "command": "neighbors", "hint": "list observed neighbors" },
-    { "command": "discover.neighbors", "hint": "request neighbours to advertise (~60s)" },
-    { "command": "neighbor.remove ", "hint": "remove a neighbor by pubkey hex" },
-    { "command": "clock", "hint": "show device UTC time" },
-    { "command": "clock sync", "hint": "sync device clock to companion timestamp" },
-    { "command": "time ", "hint": "set time to <epoch-seconds>" },
-    { "command": "clkreboot", "hint": "reset clock to 2024-05-15 then reboot" },
-    { "command": "tempradio ", "hint": "temporary radio params: freq bw sf cr mins" },
-    { "command": "password ", "hint": "change admin password" },
-    { "command": "clear stats", "hint": "reset packet/radio stat counters" },
-    { "command": "stats-radio", "hint": "radio stats dump (serial only)" },
-    { "command": "stats-packets", "hint": "packet stats dump (serial only)" },
-    { "command": "stats-core", "hint": "core stats dump (serial only)" },
-    { "command": "log start", "hint": "begin writing log to flash" },
-    { "command": "log stop", "hint": "stop log writes" },
-    { "command": "log erase", "hint": "erase log file" },
-    { "command": "log", "hint": "dump log file (serial only)" },
-    { "command": "powersaving on", "hint": "enable powersaving" },
-    { "command": "powersaving off", "hint": "disable powersaving" },
-    { "command": "powersaving", "hint": "show powersaving state" },
-    { "command": "gps on", "hint": "enable GPS module" },
-    { "command": "gps off", "hint": "disable GPS module" },
-    { "command": "gps sync", "hint": "sync clock from GPS" },
-    { "command": "gps setloc", "hint": "snap node lat/lon to current GPS fix" },
-    { "command": "gps advert none", "hint": "do not include location in adverts" },
-    { "command": "gps advert share", "hint": "advertise current GPS location" },
-    { "command": "gps advert prefs", "hint": "advertise stored prefs lat/lon" },
-    { "command": "gps", "hint": "show GPS state, fix and sat count" },
-    { "command": "sensor list", "hint": "list sensor settings (paged)" },
-    { "command": "sensor get ", "hint": "read a sensor setting by key" },
-    { "command": "sensor set ", "hint": "set a sensor setting: key value" },
-    { "command": "reboot", "hint": "soft reboot the device" },
-    { "command": "poweroff", "hint": "power off (alias: shutdown)" },
-    { "command": "shutdown", "hint": "power off (alias: poweroff)" },
-    { "command": "start ota", "hint": "begin OTA firmware update" },
-    { "command": "erase", "hint": "format the file system (serial only)" }
+    {
+      "command": "advert",
+      "hint": "broadcast a flood advert now"
+    },
+    {
+      "command": "advert.zerohop",
+      "hint": "broadcast a zero-hop advert (neighbors only)"
+    },
+    {
+      "command": "board",
+      "hint": "board manufacturer name"
+    },
+    {
+      "command": "clear stats",
+      "hint": "reset packet/radio stat counters"
+    },
+    {
+      "command": "clkreboot",
+      "hint": "reset clock to 2024-05-15 then reboot"
+    },
+    {
+      "command": "clock",
+      "hint": "show device UTC time"
+    },
+    {
+      "command": "clock sync",
+      "hint": "sync device clock to companion timestamp"
+    },
+    {
+      "command": "discover.neighbors",
+      "hint": "request neighbours to advertise (~60s)",
+      "roles": [
+        "repeater"
+      ]
+    },
+    {
+      "command": "erase",
+      "hint": "format the file system (serial only)"
+    },
+    {
+      "command": "get ",
+      "hint": "read a config value: get <key>"
+    },
+    {
+      "command": "get acl",
+      "hint": "dump the admin ACL (serial only)"
+    },
+    {
+      "command": "gps",
+      "hint": "show GPS state, fix and sat count"
+    },
+    {
+      "command": "gps advert none",
+      "hint": "do not include location in adverts"
+    },
+    {
+      "command": "gps advert prefs",
+      "hint": "advertise stored prefs lat/lon"
+    },
+    {
+      "command": "gps advert share",
+      "hint": "advertise current GPS location"
+    },
+    {
+      "command": "gps off",
+      "hint": "disable GPS module"
+    },
+    {
+      "command": "gps on",
+      "hint": "enable GPS module"
+    },
+    {
+      "command": "gps setloc",
+      "hint": "snap node lat/lon to current GPS fix"
+    },
+    {
+      "command": "gps sync",
+      "hint": "sync clock from GPS"
+    },
+    {
+      "command": "io",
+      "hint": "sensor: read GPIO bits (hex)",
+      "roles": [
+        "sensor"
+      ]
+    },
+    {
+      "command": "io ",
+      "hint": "sensor: write GPIO — io <hex> | io s<hex> set | io r<hex> reset | io t<hex> toggle",
+      "roles": [
+        "sensor"
+      ]
+    },
+    {
+      "command": "log",
+      "hint": "dump log file (serial only)"
+    },
+    {
+      "command": "log erase",
+      "hint": "erase log file"
+    },
+    {
+      "command": "log start",
+      "hint": "begin writing log to flash"
+    },
+    {
+      "command": "log stop",
+      "hint": "stop log writes"
+    },
+    {
+      "command": "neighbor.remove ",
+      "hint": "remove a neighbor by pubkey hex",
+      "roles": [
+        "repeater"
+      ]
+    },
+    {
+      "command": "neighbors",
+      "hint": "list observed neighbors: pubkey:secs_ago:snr_x4",
+      "roles": [
+        "repeater"
+      ]
+    },
+    {
+      "command": "password ",
+      "hint": "change admin password"
+    },
+    {
+      "command": "poweroff",
+      "hint": "power off (alias: shutdown)"
+    },
+    {
+      "command": "powersaving",
+      "hint": "show powersaving state"
+    },
+    {
+      "command": "powersaving off",
+      "hint": "disable powersaving"
+    },
+    {
+      "command": "powersaving on",
+      "hint": "enable powersaving"
+    },
+    {
+      "command": "reboot",
+      "hint": "soft reboot the device"
+    },
+    {
+      "command": "region",
+      "hint": "show the region / transport-scope tree"
+    },
+    {
+      "command": "region allowf ",
+      "hint": "allow flood relaying for a region"
+    },
+    {
+      "command": "region def ",
+      "hint": "define regions inline: <name>[|jump] … (replaces tree)"
+    },
+    {
+      "command": "region default ",
+      "hint": "show / set the default advert scope"
+    },
+    {
+      "command": "region denyf ",
+      "hint": "deny flood relaying for a region"
+    },
+    {
+      "command": "region get ",
+      "hint": "show one region: name, parent, flood flag"
+    },
+    {
+      "command": "region home ",
+      "hint": "show / set the home region"
+    },
+    {
+      "command": "region list ",
+      "hint": "list regions: allowed | denied (comma-separated)"
+    },
+    {
+      "command": "region load",
+      "hint": "reload the region table from storage",
+      "roles": [
+        "repeater",
+        "room"
+      ]
+    },
+    {
+      "command": "region put ",
+      "hint": "add a region: <name> [parent]"
+    },
+    {
+      "command": "region remove ",
+      "hint": "remove a region"
+    },
+    {
+      "command": "region save",
+      "hint": "persist the region table",
+      "roles": [
+        "repeater",
+        "room"
+      ]
+    },
+    {
+      "command": "room.post ",
+      "hint": "post a system message to the room",
+      "roles": [
+        "room"
+      ]
+    },
+    {
+      "command": "sensor get ",
+      "hint": "read a sensor setting by key"
+    },
+    {
+      "command": "sensor list",
+      "hint": "list sensor settings (paged)"
+    },
+    {
+      "command": "sensor set ",
+      "hint": "set a sensor setting: key value"
+    },
+    {
+      "command": "set ",
+      "hint": "write a config value: set <key> <value>"
+    },
+    {
+      "command": "setperm ",
+      "hint": "ACL perms: <pubkey> <int> — role 0-3 (0 revokes); sensors add alert bits 64 lo / 128 hi"
+    },
+    {
+      "command": "shutdown",
+      "hint": "power off (alias: poweroff)"
+    },
+    {
+      "command": "start ota",
+      "hint": "begin OTA firmware update"
+    },
+    {
+      "command": "stats-core",
+      "hint": "core stats dump (serial only)"
+    },
+    {
+      "command": "stats-packets",
+      "hint": "packet stats dump (serial only)"
+    },
+    {
+      "command": "stats-radio",
+      "hint": "radio stats dump (serial only)"
+    },
+    {
+      "command": "tempradio ",
+      "hint": "temporary radio params: freq bw sf cr mins"
+    },
+    {
+      "command": "time ",
+      "hint": "set time to <epoch-seconds>"
+    },
+    {
+      "command": "ver",
+      "hint": "firmware version + build date"
+    }
   ],
   "configKeys": [
-    { "key": "name", "hint": "node name (set: max 31 chars, no special chars)" },
-    { "key": "owner.info", "hint": "owner bio; use | as newline separator" },
-    { "key": "role", "hint": "device role (read-only)" },
-    { "key": "public.key", "hint": "this node's public key (read-only)" },
-    { "key": "prv.key", "hint": "private key — serial only, reboot to apply" },
-    { "key": "radio", "hint": "freq,bw,sf,cr — reboot to apply" },
-    { "key": "freq", "hint": "frequency in MHz — serial only, reboot to apply" },
-    { "key": "tx", "hint": "TX power in dBm" },
-    { "key": "radio.rxgain", "hint": "RX boosted gain (on/off, SX126x/LR1110 only)" },
-    { "key": "lat", "hint": "latitude (decimal degrees)" },
-    { "key": "lon", "hint": "longitude (decimal degrees)" },
-    { "key": "advert.interval", "hint": "direct advert interval — minutes (3-240, 0=off)" },
-    { "key": "flood.advert.interval", "hint": "flood advert interval — hours (3-168, 0=off)" },
-    { "key": "repeat", "hint": "packet forwarding (on/off)" },
-    { "key": "flood.max", "hint": "max flood transmissions (0-64)" },
-    { "key": "flood.max.unscoped", "hint": "max hops for un-scoped floods (0-64)" },
-    { "key": "flood.max.advert", "hint": "max hops for advert floods (0-64)" },
-    { "key": "path.hash.mode", "hint": "path hash size: 0=1B, 1=2B, 3=4B" },
-    { "key": "loop.detect", "hint": "off / minimal / moderate / strict" },
-    { "key": "rxdelay", "hint": "RX delay base, dB (0-20)" },
-    { "key": "txdelay", "hint": "TX delay factor (0-2)" },
-    { "key": "direct.txdelay", "hint": "direct-mode TX delay factor (0-2)" },
-    { "key": "dutycycle", "hint": "duty cycle %, 1-100 (sets airtime_factor)" },
-    { "key": "af", "hint": "airtime factor (raw)" },
-    { "key": "int.thresh", "hint": "interference threshold" },
-    { "key": "agc.reset.interval", "hint": "AGC reset interval, secs (rounded /4)" },
-    { "key": "multi.acks", "hint": "number of repeated ACKs to send" },
-    { "key": "guest.password", "hint": "guest login password" },
-    { "key": "allow.read.only", "hint": "allow read-only mode (on/off)" },
-    { "key": "bootloader.ver", "hint": "bootloader version (NRF52 only, read-only)" },
-    { "key": "bridge.type", "hint": "bridge build (none/rs232/espnow, read-only)" },
-    { "key": "bridge.enabled", "hint": "enable bridge (on/off)" },
-    { "key": "bridge.delay", "hint": "bridge delay, ms (0-10000)" },
-    { "key": "bridge.source", "hint": "bridge packet source (rx/tx)" },
-    { "key": "bridge.baud", "hint": "RS232 bridge baud (9600+)" },
-    { "key": "bridge.channel", "hint": "ESP-NOW channel (1-14)" },
-    { "key": "bridge.secret", "hint": "ESP-NOW shared secret" },
-    { "key": "adc.multiplier", "hint": "battery ADC multiplier (0=board default)" },
-    { "key": "pwrmgt.support", "hint": "power management supported? (NRF52 only)" },
-    { "key": "pwrmgt.source", "hint": "power source: external / battery" },
-    { "key": "pwrmgt.bootreason", "hint": "last reset / shutdown reason" },
-    { "key": "pwrmgt.bootmv", "hint": "boot voltage in mV" }
+    {
+      "key": "adc.multiplier",
+      "hint": "battery ADC multiplier (0=board default)"
+    },
+    {
+      "key": "advert.interval",
+      "hint": "direct advert interval — minutes (60-240, 0=off; stored in 2-min steps)"
+    },
+    {
+      "key": "af",
+      "hint": "airtime factor (raw)"
+    },
+    {
+      "key": "agc.reset.interval",
+      "hint": "AGC reset interval, secs (rounded /4)"
+    },
+    {
+      "key": "allow.read.only",
+      "hint": "allow read-only mode (on/off)",
+      "roles": [
+        "room"
+      ]
+    },
+    {
+      "key": "bootloader.ver",
+      "hint": "bootloader version (NRF52 only, read-only)"
+    },
+    {
+      "key": "bridge.baud",
+      "hint": "RS232 bridge baud (9600+)",
+      "roles": [
+        "repeater"
+      ]
+    },
+    {
+      "key": "bridge.channel",
+      "hint": "ESP-NOW channel (1-14)",
+      "roles": [
+        "repeater"
+      ]
+    },
+    {
+      "key": "bridge.delay",
+      "hint": "bridge delay, ms (0-10000)",
+      "roles": [
+        "repeater"
+      ]
+    },
+    {
+      "key": "bridge.enabled",
+      "hint": "enable bridge (on/off)",
+      "roles": [
+        "repeater"
+      ]
+    },
+    {
+      "key": "bridge.secret",
+      "hint": "ESP-NOW shared secret",
+      "roles": [
+        "repeater"
+      ]
+    },
+    {
+      "key": "bridge.source",
+      "hint": "bridge packet source (rx/tx)",
+      "roles": [
+        "repeater"
+      ]
+    },
+    {
+      "key": "bridge.type",
+      "hint": "bridge build (none/rs232/espnow, read-only)",
+      "roles": [
+        "repeater"
+      ]
+    },
+    {
+      "key": "cad",
+      "hint": "channel activity detection on/off"
+    },
+    {
+      "key": "direct.txdelay",
+      "hint": "direct-mode TX delay factor (0-2)"
+    },
+    {
+      "key": "dutycycle",
+      "hint": "duty cycle %, 1-100 (sets airtime_factor)"
+    },
+    {
+      "key": "extra.sf",
+      "hint": "extra spreading factors to listen on (up to 3, comma-separated; LR2021 only)"
+    },
+    {
+      "key": "flood.advert.interval",
+      "hint": "flood advert interval — hours (3-168, 0=off)"
+    },
+    {
+      "key": "flood.max",
+      "hint": "max flood transmissions (0-64)"
+    },
+    {
+      "key": "flood.max.advert",
+      "hint": "max hops for advert floods (0-64)",
+      "roles": [
+        "repeater",
+        "room"
+      ]
+    },
+    {
+      "key": "flood.max.unscoped",
+      "hint": "max hops for un-scoped floods (0-64)",
+      "roles": [
+        "repeater",
+        "room"
+      ]
+    },
+    {
+      "key": "freq",
+      "hint": "frequency in MHz (set: serial only, reboot to apply)"
+    },
+    {
+      "key": "guest.password",
+      "hint": "guest login password",
+      "roles": [
+        "repeater",
+        "room"
+      ]
+    },
+    {
+      "key": "int.thresh",
+      "hint": "interference threshold"
+    },
+    {
+      "key": "lat",
+      "hint": "latitude (decimal degrees)"
+    },
+    {
+      "key": "lon",
+      "hint": "longitude (decimal degrees)"
+    },
+    {
+      "key": "loop.detect",
+      "hint": "off / minimal / moderate / strict",
+      "roles": [
+        "repeater"
+      ]
+    },
+    {
+      "key": "multi.acks",
+      "hint": "number of repeated ACKs to send"
+    },
+    {
+      "key": "name",
+      "hint": "node name (set: max 31 chars, no special chars)"
+    },
+    {
+      "key": "owner.info",
+      "hint": "owner bio; use | as newline separator"
+    },
+    {
+      "key": "path.hash.mode",
+      "hint": "path hash size: 0=1B, 1=2B, 2=3B"
+    },
+    {
+      "key": "prv.key",
+      "hint": "private key — serial only, reboot to apply"
+    },
+    {
+      "key": "public.key",
+      "hint": "this node's public key (read-only)"
+    },
+    {
+      "key": "pwrmgt.bootmv",
+      "hint": "boot voltage in mV"
+    },
+    {
+      "key": "pwrmgt.bootreason",
+      "hint": "last reset / shutdown reason"
+    },
+    {
+      "key": "pwrmgt.source",
+      "hint": "power source: external / battery"
+    },
+    {
+      "key": "pwrmgt.support",
+      "hint": "power management supported? (NRF52 only)"
+    },
+    {
+      "key": "radio",
+      "hint": "freq,bw,sf,cr — reboot to apply"
+    },
+    {
+      "key": "radio.fem.rxgain",
+      "hint": "front-end LNA gain on/off (board must support it)"
+    },
+    {
+      "key": "radio.fem.txgain",
+      "hint": "front-end PA gain on/off (board must support it)"
+    },
+    {
+      "key": "radio.rxgain",
+      "hint": "RX boosted gain (on/off, SX126x/LR1110 only)"
+    },
+    {
+      "key": "repeat",
+      "hint": "packet forwarding (on/off)"
+    },
+    {
+      "key": "role",
+      "hint": "device role (read-only)"
+    },
+    {
+      "key": "rxdelay",
+      "hint": "RX delay base, dB (0-20)"
+    },
+    {
+      "key": "tx",
+      "hint": "TX power in dBm"
+    },
+    {
+      "key": "txdelay",
+      "hint": "TX delay factor (0-2)"
+    }
   ]
 }

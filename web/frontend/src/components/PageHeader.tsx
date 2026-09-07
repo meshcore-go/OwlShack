@@ -28,7 +28,7 @@ export function PageHeader({
         {eyebrow && (
           <span className="label-overline block">{eyebrow}</span>
         )}
-        <div className="flex items-baseline gap-3">
+        <div className="flex flex-wrap items-baseline gap-x-3 gap-y-1">
           <h1 className="font-mono text-lg font-semibold tracking-tight uppercase">
             {title}
           </h1>
@@ -39,7 +39,7 @@ export function PageHeader({
         </div>
       </div>
       {actions && (
-        <div className="flex items-center gap-2 shrink-0">{actions}</div>
+        <div className="flex flex-wrap items-center gap-2 shrink-0">{actions}</div>
       )}
     </div>
   );

@@ -23,6 +23,11 @@ type CompanionConfig struct {
 	Longitude      *float64 `json:"longitude" yaml:"longitude" toml:"longitude"`
 	AdvertInterval *int     `json:"advertInterval,omitempty" yaml:"advertInterval,omitempty" toml:"advertInterval,omitempty"` // nil == default, 0 == off
 
+	// PathHashSize overrides the global Config.PathHashSize for this companion
+	// (bytes). nil == inherit. Resolved into this field at startup, so the node
+	// code only ever reads its own value.
+	PathHashSize *int `json:"pathHashSize,omitempty" yaml:"pathHashSize,omitempty" toml:"pathHashSize,omitempty"`
+
 	// Standalone channels (not tied to triggers)
 	Channels *ChannelList `json:"channels,omitempty" yaml:"channels,omitempty" toml:"channels,omitempty"`
 

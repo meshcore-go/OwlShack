@@ -3,6 +3,7 @@ package store
 import (
 	"context"
 	"database/sql"
+	"errors"
 	"fmt"
 )
 
@@ -108,7 +109,7 @@ func (r *LinkMonitorRepo) ListEnabled(ctx context.Context) ([]LinkMonitor, error
 // GetByID returns one link monitor by its surrogate id, or nil if absent.
 func (r *LinkMonitorRepo) GetByID(ctx context.Context, id int64) (*LinkMonitor, error) {
 	l, err := scanLinkMonitor(r.db.QueryRowContext(ctx, `SELECT `+linkMonitorCols+` FROM link_monitors WHERE id = ?`, id))
-	if err == sql.ErrNoRows {
+	if errors.Is(err, sql.ErrNoRows) {
 		return nil, nil
 	}
 	if err != nil {
@@ -120,7 +121,7 @@ func (r *LinkMonitorRepo) GetByID(ctx context.Context, id int64) (*LinkMonitor, 
 // GetByKey returns the link monitor for a synthetic key, or nil if absent.
 func (r *LinkMonitorRepo) GetByKey(ctx context.Context, key []byte) (*LinkMonitor, error) {
 	l, err := scanLinkMonitor(r.db.QueryRowContext(ctx, `SELECT `+linkMonitorCols+` FROM link_monitors WHERE key = ?`, key))
-	if err == sql.ErrNoRows {
+	if errors.Is(err, sql.ErrNoRows) {
 		return nil, nil
 	}
 	if err != nil {

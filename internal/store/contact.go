@@ -41,12 +41,13 @@ type Contact struct {
 	// identity, location, routing path, feature flags and last-seen (refreshed
 	// from adverts / path learning), so it survives deletion of the discovered
 	// peer intact and owns its path per-companion.
-	Name            string
-	Type            string
-	Lat             int32
-	Lon             int32
-	Feat1           uint16
-	Feat2           uint16
+	Name  string
+	Type  string
+	Lat   int32
+	Lon   int32
+	Feat1 uint16
+	Feat2 uint16
+	// Send route, our neighbour first; nil = unknown (flood), empty = direct.
 	OutPath         []byte
 	OutPathHashSize uint8
 	LastSeen        time.Time // zero when never heard
@@ -64,13 +65,15 @@ func scanContact(s interface{ Scan(...any) error }) (*Contact, error) {
 	var metaStr string
 	var feat1, feat2, lastAdvertTS int64
 	var lastSeen sql.NullTime
+	var outPath sql.NullString
 	if err := s.Scan(
 		&c.CompanionID, &c.PeerPubKey, &c.Name, &c.Type, &c.Lat, &c.Lon,
-		&feat1, &feat2, &c.OutPath, &c.OutPathHashSize, &lastSeen, &lastAdvertTS,
+		&feat1, &feat2, &outPath, &c.OutPathHashSize, &lastSeen, &lastAdvertTS,
 		&c.AddedAt, &metaStr,
 	); err != nil {
 		return nil, err
 	}
+	c.OutPath = scanOutPath(outPath)
 	c.Feat1 = uint16(feat1)
 	c.Feat2 = uint16(feat2)
 	c.LastAdvertTS = uint32(lastAdvertTS)
@@ -98,6 +101,46 @@ func (r *ContactRepo) Add(ctx context.Context, companionID int64, peerPubKey []b
 	)
 	if err != nil {
 		return fmt.Errorf("adding contact: %w", err)
+	}
+	return nil
+}
+
+// Restore writes a whole contact row, overwriting any existing one. It exists
+// for backup restore, where every cached field is authoritative — the other
+// writers here deliberately preserve fields they do not own.
+func (r *ContactRepo) Restore(ctx context.Context, c *Contact) error {
+	meta, err := json.Marshal(c.Metadata)
+	if err != nil {
+		return fmt.Errorf("encoding contact metadata: %w", err)
+	}
+	var lastSeen any
+	if !c.LastSeen.IsZero() {
+		lastSeen = c.LastSeen
+	}
+	addedAt := c.AddedAt
+	if addedAt.IsZero() {
+		addedAt = time.Now()
+	}
+	_, err = r.db.ExecContext(ctx, `
+		INSERT INTO companion_contacts (
+			companion_id, peer_pubkey, name, type, lat, lon, feat1, feat2,
+			out_path, out_path_hash_size, last_seen, last_advert_ts, added_at, metadata)
+		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+		ON CONFLICT(companion_id, peer_pubkey) DO UPDATE SET
+			name = excluded.name, type = excluded.type,
+			lat = excluded.lat, lon = excluded.lon,
+			feat1 = excluded.feat1, feat2 = excluded.feat2,
+			out_path = excluded.out_path,
+			out_path_hash_size = excluded.out_path_hash_size,
+			last_seen = excluded.last_seen,
+			last_advert_ts = excluded.last_advert_ts,
+			added_at = excluded.added_at,
+			metadata = excluded.metadata`,
+		c.CompanionID, c.PeerPubKey, c.Name, c.Type, c.Lat, c.Lon, c.Feat1, c.Feat2,
+		c.OutPath, c.OutPathHashSize, lastSeen, c.LastAdvertTS, addedAt, string(meta),
+	)
+	if err != nil {
+		return fmt.Errorf("restoring contact: %w", err)
 	}
 	return nil
 }

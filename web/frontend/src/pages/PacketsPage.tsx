@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
-import { CircleDashed, RefreshCw, Search } from "lucide-react";
+import { ChevronDown, CircleDashed, RefreshCw, Search } from "lucide-react";
 import { useWebSocket } from "@/hooks/useWebSocket";
 import { useApiList } from "@/hooks/useApiList";
 import { Button } from "@/components/ui/button";
@@ -20,6 +20,13 @@ import {
   SheetTitle,
   SheetDescription,
 } from "@/components/ui/sheet";
+import {
+  DropdownMenu,
+  DropdownMenuContent,
+  DropdownMenuRadioGroup,
+  DropdownMenuRadioItem,
+  DropdownMenuTrigger,
+} from "@/components/ui/dropdown-menu";
 import { PageHeader } from "@/components/PageHeader";
 import { ConnectionPill } from "@/components/StatusIndicator";
 import { snrTextClass } from "@/components/SignalStrength";
@@ -178,8 +185,14 @@ export function PacketsPage() {
       if (pt == null) continue;
       counts.set(pt, (counts.get(pt) ?? 0) + 1);
     }
+    // The active type must stay listed even once the live buffer holds none of
+    // it, or the menu opens with nothing checked while the table still filters
+    // on it (the query hits full history, not this buffer).
+    if (typeFilter !== "ALL" && !counts.has(typeFilter)) {
+      counts.set(typeFilter, 0);
+    }
     return Array.from(counts.entries()).sort((a, b) => a[0] - b[0]);
-  }, [liveGroups]);
+  }, [liveGroups, typeFilter]);
 
   const filteredGroups = useMemo(
     () => buildGroups(filteredItems ?? NO_PACKETS),
@@ -273,17 +286,24 @@ export function PacketsPage() {
                 onChange={(e: React.ChangeEvent<HTMLInputElement>) =>
                   setSearch(e.target.value)
                 }
-                className="pl-9 font-mono text-xs"
+                className="pl-9 font-mono text-base md:text-xs"
               />
             </div>
           </div>
 
-          <div className="flex flex-wrap gap-1 px-4 py-3 border-b border-border">
+          <div className="flex flex-wrap items-center gap-1 px-4 py-3 border-b border-border">
+            <span className="label-overline mr-2 sm:hidden">Filter</span>
+            <PacketTypeMenu
+              value={typeFilter}
+              onChange={setTypeFilter}
+              allCount={liveGroupCount}
+              types={typeFilters}
+            />
             <button
               type="button"
               onClick={() => setTypeFilter("ALL")}
               className={cn(
-                "inline-flex items-center gap-1.5 px-2 py-1 border font-mono text-[10px] uppercase tracking-[0.12em] transition-colors",
+                "hidden sm:inline-flex items-center gap-1.5 px-2 py-1 border font-mono text-[10px] uppercase tracking-[0.12em] transition-colors",
                 typeFilter === "ALL"
                   ? "border-primary/50 bg-primary/10 text-primary"
                   : "border-border bg-transparent text-muted-foreground hover:text-foreground",
@@ -302,7 +322,7 @@ export function PacketsPage() {
                   type="button"
                   onClick={() => setTypeFilter(pt)}
                   className={cn(
-                    "inline-flex items-center gap-1.5 px-2 py-1 border font-mono text-[10px] uppercase tracking-[0.12em] transition-colors",
+                    "hidden sm:inline-flex items-center gap-1.5 px-2 py-1 border font-mono text-[10px] uppercase tracking-[0.12em] transition-colors",
                     active
                       ? "border-primary/50 bg-primary/10 text-primary"
                       : "border-border bg-transparent text-muted-foreground hover:text-foreground",
@@ -781,5 +801,68 @@ function PacketsSkeleton() {
         ))}
       </div>
     </div>
+  );
+}
+
+// PacketTypeMenu is the phone-sized form of the type chips. The filter is
+// single-select, so these are radio items — and the type list is derived from
+// the live buffer, so it grows as new payload types are heard.
+function PacketTypeMenu({
+  value,
+  onChange,
+  allCount,
+  types,
+}: {
+  value: number | "ALL";
+  onChange: (v: number | "ALL") => void;
+  allCount: number;
+  types: [number, number][];
+}) {
+  const label = value === "ALL" ? "all" : payloadLabel(value);
+  const count =
+    value === "ALL"
+      ? allCount
+      : (types.find(([pt]) => pt === value)?.[1] ?? 0);
+  return (
+    <DropdownMenu>
+      <DropdownMenuTrigger asChild>
+        <button
+          type="button"
+          className="sm:hidden relative inline-flex items-center gap-1.5 border border-border bg-card px-2 py-1 font-mono text-[10px] uppercase tracking-[0.12em] text-muted-foreground before:absolute before:inset-x-0 before:-inset-y-2 before:content-['']"
+        >
+          <span className="text-foreground">{label}</span>
+          <span className="tabular-nums text-muted-foreground/60">{count}</span>
+          <ChevronDown className="size-3" />
+        </button>
+      </DropdownMenuTrigger>
+      <DropdownMenuContent align="start" className="rounded-sm">
+        <DropdownMenuRadioGroup
+          value={value === "ALL" ? "ALL" : String(value)}
+          onValueChange={(v) => onChange(v === "ALL" ? "ALL" : Number(v))}
+        >
+          <DropdownMenuRadioItem
+            value="ALL"
+            className="font-mono text-[11px] uppercase tracking-[0.08em]"
+          >
+            All
+            <span className="ml-auto pl-3 tabular-nums text-muted-foreground/70">
+              {allCount}
+            </span>
+          </DropdownMenuRadioItem>
+          {types.map(([pt, c]) => (
+            <DropdownMenuRadioItem
+              key={pt}
+              value={String(pt)}
+              className="font-mono text-[11px] uppercase tracking-[0.08em]"
+            >
+              {payloadLabel(pt)}
+              <span className="ml-auto pl-3 tabular-nums text-muted-foreground/70">
+                {c}
+              </span>
+            </DropdownMenuRadioItem>
+          ))}
+        </DropdownMenuRadioGroup>
+      </DropdownMenuContent>
+    </DropdownMenu>
   );
 }

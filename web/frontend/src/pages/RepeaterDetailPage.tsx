@@ -47,25 +47,13 @@ import { PageHeader } from "@/components/PageHeader";
 import { PeerAvatar } from "@/components/PeerAvatar";
 import { SignalStrength } from "@/components/SignalStrength";
 import { TelemetryPanel } from "@/components/TelemetryPanel";
+import { SeriesPanel } from "@/components/SeriesPanel";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Skeleton } from "@/components/ui/skeleton";
-import L from "leaflet";
-import markerIcon from "leaflet/dist/images/marker-icon.png";
-import markerIcon2x from "leaflet/dist/images/marker-icon-2x.png";
-import markerShadow from "leaflet/dist/images/marker-shadow.png";
-import { themeTileLayer, useThemeTiles } from "@/lib/leaflet";
-
-// Leaflet's default marker icon URLs are broken under bundlers; rebind them
-// to the imported asset URLs once at module load.
-type MarkerProto = L.Icon.Default & { _getIconUrl?: () => string };
-delete (L.Icon.Default.prototype as MarkerProto)._getIconUrl;
-L.Icon.Default.mergeOptions({
-  iconUrl: markerIcon,
-  iconRetinaUrl: markerIcon2x,
-  shadowUrl: markerShadow,
-});
+import { PositionPicker } from "@/components/PositionPicker";
+import { PATH_HASH_SIZE_OPTIONS } from "@/components/ConfigFields";
 
 import {
   Select,
@@ -80,8 +68,6 @@ import { Alert, AlertDescription, AlertTitle } from "@/components/ui/alert";
 import {
   Tabs,
   TabsContent,
-  TabsList,
-  TabsTrigger,
 } from "@/components/ui/tabs";
 import {
   Dialog,
@@ -111,7 +97,25 @@ import {
   type MonitorMetadata,
 } from "@/components/MonitoringSettings";
 import { advertPathInfo } from "@/components/PeerDetailSheet";
-import { CLI_TOPLEVEL_COMMANDS, CLI_CONFIG_KEYS } from "@/lib/cliCatalog";
+import { cliCommandsFor, cliConfigKeysFor, type CliRole } from "@/lib/cliCatalog";
+import {
+  AddAccessDialog,
+  AlertBitToggle,
+  PERM_ADMIN,
+  PERM_ALERTS_HI,
+  PERM_ALERTS_LO,
+  PERM_ALERTS_MASK,
+  PERM_READ_ONLY,
+  PERM_READ_WRITE,
+  PERM_ROLE_MASK,
+  ROLE_OPTIONS,
+  RepeaterTab,
+  RepeaterTabsList,
+  StatTile,
+  roleLabel,
+  rolePillClass,
+} from "@/components/RepeaterUI";
+import { apiErrorMessage } from "@/lib/apiError";
 
 interface Contact {
   peerPubkey: string;
@@ -136,6 +140,8 @@ interface Session {
   loggedIn?: boolean;
   pubkeyHex?: string;
   isAdmin?: boolean;
+  permissions?: number; // ACL byte from the login reply (role in the low 2 bits)
+  role?: string; // rooms: admin | read-write | read-only
   loggedInAt?: string;
 }
 
@@ -167,6 +173,8 @@ interface Status {
   floodDups: number;
   recvErrors: number;
   chanUtil: number;
+  posted?: number; // room servers only
+  postPushes?: number;
 }
 
 type TabKey =
@@ -193,13 +201,30 @@ interface NeighborEntry {
   type?: string;
 }
 
-export function RepeaterDetailPage() {
+export type AdminNodeKind = "repeater" | "sensor" | "room";
+
+// One page drives every node that speaks the admin protocol (ANON_REQ login →
+// REQ/CLI). kind only gates what the firmware for that role actually answers:
+// sensors have no GET_STATUS, GET_NEIGHBOURS or owner-info request, no routing
+// settings, and no guest password.
+export function RepeaterDetailPage({ kind = "repeater" }: { kind?: AdminNodeKind }) {
   const { name, pubkey } = useParams<{ name: string; pubkey: string }>();
   const decodedName = name ? decodeURIComponent(name) : "";
   const decodedPubkey = pubkey ? decodeURIComponent(pubkey) : "";
   const navigate = useNavigate();
+  const isSensor = kind === "sensor";
+  const isRoom = kind === "room";
 
+  // The API is type-agnostic (rooms already share it); the path segment is
+  // historical. Rooms have their own login (it carries sync_since), status
+  // (different stats trailer) and keep-alive under /rooms/.
   const apiBase = `/api/companions/${encodeURIComponent(decodedName)}/repeaters/${encodeURIComponent(decodedPubkey)}`;
+  const roomApiBase = `/api/companions/${encodeURIComponent(decodedName)}/rooms/${encodeURIComponent(decodedPubkey)}`;
+  // Saved credentials live under the key the chat's RoomJoinBar already uses
+  // for rooms, so a password saved here joins the room in chat too.
+  const passwordKey = isRoom ? "roomPassword" : "repeaterPassword";
+  const savedPassword = (m?: MonitorMetadata) =>
+    (m as Record<string, unknown> | undefined)?.[passwordKey] as string | undefined;
 
   const [contact, setContact] = useState<Contact | null>(null);
   const [peers, setPeers] = useState<Peer[]>([]);
@@ -211,7 +236,7 @@ export function RepeaterDetailPage() {
   const [bootstrapping, setBootstrapping] = useState(true);
   const [error, setError] = useState<string | null>(null);
 
-  const [tab, setTab] = useState<TabKey>("status");
+  const [tab, setTab] = useState<TabKey>(isSensor ? "telemetry" : "status");
   const [password, setPassword] = useState("");
   const [saveLogin, setSaveLogin] = useState(false);
   const [loggingIn, setLoggingIn] = useState(false);
@@ -219,8 +244,8 @@ export function RepeaterDetailPage() {
   const [pathInput, setPathInput] = useState("");
   const [pathHashSizeInput, setPathHashSizeInput] = useState(1);
 
-  const peerName = contact?.name || "Repeater";
-  const peerType = contact?.type || "REPEATER";
+  const peerName = contact?.name || (isSensor ? "Sensor" : isRoom ? "Room" : "Repeater");
+  const peerType = contact?.type || (isSensor ? "SENSOR" : isRoom ? "ROOM" : "REPEATER");
   const isAdmin = !!session?.isAdmin;
   const loggedIn =
     session?.loggedIn === true ||
@@ -276,8 +301,8 @@ export function RepeaterDetailPage() {
           (c) => c.peerPubkey?.toLowerCase() === decodedPubkey.toLowerCase(),
         ) || null;
       setContact(found);
-      if (found?.metadata?.repeaterPassword) {
-        setPassword(found.metadata.repeaterPassword);
+      if (savedPassword(found?.metadata)) {
+        setPassword(savedPassword(found?.metadata) ?? "");
         setSaveLogin(true);
       }
       await Promise.allSettled([refreshSession(), refreshPath()]);
@@ -292,18 +317,20 @@ export function RepeaterDetailPage() {
     bootstrap();
   }, [bootstrap]);
 
+  const keepAlive = useCallback(async () => {
+    const r = await fetch(`${roomApiBase}/keepalive`, { method: "POST" });
+    if (!r.ok) throw new Error(await apiErrorMessage(r, "Keep-alive failed"));
+  }, [roomApiBase]);
+
   const handleLogin = useCallback(async () => {
     setLoggingIn(true);
     try {
-      const r = await fetch(`${apiBase}/login`, {
+      const r = await fetch(`${isRoom ? roomApiBase : apiBase}/login`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ password }),
       });
-      if (!r.ok) {
-        const txt = await r.text();
-        throw new Error(txt || "Login failed");
-      }
+      if (!r.ok) throw new Error(await apiErrorMessage(r, "Login failed"));
       toast.success("Logged in");
       await Promise.allSettled([refreshSession(), refreshPath()]);
 
@@ -314,8 +341,8 @@ export function RepeaterDetailPage() {
             method: "PATCH",
             headers: { "Content-Type": "application/json" },
             body: JSON.stringify({
-              isRepeater: true,
-              repeaterPassword: password,
+              isRepeater: kind === "repeater",
+              [passwordKey]: password,
               monitor: contact?.metadata?.monitor ?? false,
               monitorIntervalSecs: contact?.metadata?.monitorIntervalSecs ?? 0,
             }),
@@ -327,13 +354,13 @@ export function RepeaterDetailPage() {
                 ...c,
                 metadata: {
                   ...(c.metadata || {}),
-                  repeaterPassword: password,
-                  isRepeater: true,
+                  [passwordKey]: password,
+                  isRepeater: kind === "repeater",
                 },
               }
             : c,
         );
-      } else if (contact?.metadata?.repeaterPassword) {
+      } else if (savedPassword(contact?.metadata)) {
         // unchecked but a saved password exists — clear it
         await fetch(
           `/api/companions/${encodeURIComponent(decodedName)}/contacts/${encodeURIComponent(decodedPubkey)}`,
@@ -341,8 +368,8 @@ export function RepeaterDetailPage() {
             method: "PATCH",
             headers: { "Content-Type": "application/json" },
             body: JSON.stringify({
-              isRepeater: true,
-              repeaterPassword: "",
+              isRepeater: kind === "repeater",
+              [passwordKey]: "",
               monitor: contact?.metadata?.monitor ?? false,
               monitorIntervalSecs: contact?.metadata?.monitorIntervalSecs ?? 0,
             }),
@@ -354,8 +381,8 @@ export function RepeaterDetailPage() {
                 ...c,
                 metadata: {
                   ...(c.metadata || {}),
-                  repeaterPassword: "",
-                  isRepeater: true,
+                  [passwordKey]: "",
+                  isRepeater: kind === "repeater",
                 },
               }
             : c,
@@ -375,6 +402,10 @@ export function RepeaterDetailPage() {
     decodedName,
     decodedPubkey,
     contact,
+    isRoom,
+    roomApiBase,
+    kind,
+    passwordKey,
   ]);
 
   const handleLogout = useCallback(async () => {
@@ -431,10 +462,7 @@ export function RepeaterDetailPage() {
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ command }),
       });
-      if (!r.ok) {
-        const txt = await r.text();
-        throw new Error(txt || "CLI error");
-      }
+      if (!r.ok) throw new Error(await apiErrorMessage(r, "CLI error"));
       const data: { response: string } = await r.json();
       refreshPath();
       return data.response;
@@ -474,18 +502,18 @@ export function RepeaterDetailPage() {
         }
         actions={
           <>
-            <Link
-              to={`/companions/${encodeURIComponent(decodedName)}/repeaters`}
-              className="inline-flex items-center gap-1.5 font-mono text-[10px] uppercase tracking-[0.12em] text-muted-foreground hover:text-primary px-2 py-1 border border-border"
-            >
-              <ArrowLeft className="size-3" /> repeaters
-            </Link>
-            <Link
-              to={`/companions/${encodeURIComponent(decodedName)}`}
-              className="inline-flex items-center gap-1.5 font-mono text-[10px] uppercase tracking-[0.12em] text-muted-foreground hover:text-primary px-2 py-1 border border-border"
-            >
-              <ArrowLeft className="size-3" /> messages
-            </Link>
+            <HeaderNavChip
+              to={`/companions/${encodeURIComponent(decodedName)}/${kind === "repeater" ? "repeaters" : `contacts/${encodeURIComponent(decodedPubkey)}`}`}
+              label={kind === "repeater" ? "repeaters" : "contact"}
+              short={kind === "repeater" ? "rptrs" : "contact"}
+            />
+            {!isSensor && (
+              <HeaderNavChip
+                to={`/companions/${encodeURIComponent(decodedName)}`}
+                label="messages"
+                short="msgs"
+              />
+            )}
             <PathBadge info={pathInfo} />
             {loggedIn && (
               <span
@@ -497,17 +525,19 @@ export function RepeaterDetailPage() {
                 )}
               >
                 <Shield className="size-3" />
-                {isAdmin ? "admin" : "guest"}
+                {session?.role ?? (session?.permissions != null ? roleLabel(session.permissions).toLowerCase() : isAdmin ? "admin" : "guest")}
               </span>
             )}
             <DropdownMenu>
               <DropdownMenuTrigger asChild>
+                {/* icon-xs matches the 24px chips beside it; its before: hit
+                    area still gives the 40px touch target. */}
                 <Button
                   variant="outline"
-                  size="icon-sm"
+                  size="icon-xs"
                   className="rounded-none"
                 >
-                  <MoreVertical className="size-4" />
+                  <MoreVertical className="size-3.5" />
                 </Button>
               </DropdownMenuTrigger>
               <DropdownMenuContent align="end" className="rounded-sm">
@@ -562,8 +592,8 @@ export function RepeaterDetailPage() {
               {peerType}
             </span>
           </div>
-          <code className="block font-mono text-xs text-muted-foreground break-all">
-            {decodedPubkey}
+          <code className="block font-mono text-xs text-muted-foreground truncate" title={decodedPubkey}>
+            {truncateMid(decodedPubkey, 10, 8)}
           </code>
         </div>
         <Button
@@ -587,7 +617,8 @@ export function RepeaterDetailPage() {
           onLogin={handleLogin}
           saveLogin={saveLogin}
           onSaveLoginChange={setSaveLogin}
-          hasSavedPassword={!!contact?.metadata?.repeaterPassword}
+          hasSavedPassword={!!savedPassword(contact?.metadata)}
+          kind={kind}
         />
       ) : (
         <Tabs
@@ -595,13 +626,12 @@ export function RepeaterDetailPage() {
           onValueChange={(v) => setTab(v as TabKey)}
           className="space-y-4"
         >
-          <TabsList
-            variant="line"
-            className="border-b border-border w-full justify-start gap-0 h-auto p-0 bg-transparent rounded-none overflow-x-auto scrollbar-none"
-          >
-            <RepeaterTab value="status" icon={<Signal className="size-3" />}>
-              Status
-            </RepeaterTab>
+          <RepeaterTabsList>
+            {!isSensor && (
+              <RepeaterTab value="status" icon={<Signal className="size-3" />}>
+                Status
+              </RepeaterTab>
+            )}
             <RepeaterTab value="monitoring" icon={<Gauge className="size-3" />}>
               Monitoring
             </RepeaterTab>
@@ -610,10 +640,12 @@ export function RepeaterDetailPage() {
                 Terminal
               </RepeaterTab>
             )}
-            <RepeaterTab value="neighbors" icon={<Users className="size-3" />}>
-              Neighbors
-            </RepeaterTab>
-            {!isAdmin && (
+            {kind === "repeater" && (
+              <RepeaterTab value="neighbors" icon={<Users className="size-3" />}>
+                Neighbors
+              </RepeaterTab>
+            )}
+            {!isAdmin && kind === "repeater" && (
               <RepeaterTab value="owner" icon={<Info className="size-3" />}>
                 Owner
               </RepeaterTab>
@@ -634,27 +666,36 @@ export function RepeaterDetailPage() {
                 Settings
               </RepeaterTab>
             )}
-          </TabsList>
+          </RepeaterTabsList>
 
           <TabsContent
             value="status"
             className="mt-0 data-[state=inactive]:hidden"
             forceMount
           >
-            <StatusTab apiBase={apiBase} active={tab === "status"} onPathMayChange={refreshPath} />
+            {!isSensor && (
+              <StatusTab
+                apiBase={apiBase}
+                statusUrl={isRoom ? `${roomApiBase}/status` : `${apiBase}/status`}
+                kind={kind}
+                onKeepAlive={isRoom ? keepAlive : undefined}
+                active={tab === "status"}
+                onPathMayChange={refreshPath}
+              />
+            )}
           </TabsContent>
           <TabsContent value="monitoring" className="mt-0">
             <MonitoringSettings
               companionName={decodedName}
               pubkey={decodedPubkey}
-              kind="repeater"
+              kind={isSensor ? "companion" : "repeater"}
               metadata={contact?.metadata}
               onSaved={handleMonitorSaved}
             />
           </TabsContent>
           {isAdmin && (
             <TabsContent value="terminal" className="mt-0">
-              <TerminalTab sendCli={sendCli} />
+              <TerminalTab sendCli={sendCli} kind={kind} />
             </TabsContent>
           )}
           <TabsContent
@@ -685,7 +726,10 @@ export function RepeaterDetailPage() {
             className="mt-0 data-[state=inactive]:hidden"
             forceMount
           >
-            <TelemetryPanel apiBase={apiBase} autoFetch={tab === "telemetry"} />
+            <div className="space-y-8">
+              <TelemetryPanel apiBase={apiBase} autoFetch={tab === "telemetry"} />
+              {isSensor && <SeriesPanel apiBase={apiBase} />}
+            </div>
           </TabsContent>
           {isAdmin && (
             <TabsContent
@@ -698,12 +742,14 @@ export function RepeaterDetailPage() {
                 peers={peers}
                 companions={companions}
                 active={tab === "access"}
+                kind={kind}
               />
             </TabsContent>
           )}
           {isAdmin && (
             <TabsContent value="settings" className="mt-0">
               <SettingsTab
+              kind={kind}
                 pubkey={decodedPubkey}
                 peerName={peerName}
                 sendCli={sendCli}
@@ -740,7 +786,7 @@ export function RepeaterDetailPage() {
                 setPathInput(e.target.value)
               }
               placeholder="a4, 1b, e2"
-              className="rounded-none font-mono text-xs border-border"
+              className="rounded-none font-mono text-base md:text-xs border-border"
             />
             <div className="flex items-center gap-2">
               <span className="font-mono text-[10px] uppercase tracking-widest text-muted-foreground">
@@ -754,9 +800,11 @@ export function RepeaterDetailPage() {
                   <SelectValue />
                 </SelectTrigger>
                 <SelectContent className="rounded-sm">
-                  <SelectItem value="1">1B</SelectItem>
-                  <SelectItem value="2">2B</SelectItem>
-                  <SelectItem value="4">4B</SelectItem>
+                  {PATH_HASH_SIZE_OPTIONS.map((o) => (
+                    <SelectItem key={o.value} value={o.value}>
+                      {o.label}
+                    </SelectItem>
+                  ))}
                 </SelectContent>
               </Select>
             </div>
@@ -781,6 +829,30 @@ export function RepeaterDetailPage() {
         </DialogContent>
       </Dialog>
     </div>
+  );
+}
+
+// HeaderNavChip is a back-link in the header's actions row. The label shortens
+// below sm so the row's four chips plus the overflow menu stay on one line on a
+// phone.
+function HeaderNavChip({
+  to,
+  label,
+  short,
+}: {
+  to: string;
+  label: string;
+  short: string;
+}) {
+  return (
+    <Link
+      to={to}
+      className="relative before:absolute before:inset-x-0 before:-inset-y-2 before:content-[''] sm:before:hidden inline-flex items-center gap-1.5 font-mono text-[10px] uppercase tracking-[0.12em] text-muted-foreground hover:text-primary px-2 py-1 border border-border"
+    >
+      <ArrowLeft className="size-3" />
+      <span className="sm:hidden">{short}</span>
+      <span className="hidden sm:inline">{label}</span>
+    </Link>
   );
 }
 
@@ -811,29 +883,6 @@ function PathBadge({ info }: { info: PathInfo | null }) {
   );
 }
 
-function RepeaterTab({
-  value,
-  icon,
-  children,
-}: {
-  value: string;
-  icon: ReactNode;
-  children: ReactNode;
-}) {
-  return (
-    <TabsTrigger
-      value={value}
-      className={cn(
-        "rounded-none flex-none px-4 py-2.5 font-mono text-[11px] uppercase tracking-widest gap-1.5 border-b-2 border-transparent hover:bg-muted/30",
-        "data-[state=active]:bg-primary/10 data-[state=active]:text-primary data-[state=active]:border-b-2 data-[state=active]:border-primary",
-      )}
-    >
-      {icon}
-      {children}
-    </TabsTrigger>
-  );
-}
-
 function LoginCard({
   password,
   onPasswordChange,
@@ -842,6 +891,7 @@ function LoginCard({
   saveLogin,
   onSaveLoginChange,
   hasSavedPassword,
+  kind,
 }: {
   password: string;
   onPasswordChange: (v: string) => void;
@@ -850,6 +900,7 @@ function LoginCard({
   saveLogin: boolean;
   onSaveLoginChange: (v: boolean) => void;
   hasSavedPassword: boolean;
+  kind: AdminNodeKind;
 }) {
   return (
     <section className="panel max-w-md mx-auto p-6 space-y-4">
@@ -858,8 +909,11 @@ function LoginCard({
         <span className="label-overline">authenticate</span>
       </div>
       <p className="text-xs text-muted-foreground">
-        Login to manage this repeater. Admin login unlocks the configuration
-        panel.
+        {kind === "sensor"
+          ? "Sensors have no guest password: the admin password grants full access, and a blank password re-authenticates a node already granted access with setperm."
+          : kind === "room"
+            ? "The admin password unlocks the configuration panel; the room password gives read / write; if the room allows it, anything else logs in read-only."
+            : "Login to manage this repeater. Admin login unlocks the configuration panel."}
       </p>
       <div className="space-y-2">
         <Label
@@ -911,13 +965,21 @@ function LoginCard({
 
 function StatusTab({
   apiBase,
+  statusUrl,
+  kind,
+  onKeepAlive,
   active,
   onPathMayChange,
 }: {
   apiBase: string;
+  statusUrl?: string;
+  kind: AdminNodeKind;
+  onKeepAlive?: () => Promise<void>;
   active: boolean;
   onPathMayChange?: () => void;
 }) {
+  const isRoom = kind === "room";
+  const [resyncing, setResyncing] = useState(false);
   const [status, setStatus] = useState<Status | null>(null);
   const [loading, setLoading] = useState(false);
   const [err, setErr] = useState<string | null>(null);
@@ -927,7 +989,7 @@ function StatusTab({
     setLoading(true);
     setErr(null);
     try {
-      const r = await fetch(`${apiBase}/status`);
+      const r = await fetch(statusUrl ?? `${apiBase}/status`);
       if (!r.ok) throw new Error("status");
       const data: Status = await r.json();
       setStatus(data);
@@ -938,7 +1000,7 @@ function StatusTab({
     } finally {
       setLoading(false);
     }
-  }, [apiBase, onPathMayChange]);
+  }, [apiBase, statusUrl, onPathMayChange]);
 
   useEffect(() => {
     if (active && !fetchedRef.current) {
@@ -960,6 +1022,29 @@ function StatusTab({
           <RefreshCw className={cn("size-3", loading && "animate-spin")} />
           refresh
         </Button>
+        {onKeepAlive && (
+          <Button
+            variant="outline"
+            size="sm"
+            disabled={resyncing}
+            onClick={async () => {
+              setResyncing(true);
+              try {
+                await onKeepAlive();
+                toast.success("Keep-alive sent — posts will resume in chat");
+              } catch (e) {
+                toast.error(e instanceof Error ? e.message : "Keep-alive failed");
+              } finally {
+                setResyncing(false);
+              }
+            }}
+            className="rounded-none font-mono text-[10px] uppercase tracking-[0.12em]"
+            title="Send a keep-alive so the room resumes pushing posts"
+          >
+            <RefreshCw className={cn("size-3", resyncing && "animate-spin")} />
+            resync posts
+          </Button>
+        )}
       </div>
       {err && (
         <Alert variant="destructive">
@@ -1006,21 +1091,31 @@ function StatusTab({
             value={`${status.lastRssi}`}
             icon={<Signal className="size-3.5" />}
           />
-          <StatTile
-            label="Chan util"
-            value={`${status.chanUtil.toFixed(1)}%`}
-            icon={<Zap className="size-3.5" />}
-          />
+          {!isRoom && (
+            <StatTile
+              label="Chan util"
+              value={`${status.chanUtil.toFixed(1)}%`}
+              icon={<Zap className="size-3.5" />}
+            />
+          )}
           <StatTile
             label="Queue"
             value={`${status.queueLen}`}
             icon={<Inbox className="size-3.5" />}
           />
-          <StatTile
-            label="Recv errors"
-            value={`${status.recvErrors}`}
-            icon={<AlertTriangle className="size-3.5" />}
-          />
+          {!isRoom && (
+            <StatTile
+              label="Recv errors"
+              value={`${status.recvErrors}`}
+              icon={<AlertTriangle className="size-3.5" />}
+            />
+          )}
+          {isRoom && (
+            <StatTile label="Posts stored" value={`${status.posted ?? 0}`} accent />
+          )}
+          {isRoom && (
+            <StatTile label="Posts pushed" value={`${status.postPushes ?? 0}`} />
+          )}
           <ErrEventsTile mask={status.errEvents} />
           <StatTile label="Pkts sent" value={`${status.packetsSent}`} />
           <StatTile label="Pkts recv" value={`${status.packetsRecv}`} />
@@ -1032,52 +1127,16 @@ function StatusTab({
             label="TX air"
             value={formatUptime(status.txAirSecs)}
           />
-          <StatTile
-            label="RX air"
-            value={formatUptime(status.rxAirSecs)}
-          />
+          {!isRoom && (
+            <StatTile
+              label="RX air"
+              value={formatUptime(status.rxAirSecs)}
+            />
+          )}
           <StatTile label="Flood dups" value={`${status.floodDups}`} />
           <StatTile label="Direct dups" value={`${status.directDups}`} />
         </div>
       )}
-    </div>
-  );
-}
-
-function StatTile({
-  label,
-  value,
-  icon,
-  accent,
-}: {
-  label: string;
-  value: string;
-  icon?: ReactNode;
-  accent?: boolean;
-}) {
-  return (
-    <div
-      className={cn(
-        "bg-card relative px-4 py-3 flex flex-col gap-1.5 group",
-        accent && "bg-linear-to-br from-primary/5 via-card to-card",
-      )}
-    >
-      <div className="flex items-center justify-between">
-        <span className="label-overline">{label}</span>
-        {icon && (
-          <span className="text-muted-foreground/50 group-hover:text-primary transition-colors">
-            {icon}
-          </span>
-        )}
-      </div>
-      <span
-        className={cn(
-          "font-mono text-lg font-semibold tabular-nums leading-none",
-          accent && "text-primary",
-        )}
-      >
-        {value}
-      </span>
     </div>
   );
 }
@@ -1116,7 +1175,9 @@ interface Suggestion {
   hint?: string;
 }
 
-function buildSuggestions(input: string): Suggestion[] {
+function buildSuggestions(input: string, role: CliRole): Suggestion[] {
+  const CLI_CONFIG_KEYS = cliConfigKeysFor(role);
+  const CLI_TOPLEVEL_COMMANDS = cliCommandsFor(role);
   const lower = input.toLowerCase();
   // get / set sub-completion: rank prefix matches first, then substring matches.
   if (lower.startsWith("get ") || lower.startsWith("set ")) {
@@ -1159,8 +1220,10 @@ function buildSuggestions(input: string): Suggestion[] {
 
 function TerminalTab({
   sendCli,
+  kind,
 }: {
   sendCli: (cmd: string) => Promise<string>;
+  kind: AdminNodeKind;
 }) {
   const [history, setHistory] = useState<CliEntry[]>([]);
   const [input, setInput] = useState("");
@@ -1178,8 +1241,8 @@ function TerminalTab({
 
   const suggestions = useMemo(
     () =>
-      suggestionsOpen && input.trim() !== "" ? buildSuggestions(input) : [],
-    [input, suggestionsOpen],
+      suggestionsOpen && input.trim() !== "" ? buildSuggestions(input, kind) : [],
+    [input, suggestionsOpen, kind],
   );
 
   useEffect(() => {
@@ -1304,7 +1367,7 @@ function TerminalTab({
       >
         {history.length === 0 ? (
           <span className="text-muted-foreground/50">
-            // type a command. try `ver`, `neighbors`, `get name`. tab = autocomplete.
+            // type a command. try `ver`, `{kind === "repeater" ? "neighbors" : "clock"}`, `get name`. tab = autocomplete.
           </span>
         ) : (
           history.map((h, i) => (
@@ -1376,7 +1439,7 @@ function TerminalTab({
             }}
             disabled={busy}
             placeholder={busy ? "executing…" : "command (tab to autocomplete)"}
-            className="rounded-none font-mono text-xs border-border bg-background flex-1"
+            className="rounded-none font-mono text-base md:text-xs border-border bg-background flex-1"
             autoComplete="off"
             spellCheck={false}
           />
@@ -1435,10 +1498,7 @@ function NeighborsTab({
       const r = await fetch(
         `${apiBase}/neighbors?count=${NEIGHBORS_PAGE_SIZE}&offset=${offset}`,
       );
-      if (!r.ok) {
-        const txt = await r.text();
-        throw new Error(txt || `HTTP ${r.status}`);
-      }
+      if (!r.ok) throw new Error(await apiErrorMessage(r));
       const data: {
         totalCount: number;
         resultsCount: number;
@@ -1450,7 +1510,7 @@ function NeighborsTab({
           pubkeyPrefix: n.pubkeyPrefix,
           secsAgo: n.secsAgo,
           // Firmware reports SNR scaled x4
-          snr: n.snr / 4,
+          snr: n.snr,
           name: lookup?.name,
           type: lookup?.type,
         };
@@ -1650,10 +1710,7 @@ function OwnerTab({
     setErr(null);
     try {
       const r = await fetch(`${apiBase}/owner`);
-      if (!r.ok) {
-        const txt = await r.text();
-        throw new Error(txt || `HTTP ${r.status}`);
-      }
+      if (!r.ok) throw new Error(await apiErrorMessage(r));
       const data: OwnerInfo = await r.json();
       setInfo(data);
       fetchedRef.current = true;
@@ -1752,56 +1809,19 @@ interface AccessEntry {
   permissions: number;
 }
 
-const PERM_ROLE_MASK = 0x03;
-const PERM_GUEST = 0;
-const PERM_READ_ONLY = 1;
-const PERM_READ_WRITE = 2;
-const PERM_ADMIN = 3;
-
-const ROLE_OPTIONS: { value: string; label: string }[] = [
-  { value: String(PERM_READ_ONLY), label: "Read only" },
-  { value: String(PERM_READ_WRITE), label: "Read / Write" },
-  { value: String(PERM_ADMIN), label: "Admin" },
-];
-
-function roleLabel(perms: number): string {
-  switch (perms & PERM_ROLE_MASK) {
-    case PERM_GUEST:
-      return "Guest";
-    case PERM_READ_ONLY:
-      return "Read only";
-    case PERM_READ_WRITE:
-      return "Read / Write";
-    case PERM_ADMIN:
-      return "Admin";
-    default:
-      return `0x${perms.toString(16)}`;
-  }
-}
-
-function rolePillClass(perms: number): string {
-  switch (perms & PERM_ROLE_MASK) {
-    case PERM_ADMIN:
-      return "border-warning/40 text-warning bg-warning/5";
-    case PERM_READ_WRITE:
-      return "border-primary/40 text-primary bg-primary/5";
-    case PERM_READ_ONLY:
-      return "border-info/40 text-info bg-info/5";
-    default:
-      return "border-border text-muted-foreground";
-  }
-}
 
 function AccessTab({
   apiBase,
   peers,
   companions,
   active,
+  kind,
 }: {
   apiBase: string;
   peers: Peer[];
   companions: { name: string; pubkey: string }[];
   active: boolean;
+  kind: AdminNodeKind;
 }) {
   const [entries, setEntries] = useState<AccessEntry[]>([]);
   const [loading, setLoading] = useState(false);
@@ -1830,10 +1850,7 @@ function AccessTab({
     setErr(null);
     try {
       const r = await fetch(`${apiBase}/access`);
-      if (!r.ok) {
-        const txt = await r.text();
-        throw new Error(txt || `HTTP ${r.status}`);
-      }
+      if (!r.ok) throw new Error(await apiErrorMessage(r));
       const data: { entries?: AccessEntry[] } = await r.json();
       setEntries(data.entries || []);
       fetchedRef.current = true;
@@ -1860,10 +1877,7 @@ function AccessTab({
             body: JSON.stringify({ permissions: perms }),
           },
         );
-        if (!r.ok) {
-          const err = await r.json().catch(() => ({}));
-          throw new Error(err.error || `HTTP ${r.status}`);
-        }
+        if (!r.ok) throw new Error(await apiErrorMessage(r));
         toast.success(`Role set to ${roleLabel(perms)}`);
         await refresh();
       } catch (e) {
@@ -1883,10 +1897,7 @@ function AccessTab({
           `${apiBase}/access/${encodeURIComponent(targetPubkey)}`,
           { method: "DELETE" },
         );
-        if (!r.ok) {
-          const err = await r.json().catch(() => ({}));
-          throw new Error(err.error || `HTTP ${r.status}`);
-        }
+        if (!r.ok) throw new Error(await apiErrorMessage(r));
         toast.success("Removed from ACL");
         setConfirmRemove(null);
         await refresh();
@@ -1907,7 +1918,14 @@ function AccessTab({
   return (
     <div className="space-y-4">
       <div className="flex items-center justify-between">
-        <span className="label-overline">access control</span>
+        <span className="label-overline">
+          access control
+          {kind === "room" && (
+            <span className="ml-2 normal-case tracking-normal text-muted-foreground/60">
+              · a room lists its admins only
+            </span>
+          )}
+        </span>
         <div className="flex items-center gap-2">
           <Button
             variant="default"
@@ -1988,11 +2006,31 @@ function AccessTab({
                   </code>
                 </div>
                 <div className="flex items-center gap-2 shrink-0">
+                  {peer && kind === "sensor" && (
+                    <div className="flex items-center gap-px border border-border bg-border">
+                      <AlertBitToggle
+                        label="hi"
+                        checked={(entry.permissions & PERM_ALERTS_HI) !== 0}
+                        disabled={isBusy}
+                        onChange={(on) =>
+                          setPerm(fullPubkey, on ? entry.permissions | PERM_ALERTS_HI : entry.permissions & ~PERM_ALERTS_HI)
+                        }
+                      />
+                      <AlertBitToggle
+                        label="lo"
+                        checked={(entry.permissions & PERM_ALERTS_LO) !== 0}
+                        disabled={isBusy}
+                        onChange={(on) =>
+                          setPerm(fullPubkey, on ? entry.permissions | PERM_ALERTS_LO : entry.permissions & ~PERM_ALERTS_LO)
+                        }
+                      />
+                    </div>
+                  )}
                   {peer ? (
                     <Select
                       value={String(role)}
                       onValueChange={(v) =>
-                        setPerm(fullPubkey, parseInt(v, 10))
+                        setPerm(fullPubkey, (kind === "sensor" ? entry.permissions & PERM_ALERTS_MASK : 0) | parseInt(v, 10))
                       }
                       disabled={isBusy}
                     >
@@ -2025,7 +2063,7 @@ function AccessTab({
                         variant="destructive"
                         size="xs"
                         onClick={() => remove(fullPubkey)}
-                        disabled={isBusy || !peer}
+                        disabled={isBusy}
                         className="font-mono uppercase tracking-widest"
                       >
                         yes
@@ -2044,14 +2082,10 @@ function AccessTab({
                       variant="ghost"
                       size="icon-xs"
                       onClick={() => setConfirmRemove(fullPubkey)}
-                      disabled={isBusy || !peer}
+                      disabled={isBusy}
                       className="text-muted-foreground/60 hover:text-destructive"
                       aria-label="Remove from ACL"
-                      title={
-                        peer
-                          ? "Remove from ACL"
-                          : "Full pubkey unknown — cannot remove"
-                      }
+                      title="Remove from ACL"
                     >
                       <Trash2 className="size-3.5" />
                     </Button>
@@ -2063,8 +2097,8 @@ function AccessTab({
         )}
       </div>
       <p className="font-mono text-[10px] uppercase tracking-[0.12em] text-muted-foreground/60">
-        firmware reports 6-byte prefixes only. peers without a known full key
-        cannot be edited or removed from this UI; remove via repeater serial.
+        firmware reports 6-byte prefixes only. a prefix is enough to remove a
+        client; assigning a role needs the full public key.
       </p>
 
       <AddAccessDialog
@@ -2072,6 +2106,7 @@ function AccessTab({
         onOpenChange={setAddOpen}
         peers={peers}
         knownPrefixes={knownPrefixes}
+        kind={kind}
         onAdd={async (pubkey, perms) => {
           await setPerm(pubkey, perms);
           setAddOpen(false);
@@ -2081,204 +2116,6 @@ function AccessTab({
   );
 }
 
-const HEX64_RE = /^[0-9a-fA-F]{64}$/;
-
-function AddAccessDialog({
-  open,
-  onOpenChange,
-  peers,
-  knownPrefixes,
-  onAdd,
-}: {
-  open: boolean;
-  onOpenChange: (v: boolean) => void;
-  peers: Peer[];
-  knownPrefixes: Set<string>;
-  onAdd: (pubkey: string, perms: number) => Promise<void>;
-}) {
-  const [search, setSearch] = useState("");
-  const [manualKey, setManualKey] = useState("");
-  const [role, setRole] = useState<string>(String(PERM_READ_WRITE));
-  const [submitting, setSubmitting] = useState(false);
-
-  useEffect(() => {
-    if (!open) {
-      setSearch("");
-      setManualKey("");
-      setRole(String(PERM_READ_WRITE));
-      setSubmitting(false);
-    }
-  }, [open]);
-
-  const candidates = useMemo(() => {
-    const pool = peers.filter(
-      (p) => !knownPrefixes.has(p.pubkey.toLowerCase().slice(0, 12)),
-    );
-    const q = search.trim().toLowerCase();
-    const filtered = q
-      ? pool.filter(
-          (p) =>
-            p.name.toLowerCase().includes(q) ||
-            p.pubkey.toLowerCase().includes(q),
-        )
-      : pool;
-    return [...filtered].sort((a, b) =>
-      (a.name || "").localeCompare(b.name || ""),
-    );
-  }, [peers, knownPrefixes, search]);
-
-  const manualValid = HEX64_RE.test(manualKey.trim());
-  const manualAlreadyAdded =
-    manualValid &&
-    knownPrefixes.has(manualKey.trim().toLowerCase().slice(0, 12));
-
-  const submitWith = async (pubkey: string) => {
-    setSubmitting(true);
-    try {
-      await onAdd(pubkey.toLowerCase(), parseInt(role, 10));
-    } finally {
-      setSubmitting(false);
-    }
-  };
-
-  return (
-    <Dialog open={open} onOpenChange={onOpenChange}>
-      <DialogContent className="rounded-none border-border bg-card max-w-2xl">
-        <DialogHeader>
-          <DialogTitle className="font-mono uppercase tracking-[0.08em] text-sm">
-            Grant access
-          </DialogTitle>
-          <DialogDescription className="text-xs text-muted-foreground">
-            Add a peer to this repeater's ACL. They'll be able to log in
-            without a password at the assigned role.
-          </DialogDescription>
-        </DialogHeader>
-
-        <div className="space-y-4">
-          <div className="space-y-2">
-            <Label className="font-mono text-[10px] uppercase tracking-[0.12em] text-muted-foreground">
-              Role
-            </Label>
-            <Select value={role} onValueChange={setRole}>
-              <SelectTrigger className="rounded-none font-mono text-xs border-border bg-background w-full">
-                <SelectValue />
-              </SelectTrigger>
-              <SelectContent className="rounded-none font-mono text-xs">
-                {ROLE_OPTIONS.map((opt) => (
-                  <SelectItem
-                    key={opt.value}
-                    value={opt.value}
-                    className="rounded-none font-mono text-xs"
-                  >
-                    {opt.label}
-                  </SelectItem>
-                ))}
-              </SelectContent>
-            </Select>
-          </div>
-
-          <div className="space-y-2">
-            <span className="label-overline block">Available peers</span>
-            <div className="relative">
-              <Search className="size-3.5 absolute left-2.5 top-1/2 -translate-y-1/2 text-muted-foreground/60 pointer-events-none" />
-              <Input
-                value={search}
-                onChange={(e) => setSearch(e.target.value)}
-                placeholder="search name or pubkey…"
-                className="pl-8 rounded-none font-mono text-xs h-8"
-              />
-            </div>
-            <div className="border border-border max-h-64 overflow-y-auto divide-y divide-border">
-              {candidates.length === 0 ? (
-                <div className="px-4 py-8 text-center">
-                  <CircleDashed className="size-5 mx-auto mb-2 text-muted-foreground/40" />
-                  <p className="font-mono text-[10px] uppercase tracking-[0.12em] text-muted-foreground">
-                    No matching peers
-                  </p>
-                </div>
-              ) : (
-                candidates.map((p) => (
-                  <div
-                    key={p.pubkey}
-                    className="flex items-center gap-3 px-3 py-2 hover:bg-muted/40 transition-colors"
-                  >
-                    <PeerAvatar name={p.name || p.pubkey} size="sm" />
-                    <div className="min-w-0 flex-1 space-y-0.5">
-                      <div className="flex items-center gap-2">
-                        <span className="text-xs font-medium truncate">
-                          {p.name || (
-                            <span className="text-muted-foreground italic">
-                              unknown
-                            </span>
-                          )}
-                        </span>
-                      </div>
-                      <code className="font-mono text-[10px] text-muted-foreground">
-                        {truncateMid(p.pubkey, 6, 4)}
-                      </code>
-                    </div>
-                    <Button
-                      variant="ghost"
-                      size="xs"
-                      disabled={submitting}
-                      onClick={() => submitWith(p.pubkey)}
-                      className="font-mono uppercase tracking-widest text-primary hover:text-primary"
-                    >
-                      <Plus className="size-3" /> add
-                    </Button>
-                  </div>
-                ))
-              )}
-            </div>
-          </div>
-
-          <div className="border-t border-border pt-4 space-y-2">
-            <Label
-              htmlFor="acl-manual-pubkey"
-              className="font-mono text-[10px] uppercase tracking-[0.12em] text-muted-foreground"
-            >
-              Manual pubkey
-            </Label>
-            <div className="flex gap-2">
-              <Input
-                id="acl-manual-pubkey"
-                value={manualKey}
-                onChange={(e) => setManualKey(e.target.value)}
-                placeholder="64-character hex…"
-                spellCheck={false}
-                autoCorrect="off"
-                autoCapitalize="off"
-                aria-invalid={
-                  manualKey.length > 0 && (!manualValid || manualAlreadyAdded)
-                }
-                className="rounded-none font-mono text-xs h-8 flex-1"
-              />
-              <Button
-                variant="default"
-                size="sm"
-                onClick={() => submitWith(manualKey.trim())}
-                disabled={!manualValid || manualAlreadyAdded || submitting}
-                className="font-mono uppercase tracking-widest"
-              >
-                <Plus className="size-3" /> add
-              </Button>
-            </div>
-            {manualKey.length > 0 && !manualValid && (
-              <p className="text-[10px] text-destructive font-mono">
-                must be 64 hex characters
-              </p>
-            )}
-            {manualAlreadyAdded && (
-              <p className="text-[10px] text-destructive font-mono">
-                already in ACL
-              </p>
-            )}
-          </div>
-        </div>
-      </DialogContent>
-    </Dialog>
-  );
-}
 
 function SettingsTab({
   pubkey,
@@ -2286,36 +2123,47 @@ function SettingsTab({
   sendCli,
   onReboot,
   onLocalNameUpdate,
+  kind,
 }: {
   pubkey: string;
   peerName: string;
   sendCli: (cmd: string) => Promise<string>;
   onReboot: () => void;
   onLocalNameUpdate: (name: string) => void;
+  kind: AdminNodeKind;
 }) {
+  const cli = useCallback(
+    async (cmd: string) => {
+      const out = (await sendCli(cmd)).trim();
+      if (CLI_ERR_RE.test(out)) throw new Error(out);
+      return out;
+    },
+    [sendCli],
+  );
   return (
     <div className="space-y-3">
-      {/* key remounts the section when the advertised name changes, resetting
-          the input without a state-sync effect that could clobber an edit. */}
+      {/* key remounts the section when the advertised name changes */}
       <IdentitySection
         key={peerName}
         peerName={peerName}
         pubkey={pubkey}
-        sendCli={sendCli}
+        sendCli={cli}
         onLocalNameUpdate={onLocalNameUpdate}
       />
 
-      <RadioSection sendCli={sendCli} />
-      <PositionSection sendCli={sendCli} />
-      <AdvertSection sendCli={sendCli} />
-      <NetworkSection sendCli={sendCli} />
-      <OwnerSection sendCli={sendCli} />
-      <SecuritySection sendCli={sendCli} />
+      <RadioSection sendCli={cli} />
+      <PositionSection sendCli={cli} />
+      <AdvertSection sendCli={cli} />
+      {kind === "sensor" ? <SensorVarsSection sendCli={sendCli} /> : <NetworkSection sendCli={cli} kind={kind} />}
+      <OwnerSection sendCli={cli} />
+      <SecuritySection sendCli={cli} kind={kind} />
 
-      <ActionsSection sendCli={sendCli} onReboot={onReboot} />
+      <ActionsSection sendCli={cli} onReboot={onReboot} />
     </div>
   );
 }
+
+const CLI_ERR_RE = /^\(?(err|unknown|\?\?|not supported|can't|invalid)/i;
 
 function stripPromptPrefix(s: string): string {
   return (s || "").replace(/^>\s*/, "").trim();
@@ -2369,8 +2217,8 @@ function IdentitySection({
               onChange={(e: ChangeEvent<HTMLInputElement>) =>
                 setName(e.target.value)
               }
-              maxLength={32}
-              className="rounded-none font-mono text-xs border-border bg-background flex-1"
+              maxLength={31}
+              className="rounded-none font-mono text-base md:text-xs border-border bg-background flex-1"
             />
             <Button
               type="button"
@@ -2548,7 +2396,7 @@ function PositionSection({
             onChange={(v) => setVals((p) => ({ ...p, lon: v }))}
           />
         </div>
-        <PositionMap
+        <PositionPicker
           lat={parseFloat(vals.lat)}
           lon={parseFloat(vals.lon)}
           onPick={setLatLon}
@@ -2556,89 +2404,6 @@ function PositionSection({
         <SectionFooter busy={busy} onLoad={load} onSave={save} />
       </div>
     </SettingsSection>
-  );
-}
-
-function PositionMap({
-  lat,
-  lon,
-  onPick,
-}: {
-  lat: number;
-  lon: number;
-  onPick: (lat: number, lon: number) => void;
-}) {
-  const containerRef = useRef<HTMLDivElement>(null);
-  const mapRef = useRef<L.Map | null>(null);
-  const markerRef = useRef<L.Marker | null>(null);
-  const tileRef = useRef<L.TileLayer | null>(null);
-  const onPickRef = useRef(onPick);
-  onPickRef.current = onPick;
-
-  const validLat = Number.isFinite(lat);
-  const validLon = Number.isFinite(lon);
-  const initialLat = validLat ? lat : 0;
-  const initialLon = validLon ? lon : 0;
-
-  useEffect(() => {
-    if (!containerRef.current || mapRef.current) return;
-    const map = L.map(containerRef.current, {
-      zoomControl: true,
-      attributionControl: true,
-    }).setView([initialLat, initialLon], validLat && validLon ? 13 : 2);
-    tileRef.current = themeTileLayer().addTo(map);
-
-    map.on("click", (e) => {
-      onPickRef.current(e.latlng.lat, e.latlng.lng);
-    });
-
-    mapRef.current = map;
-
-    return () => {
-      map.remove();
-      mapRef.current = null;
-      tileRef.current = null;
-      markerRef.current = null;
-    };
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, []);
-
-  useThemeTiles(mapRef, tileRef);
-
-  useEffect(() => {
-    const map = mapRef.current;
-    if (!map) return;
-    if (!validLat || !validLon) {
-      if (markerRef.current) {
-        markerRef.current.remove();
-        markerRef.current = null;
-      }
-      return;
-    }
-    if (!markerRef.current) {
-      markerRef.current = L.marker([lat, lon], { draggable: true })
-        .addTo(map)
-        .on("dragend", (e) => {
-          const m = e.target as L.Marker;
-          const { lat: la, lng: ln } = m.getLatLng();
-          onPickRef.current(la, ln);
-        });
-      map.setView([lat, lon], Math.max(map.getZoom(), 12));
-    } else {
-      markerRef.current.setLatLng([lat, lon]);
-    }
-  }, [lat, lon, validLat, validLon]);
-
-  return (
-    <div className="space-y-1">
-      <Label className="font-mono text-[10px] uppercase tracking-[0.12em] text-muted-foreground">
-        Pick from map · click or drag pin
-      </Label>
-      <div
-        ref={containerRef}
-        className="h-64 border border-border bg-muted"
-      />
-    </div>
   );
 }
 
@@ -2685,12 +2450,12 @@ function AdvertSection({
       <div className="space-y-3">
         <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
           <Field
-            label="Direct (mins, 0-240)"
+            label="Direct (mins · 0 = off · else 60-240)"
             value={vals.direct}
             onChange={(v) => setVals((p) => ({ ...p, direct: v }))}
           />
           <Field
-            label="Flood (hours, 0-168)"
+            label="Flood (hours · 0 = off · else 3-168)"
             value={vals.flood}
             onChange={(v) => setVals((p) => ({ ...p, flood: v }))}
           />
@@ -2703,8 +2468,10 @@ function AdvertSection({
 
 function NetworkSection({
   sendCli,
+  kind,
 }: {
   sendCli: (cmd: string) => Promise<string>;
+  kind: AdminNodeKind;
 }) {
   const [vals, setVals] = useState({
     repeat: "",
@@ -2721,7 +2488,7 @@ function NetworkSection({
     try {
       const repeat = stripPromptPrefix(await sendCli("get repeat"));
       const pathHashMode = stripPromptPrefix(await sendCli("get path.hash.mode"));
-      const loopDetect = stripPromptPrefix(await sendCli("get loop.detect"));
+      const loopDetect = kind === "repeater" ? stripPromptPrefix(await sendCli("get loop.detect")) : "";
       const floodMax = stripPromptPrefix(await sendCli("get flood.max"));
       const floodMaxUnscoped = stripPromptPrefix(
         await sendCli("get flood.max.unscoped"),
@@ -2742,7 +2509,7 @@ function NetworkSection({
     } finally {
       setBusy(null);
     }
-  }, [sendCli]);
+  }, [sendCli, kind]);
 
   const save = useCallback(async () => {
     setBusy("save");
@@ -2750,7 +2517,7 @@ function NetworkSection({
       if (vals.repeat) await sendCli(`set repeat ${vals.repeat}`);
       if (vals.pathHashMode)
         await sendCli(`set path.hash.mode ${vals.pathHashMode}`);
-      if (vals.loopDetect) await sendCli(`set loop.detect ${vals.loopDetect}`);
+      if (kind === "repeater" && vals.loopDetect) await sendCli(`set loop.detect ${vals.loopDetect}`);
       if (vals.floodMax) await sendCli(`set flood.max ${vals.floodMax}`);
       if (vals.floodMaxUnscoped)
         await sendCli(`set flood.max.unscoped ${vals.floodMaxUnscoped}`);
@@ -2762,7 +2529,7 @@ function NetworkSection({
     } finally {
       setBusy(null);
     }
-  }, [sendCli, vals]);
+  }, [sendCli, vals, kind]);
 
   return (
     <SettingsSection
@@ -2787,21 +2554,23 @@ function NetworkSection({
             options={[
               { value: "0", label: "0 · 1-byte" },
               { value: "1", label: "1 · 2-byte" },
-              { value: "3", label: "3 · 4-byte" },
+              { value: "2", label: "2 · 3-byte" },
             ]}
             onChange={(v) => setVals((p) => ({ ...p, pathHashMode: v }))}
           />
-          <SelectField
-            label="Loop detect"
-            value={vals.loopDetect}
-            options={[
-              { value: "off", label: "Off" },
-              { value: "minimal", label: "Minimal" },
-              { value: "moderate", label: "Moderate" },
-              { value: "strict", label: "Strict" },
-            ]}
-            onChange={(v) => setVals((p) => ({ ...p, loopDetect: v }))}
-          />
+          {kind === "repeater" && (
+            <SelectField
+              label="Loop detect"
+              value={vals.loopDetect}
+              options={[
+                { value: "off", label: "Off" },
+                { value: "minimal", label: "Minimal" },
+                { value: "moderate", label: "Moderate" },
+                { value: "strict", label: "Strict" },
+              ]}
+              onChange={(v) => setVals((p) => ({ ...p, loopDetect: v }))}
+            />
+          )}
           <Field
             label="Flood max"
             value={vals.floodMax}
@@ -2818,6 +2587,83 @@ function NetworkSection({
             onChange={(v) => setVals((p) => ({ ...p, floodMaxAdvert: v }))}
           />
         </div>
+        <SectionFooter busy={busy} onLoad={load} onSave={save} />
+      </div>
+    </SettingsSection>
+  );
+}
+
+// SensorVarsSection edits the board's custom variables (firmware `sensor
+// list` / `sensor set key value`). The list reply is "N vars\nkey=value…" and
+// pages with "... next:i" past 134 bytes.
+function SensorVarsSection({ sendCli }: { sendCli: (cmd: string) => Promise<string> }) {
+  const [vars, setVars] = useState<{ key: string; value: string }[]>([]);
+  const [dirty, setDirty] = useState<Record<string, string>>({});
+  const [busy, setBusy] = useState<SectionBusy>(null);
+  const [note, setNote] = useState("");
+
+  const load = useCallback(async () => {
+    setBusy("load");
+    try {
+      const out: { key: string; value: string }[] = [];
+      let start = 0;
+      for (let guard = 0; guard < 20; guard++) {
+        const reply = await sendCli(start ? `sensor list ${start}` : "sensor list");
+        if (/^no custom var/i.test(reply)) break;
+        let next = -1;
+        for (const line of reply.split("\n")) {
+          const m = /^([^=\s]+)=(.*)$/.exec(line);
+          if (m) out.push({ key: m[1], value: m[2] });
+          const nx = /^\.\.\. next:(\d+)/.exec(line);
+          if (nx) next = parseInt(nx[1], 10);
+        }
+        if (next < 0) break;
+        start = next;
+      }
+      setVars(out);
+      setDirty({});
+      setNote(out.length ? "" : "this board exposes no custom variables");
+    } catch (e) {
+      toast.error(e instanceof Error ? e.message : "Failed to read sensor vars");
+    } finally {
+      setBusy(null);
+    }
+  }, [sendCli]);
+
+  const save = useCallback(async () => {
+    setBusy("save");
+    try {
+      for (const [key, value] of Object.entries(dirty)) {
+        const reply = await sendCli(`sensor set ${key} ${value}`);
+        if (!/^ok/i.test(reply)) throw new Error(`${key}: ${reply}`);
+      }
+      toast.success("Sensor vars saved");
+      await load();
+    } catch (e) {
+      toast.error(e instanceof Error ? e.message : "Failed to save sensor vars");
+    } finally {
+      setBusy(null);
+    }
+  }, [dirty, sendCli, load]);
+
+  return (
+    <SettingsSection
+      title="Sensor variables"
+      eyebrow="board"
+      icon={<Activity className="size-3.5" />}
+    >
+      <div className="space-y-3">
+        {vars.map((v) => (
+          <Field
+            key={v.key}
+            label={v.key}
+            value={dirty[v.key] ?? v.value}
+            onChange={(val) => setDirty((d) => ({ ...d, [v.key]: val }))}
+          />
+        ))}
+        {note && (
+          <p className="font-mono text-[10px] uppercase tracking-[0.12em] text-muted-foreground">{note}</p>
+        )}
         <SectionFooter busy={busy} onLoad={load} onSave={save} />
       </div>
     </SettingsSection>
@@ -2874,7 +2720,7 @@ function OwnerSection({
               setText(e.target.value)
             }
             rows={4}
-            className="rounded-none font-mono text-xs border-border bg-background resize-y"
+            className="rounded-none font-mono text-base md:text-xs border-border bg-background resize-y"
             placeholder="Operator: …\nLocation: …"
           />
         </div>
@@ -2886,30 +2732,41 @@ function OwnerSection({
 
 function SecuritySection({
   sendCli,
+  kind,
 }: {
   sendCli: (cmd: string) => Promise<string>;
+  kind: AdminNodeKind;
 }) {
+  const hasGuest = kind !== "sensor";
+  const isRoom = kind === "room";
   const [admin, setAdmin] = useState("");
   const [guest, setGuest] = useState("");
+  const [allowReadOnly, setAllowReadOnly] = useState(false);
   const [busy, setBusy] = useState<SectionBusy>(null);
 
   const load = useCallback(async () => {
     setBusy("load");
     try {
-      const guestPw = stripPromptPrefix(await sendCli("get guest.password"));
-      setGuest(guestPw);
+      if (hasGuest) {
+        const guestPw = stripPromptPrefix(await sendCli("get guest.password"));
+        setGuest(guestPw);
+      }
+      if (isRoom) {
+        setAllowReadOnly(stripPromptPrefix(await sendCli("get allow.read.only")) === "on");
+      }
     } catch (e) {
       toast.error(e instanceof Error ? e.message : "Load failed");
     } finally {
       setBusy(null);
     }
-  }, [sendCli]);
+  }, [sendCli, hasGuest, isRoom]);
 
   const save = useCallback(async () => {
     setBusy("save");
     try {
       if (admin) await sendCli(`password ${admin}`);
-      if (guest !== "") await sendCli(`set guest.password ${guest}`);
+      if (hasGuest && guest !== "") await sendCli(`set guest.password ${guest}`);
+      if (isRoom) await sendCli(`set allow.read.only ${allowReadOnly ? "on" : "off"}`);
       toast.success("Security saved");
       setAdmin("");
     } catch (e) {
@@ -2917,7 +2774,7 @@ function SecuritySection({
     } finally {
       setBusy(null);
     }
-  }, [sendCli, admin, guest]);
+  }, [sendCli, admin, guest, allowReadOnly, hasGuest, isRoom]);
 
   return (
     <SettingsSection
@@ -2933,12 +2790,25 @@ function SecuritySection({
             onChange={setAdmin}
             type="password"
           />
-          <Field
-            label="Guest password"
-            value={guest}
-            onChange={setGuest}
-          />
+          {hasGuest && (
+            <Field
+              label={isRoom ? "Room password (read / write)" : "Guest password"}
+              value={guest}
+              onChange={setGuest}
+            />
+          )}
         </div>
+        {isRoom && (
+          <label className="flex items-center justify-between gap-3 border border-border bg-card px-3 py-2 cursor-pointer">
+            <span className="space-y-0.5">
+              <span className="block font-mono text-xs uppercase tracking-[0.08em]">Allow read-only</span>
+              <span className="block font-mono text-[10px] text-muted-foreground/60">
+                a wrong or blank room password still logs in as a read-only guest
+              </span>
+            </span>
+            <Switch checked={allowReadOnly} onCheckedChange={setAllowReadOnly} />
+          </label>
+        )}
         <SectionFooter busy={busy} onLoad={load} onSave={save} />
       </div>
     </SettingsSection>
@@ -3060,7 +2930,7 @@ function Field({
             onChange?.(e.target.value)
           }
           className={cn(
-            "rounded-none font-mono text-xs border-border bg-background flex-1",
+            "rounded-none font-mono text-base md:text-xs border-border bg-background flex-1",
             readOnly && "text-muted-foreground",
           )}
         />
@@ -3177,7 +3047,7 @@ function ActionsSection({
         <Button
           variant="outline"
           size="sm"
-          onClick={() => run("Zerohop", "advert zerohop")}
+          onClick={() => run("Zerohop", "advert.zerohop")}
           disabled={busy === "Zerohop"}
           className="rounded-none font-mono text-[10px] uppercase tracking-[0.12em] justify-start"
         >

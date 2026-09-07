@@ -17,15 +17,24 @@ import (
 //
 // flood=true is a mesh-wide advert repeaters rebuild as it propagates;
 // flood=false is a zero-hop advert only direct neighbours receive (never
-// relayed). pathHashMode is the flood path-hash field-width selector
-// (0=1B, 1=2B, 3=4B) carried in the top 2 bits of PathLength; it's ignored for
-// zero-hop. lat/lon are included only when both are set and non-zero.
+// relayed). pathHashSize is the flood path-hash width in BYTES (1-4); the wire
+// carries size-1 in the top 2 bits of PathLength. Ignored for zero-hop. lat/lon
+// are included only when set and not both zero.
 //
 // scope (the firmware default_scope) optionally wraps a flood advert in a
 // transport region; nil sends a plain unscoped flood.
-func SendSelf(n *node.Node, log *slog.Logger, advType, name string, lat, lon *float64, flood bool, pathHashMode int, scope *meshcore.Region) error {
+// floodPathLength encodes PathLength: top 2 bits (pathHashSize - 1), low 6 the
+// hop count (0 when we originate). Clamped — a 0 would underflow to 0xC0.
+func floodPathLength(pathHashSize int) byte {
+	if pathHashSize < 1 || pathHashSize > 3 {
+		pathHashSize = 1
+	}
+	return byte((pathHashSize - 1) << 6)
+}
+
+func SendSelf(n *node.Node, log *slog.Logger, advType, name string, lat, lon *float64, flood bool, pathHashSize int, scope *meshcore.Region) error {
 	appData := meshcore.AdvertAppData{Type: advType, Name: name}
-	if lat != nil && lon != nil && *lat != 0 && *lon != 0 {
+	if lat != nil && lon != nil && (*lat != 0 || *lon != 0) {
 		appData.Lat = int32(math.Round(*lat * 1_000_000.0))
 		appData.Lon = int32(math.Round(*lon * 1_000_000.0))
 	}
@@ -52,7 +61,7 @@ func SendSelf(n *node.Node, log *slog.Logger, advType, name string, lat, lon *fl
 	// Zero-hop: ROUTE_TYPE_DIRECT with PathLength 0 (firmware reads path_len==0
 	// as "zero hop"), so neighbours accept but never relay it.
 	routeType := meshcore.RouteTypeFlood
-	pathLength := byte(pathHashMode << 6)
+	pathLength := floodPathLength(pathHashSize)
 	if !flood {
 		routeType = meshcore.RouteTypeDirect
 		pathLength = 0

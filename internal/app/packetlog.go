@@ -13,8 +13,12 @@ import (
 )
 
 // wirePacketLogger taps the mux to persist every rx/tx packet and broadcast it
-// to WebSocket subscribers.
-func wirePacketLogger(mux *node.RadioMux, db *store.Store, srv *api.Server) {
+// to WebSocket subscribers. TX is taken from the modem, not from a virtual
+// radio: a virtual radio only fires its outbound handlers for its OWN sends
+// (mux.virtualRadio.Enqueue), so a logging radio nothing transmits through
+// never sees one. The modem hook fires once per actual transmission, at write
+// time, for every virtual radio.
+func wirePacketLogger(mux *node.RadioMux, modem node.Modem, db *store.Store, srv *api.Server, compReg *companionRegistry) {
 	hub := srv.Hub()
 	logRadio := mux.NewRadio()
 
@@ -57,7 +61,7 @@ func wirePacketLogger(mux *node.RadioMux, db *store.Store, srv *api.Server) {
 		hub.Broadcast("packets", msg)
 	})
 
-	logRadio.AddOutboundHandler(func(data []byte) {
+	modem.AddOutboundHandler(func(data []byte) {
 		pkt, err := meshcore.PacketFromBytes(data)
 		routeType, payloadType := packetTypes(pkt, err)
 
@@ -79,6 +83,18 @@ func wirePacketLogger(mux *node.RadioMux, db *store.Store, srv *api.Server) {
 		})
 
 		hub.Broadcast("packets", packetBroadcastMsg("tx", rec.ReceivedAt, data, pkt, err, srv.ChannelLookup()))
+
+		// Same hook feeds the MQTT observer: it taps the mux's RX side only, so
+		// this is the only place that sees a transmission. Resolved through the
+		// registry because a config reload builds new companions (and new
+		// observers) while this handler, once added, can never be removed.
+		if compReg != nil {
+			for _, c := range compReg.all() {
+				if obs := c.Observer(); obs != nil {
+					obs.NoteTx(data)
+				}
+			}
+		}
 	})
 }
 

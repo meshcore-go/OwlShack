@@ -3,6 +3,7 @@ package store
 import (
 	"context"
 	"database/sql"
+	"errors"
 	"fmt"
 )
 
@@ -86,7 +87,7 @@ func (r *SignalTestRepo) Get(ctx context.Context, id int64) (*SignalTest, error)
 	t, err := scanSignalTest(r.db.QueryRowContext(ctx, `
 		SELECT id, companion_id, label, notes, path, path_hash_size, count, interval_secs, status, started_at, finished_at
 		FROM signal_tests WHERE id = ?`, id))
-	if err == sql.ErrNoRows {
+	if errors.Is(err, sql.ErrNoRows) {
 		return nil, nil
 	}
 	if err != nil {
