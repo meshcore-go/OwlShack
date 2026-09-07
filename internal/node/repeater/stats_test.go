@@ -2,9 +2,7 @@ package repeater
 
 import "testing"
 
-// A Linux host driving an SPI radio has no cell to read, and 0 mV would render
-// as a flat battery: a node needing attention rather than one working exactly
-// as designed.
+// A host with no cell must not render as a flat battery needing attention.
 func TestBatteryReading_AbsentWhenTheHostHasNoCell(t *testing.T) {
 	r := &Repeater{}
 	if got := r.batteryReading(); got != nil {

@@ -11,7 +11,14 @@ import { Button } from "@/components/ui/button";
 import { Skeleton } from "@/components/ui/skeleton";
 import { useApiObject } from "@/hooks/useApiObject";
 import { setTileKey } from "@/lib/leaflet";
-import { configApi, type Settings, type SpiBoard } from "@/lib/configApi";
+import {
+  boardHint,
+  boardOption,
+  configApi,
+  defaultBoard,
+  type Settings,
+  type SpiBoard,
+} from "@/lib/configApi";
 
 const BANDWIDTHS = [7.8, 10.4, 15.6, 20.8, 31.25, 41.7, 62.5, 125, 250, 500];
 const LOG_LEVELS = ["trace", "debug", "info", "warn", "error"];
@@ -158,13 +165,13 @@ export function RadioPage() {
                 options={CONNECTION_TYPES}
                 onChange={(v) => {
                   setConnectionType(v);
-                  // The two backends take different connection strings, so
-                  // carrying one over would leave an invalid value in the box.
+                  // The two backends take different connection strings.
                   if (v === "spi") {
+                    const pick = defaultBoard(boards);
                     if (!connection.startsWith("spi://")) {
-                      setConnection(`spi://${boards[0]?.spiPort ?? "SPI0.0"}`);
+                      setConnection(`spi://${pick?.spiPort ?? "SPI0.0"}`);
                     }
-                    if (!spiBoard && boards.length > 0) setSpiBoard(boards[0].name);
+                    if (!spiBoard && pick) setSpiBoard(pick.name);
                   } else if (connection.startsWith("spi://")) {
                     setConnection("serial:///dev/ttyACM0");
                   }
@@ -188,13 +195,9 @@ export function RadioPage() {
                   <SelectField
                     label="Radio hat"
                     value={spiBoard}
-                    options={boards.map((b) => ({ value: b.name, label: b.label }))}
+                    options={boards.map(boardOption)}
                     onChange={setSpiBoard}
-                    hint={
-                      board
-                        ? `${board.chip}, up to ${board.maxTxPower} dBm`
-                        : "Pick the board this host has fitted."
-                    }
+                    hint={boardHint(board)}
                   />
                 ) : (
                   <TextField

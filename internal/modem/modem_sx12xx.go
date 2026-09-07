@@ -8,6 +8,7 @@ import (
 	"github.com/meshcore-go/OwlShack/internal/config"
 	"github.com/meshcore-go/meshcore-go/hardware"
 	"github.com/meshcore-go/meshcore-go/hardware/sx12xx"
+	"github.com/meshcore-go/meshcore-go/node"
 	"periph.io/x/conn/v3/spi/spireg"
 	"periph.io/x/host/v3"
 )
@@ -39,6 +40,16 @@ func setupSPI(ms *State, cfg *config.Config, connAddr string, radioConfig *hardw
 	board, err := LookupBoard(*cfg.SPIBoard)
 	if err != nil {
 		return err
+	}
+	if board.Unsupported != "" {
+		return fmt.Errorf("board %s is listed but not supported: %s", board.Name, board.Unsupported)
+	}
+	// A wrong pin here is either a dead radio or a terminated switch, and the
+	// second looks exactly like a working node.
+	if board.Verified != "hardware" {
+		slog.Warn("board wiring has not been verified on hardware here",
+			"component", "modem", "board", board.Name, "provenance", board.Verified,
+			"notes", board.Notes)
 	}
 
 	// Past the module's rating the PA overheats, so this is a hard error rather
@@ -92,6 +103,8 @@ func setupSPI(ms *State, cfg *config.Config, connAddr string, radioConfig *hardw
 	m, err := sx12xx.NewModem(radio, radioConfig,
 		sx12xx.WithTxPower(int(txPower)),
 		sx12xx.WithModemLogger(slog.Default()),
+		// The KISS threshold, so handler_slow means the same on both paths.
+		sx12xx.WithHandlerWatchdog(handlerWatchdog),
 		sx12xx.WithModemErrorHandler(func(err error) {
 			stats.NoteError(err)
 			ms.RecvErrors.Add(1)
@@ -104,13 +117,21 @@ func setupSPI(ms *State, cfg *config.Config, connAddr string, radioConfig *hardw
 	ms.closers = append(ms.closers, m)
 	stats.Attach(m)
 
+	var modem node.Modem = m
+	if leds := openLEDs(board.LEDs()); leds != nil {
+		ms.closers = append(ms.closers, leds)
+		m.AddOutboundHandler(func([]byte) { leds.noteTx() })
+		modem = &ledModem{Modem: m, leds: leds}
+	}
+
 	pre, payload := sx12xx.PacketWindows(radioConfig)
 	slog.Info("radio up", "component", "modem", "board", board.Name, "chip", board.Chip,
+		"leds", board.LEDs().any(),
 		"spi", portName, "freq", *cfg.Freq, "bw", *cfg.Bw, "sf", *cfg.SF, "cr", *cfg.CR,
 		"tx", txPower, "preamble_symbols", sx12xx.PreambleForSF(radioConfig.SF),
 		"activity_window", pre+payload)
 
 	ms.Stats = stats
-	ms.Modem = m
+	ms.Modem = modem
 	return nil
 }
