@@ -57,9 +57,7 @@ func TestSx12xxStats_KeepsCRCAndDriverErrorsSeparate(t *testing.T) {
 	}
 }
 
-// A KISS modem counts none of the SPI driver's faults. Reporting them as 0
-// would read as "measured, none happened" on every KISS node on the mesh, which
-// is the failure this whole seam exists to avoid.
+// Reporting 0 would read as "measured, none happened" on every KISS node.
 func TestKissLinkStats_LeavesTheSPICountersUnmeasured(t *testing.T) {
 	ls := (&kissStatsProvider{modem: &hardware.KissModem{}}).LinkStats()
 	if ls.CRCErrors != nil || ls.DriverErrors != nil || ls.RecvRecoveries != nil {
@@ -68,8 +66,7 @@ func TestKissLinkStats_LeavesTheSPICountersUnmeasured(t *testing.T) {
 	}
 }
 
-// The error handler is wired up before the modem is attached, so a radio that
-// never came up at all must still report why rather than looking unmeasured.
+// The error handler predates Attach, so a radio that never came up still says why.
 func TestSx12xxStats_ReportsDriverErrorsBeforeAttach(t *testing.T) {
 	p := NewSx12xxStatsProvider(RadioInfo{})
 	p.NoteError(errFake{})

@@ -42,11 +42,8 @@ type NeighborInfo struct {
 	SecsAgo int64   `json:"secsAgo"`
 }
 
-// batteryReading is the battery to report, nil on a host with no cell at all.
-// A published 0 mV renders as a flat battery, which reads as a node needing
-// attention rather than one working exactly as designed. The binary STATUS
-// reply keeps its 0: that field sits at a fixed offset in a firmware-defined
-// layout and cannot be omitted.
+// batteryReading is nil on a host with no cell, so the UI does not render a flat
+// battery. The binary STATUS reply keeps its 0: fixed offset, firmware layout.
 func (r *Repeater) batteryReading() *int {
 	if !r.haveBattery.Load() {
 		return nil

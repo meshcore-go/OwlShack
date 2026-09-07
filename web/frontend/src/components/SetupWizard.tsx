@@ -20,7 +20,14 @@ import { RadioPresetSelect } from "@/components/RadioPresetSelect";
 import { PositionPicker } from "@/components/PositionPicker";
 import { toast } from "sonner";
 import { cn } from "@/lib/utils";
-import { configApi, type Settings, type SpiBoard } from "@/lib/configApi";
+import {
+  boardHint,
+  boardOption,
+  configApi,
+  defaultBoard,
+  type Settings,
+  type SpiBoard,
+} from "@/lib/configApi";
 import { RestoreEntryButton, RestoreFromBackup } from "@/components/RestoreFromBackup";
 
 const BANDWIDTHS = [7.8, 10.4, 15.6, 20.8, 31.25, 41.7, 62.5, 125, 250, 500];
@@ -227,10 +234,11 @@ export function SetupWizard({
                   onChange={(v) => {
                     setConnectionType(v);
                     if (v === "spi") {
+                      const pick = defaultBoard(boards);
                       if (!connection.startsWith("spi://")) {
-                        setConnection(`spi://${boards[0]?.spiPort ?? "SPI0.0"}`);
+                        setConnection(`spi://${pick?.spiPort ?? "SPI0.0"}`);
                       }
-                      if (!spiBoard && boards.length > 0) setSpiBoard(boards[0].name);
+                      if (!spiBoard && pick) setSpiBoard(pick.name);
                     } else if (connection.startsWith("spi://")) {
                       setConnection("serial:///dev/ttyACM0");
                     }
@@ -249,8 +257,9 @@ export function SetupWizard({
                     <SelectField
                       label="Radio hat"
                       value={spiBoard}
-                      options={boards.map((b) => ({ value: b.name, label: b.label }))}
+                      options={boards.map(boardOption)}
                       onChange={setSpiBoard}
+                      hint={boardHint(boards.find((b) => b.name === spiBoard))}
                     />
                   ) : (
                     <TextField

@@ -92,6 +92,12 @@ func Run(ctx context.Context, importPath string, verbosity int) error {
 
 	reconnectCh := make(chan struct{}, 1)
 
+	// Not fatal: a KISS node never consults it, and an SPI node naming a board it
+	// failed to define fails at LookupBoard with that name in the error.
+	if err := modem.LoadBoardOverrides(); err != nil {
+		slog.Error("board override file ignored", "component", "modem", "error", err)
+	}
+
 	ms, err := modem.Setup(ctx, cfg)
 	if err != nil {
 		return fmt.Errorf("modem setup: %w", err)

@@ -87,9 +87,7 @@ func (p *sx12xxStatsProvider) LinkStats() LinkStats {
 	driver := p.driverErrors.Load()
 	m := p.modem.Load()
 	if m == nil {
-		// Driver errors are counted through the error handler, which is wired
-		// up before the modem is attached, so a radio that failed to come up
-		// at all still reports why.
+		// The error handler predates Attach, so a radio that never came up says why.
 		return LinkStats{DriverErrors: &driver}
 	}
 	ls := radioLinkStats(m.Stats())

@@ -104,13 +104,20 @@ type MqttBrokerStatus struct {
 
 // --- per-resource config write inputs (JSON request bodies) ---
 
-// SPIBoardInfo describes one supported radio hat.
+// SPIBoardInfo describes one radio hat this build knows about.
 type SPIBoardInfo struct {
 	Name       string `json:"name"`
 	Label      string `json:"label"`
 	Chip       string `json:"chip"`
 	SPIPort    string `json:"spiPort"`
 	MaxTxPower int    `json:"maxTxPower"`
+	// Verified is "hardware" or "community"; shown in the picker, because an
+	// operator should learn a board is untested before the antenna goes up.
+	Verified string `json:"verified"`
+	Notes    string `json:"notes,omitempty"`
+	// Unsupported is why this build refuses the board, empty when it can drive it.
+	Unsupported string `json:"unsupported,omitempty"`
+	HasLEDs     bool   `json:"hasLeds"`
 }
 
 type SettingsInput struct {

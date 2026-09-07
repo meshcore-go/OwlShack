@@ -138,18 +138,15 @@ func TestFormatStatus_BoardReadings(t *testing.T) {
 		t.Errorf("mcu_temp_c = %v, want 31.5", got)
 	}
 
-	// A host with no cell at all must omit the key. 0 mV sits inside the
-	// measurement's own range, so publishing it plots as a flat dead battery on
-	// every consumer rather than as "this node has no battery".
+	// 0 mV is inside the measurement's own range, so it plots as a flat cell.
 	stats, _ = read(modem.DeviceStats{NoiseFloor: -120})["stats"].(map[string]any)
 	if _, ok := stats["battery_mv"]; ok {
 		t.Errorf("battery_mv = %v, must be omitted when there is no battery to measure", stats["battery_mv"])
 	}
 }
 
-// The SPI driver's counters are the only fault signal that path has. They must
-// reach the wire, and must stay absent on a KISS modem that counts none of
-// them: a published 0 reads as "measured, none happened" on every KISS node.
+// The SPI driver's counters are that path's only fault signal, and must stay
+// absent on a KISS modem rather than publishing a 0 it never measured.
 func TestFormatStatus_SPICountersAreOmittedUnlessMeasured(t *testing.T) {
 	read := func(link modem.LinkStats) map[string]any {
 		raw, err := formatStatus("online", "n", "id", modem.RadioInfo{}, modem.DeviceStats{},
@@ -183,8 +180,7 @@ func TestFormatStatus_SPICountersAreOmittedUnlessMeasured(t *testing.T) {
 		}
 	}
 
-	// A zero that was actually measured still publishes: the point is telling
-	// "none happened" apart from "cannot measure", not hiding zeroes.
+	// A measured zero still publishes: the point is not hiding zeroes.
 	zero := uint64(0)
 	stats = read(modem.LinkStats{DriverErrors: &zero})
 	if got, ok := stats["driver_errors"]; !ok || got != float64(0) {
