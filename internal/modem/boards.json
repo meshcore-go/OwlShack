@@ -1,9 +1,4 @@
 {
-  "_comment": [
-    "Pin numbers are BCM GPIO, -1 or omitted for absent, matching openhop's radio-settings.json so entries port across by hand.",
-    "verified is required: 'hardware' means run on the physical hat here, 'community' means never powered up here.",
-    "preamble_length is deliberately not imported: openhop fixes it at 32, MeshCore derives it from the spreading factor."
-  ],
   "boards": {
     "ultrapeaterzero-e22p": {
       "label": "Zindello UltraPeaterZero (E22P, 30 dBm)",

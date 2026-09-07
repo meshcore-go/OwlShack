@@ -42,8 +42,7 @@ type NeighborInfo struct {
 	SecsAgo int64   `json:"secsAgo"`
 }
 
-// batteryReading is nil on a host with no cell, so the UI does not render a flat
-// battery. The binary STATUS reply keeps its 0: fixed offset, firmware layout.
+// batteryReading is nil on a host with no cell; the binary STATUS reply keeps its 0, fixed firmware layout.
 func (r *Repeater) batteryReading() *int {
 	if !r.haveBattery.Load() {
 		return nil

@@ -72,8 +72,7 @@ func (r *Repeater) handleReq(pkt *meshcore.Packet) {
 	}
 }
 
-// Telemetry permission classes, from the firmware's SensorManager.h. A
-// requester masks classes out rather than being granted them.
+// Telemetry permission classes from SensorManager.h; a requester masks classes out, not in.
 const (
 	permTelemBase        uint8 = 0x01 // the node itself: battery, MCU temperature
 	permTelemLocation    uint8 = 0x02 // position
@@ -102,29 +101,16 @@ func (r *Repeater) buildReqResponse(client *store.RepeaterACLEntry, reqType byte
 		}
 		return r.accessListBody(), true
 	case reqTypeGetTelemetryData:
-		// Telemetry is not ACL-gated: the firmware's handleRequest answers it
-		// for admin and guest alike, and instead treats the first reserved byte
-		// as an INVERSE mask the requester supplies to leave classes out
-		// (perm_mask = ~payload[0], then querySensors(0xFF & perm_mask)). An
-		// absent byte means the whole payload.
+		// Not ACL-gated: handleRequest answers any client, and payload[0] is an INVERSE mask (perm_mask = ~payload[0]).
 		perms := permTelemAll
 		if len(params) >= 1 {
 			perms = ^params[0]
 		}
 		// Base telemetry on the self channel (ch1): battery voltage then MCU
-		// temperature, both read from the radio board. The firmware adds the
-		// temperature only when the board can measure one (its isnan check), so
-		// a modem answering HW_ERR_NO_CALLBACK omits it too.
+		// temperature, both from the radio board; the firmware's isnan check omits an unmeasurable one.
 		enc := meshcore.NewLPPEncoder()
 		if perms&permTelemBase != 0 {
-			// Deliberate divergence: the firmware adds the voltage
-			// unconditionally, because MainBoard::getBattMilliVolts is pure
-			// virtual with no way to say "no battery" — a board without a
-			// divider returns 0. A Linux host driving an SPI radio has no
-			// battery at all, and 0 V reads as a dead cell to every client that
-			// asks, so it is omitted instead. The firmware's own intent is
-			// visible in getMCUTemperature, which defaults to NAN and is
-			// skipped by an isnan check.
+			// Diverges from the firmware, whose getBattMilliVolts cannot express "no battery" and returns 0.
 			if r.haveBattery.Load() {
 				enc.AddVoltage(telemChannelSelf, float64(r.batteryMV.Load())/1000)
 			}

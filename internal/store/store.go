@@ -604,8 +604,7 @@ func migrateV5(ctx context.Context, db dbExecer) error {
 	return err
 }
 
-// migrateV8 adds the SPI radio hat selector. Only meaningful when connection
-// is spi://; NULL for a KISS modem, which is every pre-existing install.
+// migrateV8 adds settings.spi_board; NULL for a KISS modem, which is every pre-existing install.
 func migrateV8(ctx context.Context, db dbExecer) error {
 	_, err := db.ExecContext(ctx, `ALTER TABLE settings ADD COLUMN spi_board TEXT`)
 	return err

@@ -11,10 +11,7 @@ func TestLookupBoard(t *testing.T) {
 	}
 }
 
-// A board missing a reset or busy pin fails at bring-up as a dead radio, and
-// one whose RF switch is unset transmits into a terminated switch: it looks
-// like a healthy node that nobody can hear. Checked here because a half-added
-// board otherwise compiles and only fails on someone's roof.
+// A half-added board otherwise compiles and only fails on someone's roof.
 func TestBoardRegistryIsComplete(t *testing.T) {
 	for _, b := range Boards() {
 		t.Run(b.Name, func(t *testing.T) {
@@ -37,9 +34,7 @@ func TestBoardRegistryIsComplete(t *testing.T) {
 			if b.Verified != "hardware" && b.Verified != "community" {
 				t.Errorf("verified = %q, want a declared provenance", b.Verified)
 			}
-			// One of the two RF-switch mechanisms must be configured, or
-			// transmissions never reach the antenna. A board that has neither
-			// is listed but must be refused, not offered.
+			// DIO2 and a TX-enable pin are the two RF-switch mechanisms; a board with neither must be refused.
 			if !o.UseDIO2AsRfSwitch && o.TxEnPin == "" && b.Unsupported == "" {
 				t.Error("no RF switch control and not marked unsupported: transmissions would go into a terminated switch")
 			}
@@ -47,8 +42,7 @@ func TestBoardRegistryIsComplete(t *testing.T) {
 	}
 }
 
-// The one hat this project has run must stay usable; refusing it would fail
-// every SPI node with no obvious cause.
+// The one hat this project has run must stay usable.
 func TestVerifiedBoardIsUsable(t *testing.T) {
 	b, err := LookupBoard("ultrapeaterzero-e22p")
 	if err != nil {
@@ -60,8 +54,7 @@ func TestVerifiedBoardIsUsable(t *testing.T) {
 	if b.Verified != "hardware" {
 		t.Errorf("verified = %q, want hardware", b.Verified)
 	}
-	// The wiring confirmed on the hat, so a boards.json edit that moves a pin
-	// fails here rather than on someone's roof.
+	// The wiring confirmed on the hat, so a boards.json edit that moves a pin fails here.
 	o := b.Opts()
 	for _, tc := range []struct{ field, got, want string }{
 		{"reset", o.ResetPin, "GPIO25"},

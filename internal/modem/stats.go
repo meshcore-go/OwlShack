@@ -21,8 +21,7 @@ type RadioInfo struct {
 
 type DeviceStats struct {
 	NoiseFloor int16
-	// HaveBattery is false when there is no cell to measure, keeping 0 mV
-	// distinguishable from a flat one. A KISS board answering 0 still sets it.
+	// HaveBattery is false when there is no cell at all; a KISS board answering 0 still sets it.
 	BatteryMV   uint16
 	HaveBattery bool
 	UptimeSecs  uint32
@@ -47,13 +46,11 @@ type LinkStats struct {
 	HwErrors       uint64 // HW_RESP_ERROR frames received
 	TxOutcomeLost  uint64 // TX_DONE waits abandoned by a reconnect
 
-	// The SPI path's own counters, nil when the backend cannot measure them: a
-	// KISS modem counts none, and 0 would read as "measured, none happened".
+	// The SPI path's own counters; nil means the backend cannot measure them, 0 means it measured none.
 	CRCErrors *uint64 // chip-level CRC and header errors: a noisy channel
 	// DriverErrors is SPI transaction failures, busy timeouts and failed IRQ reads.
 	DriverErrors *uint64
-	// RecvRecoveries is the watchdog re-arming a stuck receiver: a node that
-	// would otherwise have gone quietly deaf.
+	// RecvRecoveries is the watchdog re-arming a stuck receiver.
 	RecvRecoveries *uint64
 }
 

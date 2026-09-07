@@ -121,10 +121,7 @@ type statsBlock struct {
 	RecvErrors uint64 `json:"recv_errors"`
 	QueueLen   int    `json:"queue_len"`
 
-	// Board readings, named and placed as the firmware's stats-core / stats-radio
-	// replies are: meshcoretomqtt forwards those objects verbatim as this block.
-	// Omitted when there is nothing to measure, so a host with no cell does not
-	// plot as a flat dead battery. A KISS board answering 0 still publishes it.
+	// Firmware stats-core / stats-radio key names; omitted when unmeasurable, but a KISS 0 still publishes.
 	BatteryMV  *uint16  `json:"battery_mv,omitempty"`
 	MCUTempC   *float64 `json:"mcu_temp_c,omitempty"`
 	NoiseFloor int16    `json:"noise_floor"`
@@ -150,9 +147,7 @@ type statsBlock struct {
 	HwDecodeErrors      uint64 `json:"hw_decode_errors"`
 	HandlerSlow         uint64 `json:"handler_slow"`
 
-	// Faults only a directly-attached SPI radio counts, omitted on a KISS modem
-	// rather than published as zeroes it never measured. recv_recoveries is the
-	// watchdog re-arming a stuck receiver, so non-zero is worth an alert.
+	// SPI-only faults, omitted on a KISS modem rather than published as zeroes it never measured.
 	CRCErrors      *uint64 `json:"crc_errors,omitempty"`
 	DriverErrors   *uint64 `json:"driver_errors,omitempty"`
 	RecvRecoveries *uint64 `json:"recv_recoveries,omitempty"`

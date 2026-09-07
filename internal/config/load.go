@@ -110,8 +110,7 @@ func (c *Config) Validate() error {
 		if !ok {
 			return fmt.Errorf("invalid connection string %q: must start with serial://, tcp:// or spi://", *c.Connection)
 		}
-		// An spi:// radio is driven by this process, so it needs to know the
-		// board's wiring. Without it the pins are unknown, not defaultable.
+		// This process drives the radio, so the pins are unknown rather than defaultable.
 		if scheme == "spi" && (c.SPIBoard == nil || *c.SPIBoard == "") {
 			return fmt.Errorf("connection %q needs spiBoard set", *c.Connection)
 		}

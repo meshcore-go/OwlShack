@@ -81,10 +81,7 @@ func MuxOptions(ms *State) []node.MuxOption {
 	return opts
 }
 
-// Setup connects to the radio described by cfg and returns the ready State.
-// Two backends: a KISS modem over serial or TCP, which is MeshCore firmware
-// driving the radio for us, and a bare SX12xx wired to the host's SPI bus,
-// where there is no firmware and this process is the radio stack.
+// Setup connects the radio: KISS firmware over serial/TCP, or a bare SX12xx on the host's SPI bus.
 func Setup(ctx context.Context, cfg *config.Config) (*State, error) {
 	ms := &State{
 		RecvErrors: &atomic.Uint64{},
@@ -104,9 +101,7 @@ func Setup(ctx context.Context, cfg *config.Config) (*State, error) {
 	}
 	ms.radioConfig = radioConfig
 	ms.airtimeFactor = cfg.AirtimeFactorOr()
-	// The library takes an inverted factor, so log the percentage an operator
-	// actually cares about — deriving it from the factor is the exact mistake
-	// this line exists to prevent.
+	// The library takes an inverted factor; log the percentage instead.
 	slog.Info("airtime budget",
 		"duty_cycle_pct", cfg.DutyCyclePercentOr(), "airtime_factor", ms.airtimeFactor)
 

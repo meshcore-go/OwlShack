@@ -367,8 +367,7 @@ func (l *rateLimiter) allow() bool {
 
 // DeviceStats are the shared modem's board readings, polled for the over-mesh
 // STATUS and telemetry replies. HaveMCUTemp is false when the board can't
-// measure a temperature, so 0 °C isn't mistaken for a reading; HaveBattery is
-// false when there is no cell at all, so 0 mV isn't mistaken for a flat one.
+// measure one, and HaveBattery false when there is no cell, so 0 is never mistaken for a reading.
 type DeviceStats struct {
 	NoiseFloor  int16
 	BatteryMV   uint16

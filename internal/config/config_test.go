@@ -932,10 +932,7 @@ func TestChannelRefKeyLength(t *testing.T) {
 	}
 }
 
-// An spi:// radio is driven by this process, so the board's wiring is not
-// something a default can supply: the wrong reset or busy pin is a dead radio,
-// and the wrong RF-switch pin is a node nobody can hear. Absence must be
-// rejected rather than guessed.
+// The board's wiring has no safe default, so absence must be rejected rather than guessed.
 func TestValidate_SPIConnectionRequiresBoard(t *testing.T) {
 	board := "ultrapeaterzero-e22p"
 	for _, tc := range []struct {

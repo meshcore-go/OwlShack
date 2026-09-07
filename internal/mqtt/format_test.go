@@ -145,8 +145,7 @@ func TestFormatStatus_BoardReadings(t *testing.T) {
 	}
 }
 
-// The SPI driver's counters are that path's only fault signal, and must stay
-// absent on a KISS modem rather than publishing a 0 it never measured.
+// SPI counters must stay absent on a KISS modem rather than publishing a 0 it never measured.
 func TestFormatStatus_SPICountersAreOmittedUnlessMeasured(t *testing.T) {
 	read := func(link modem.LinkStats) map[string]any {
 		raw, err := formatStatus("online", "n", "id", modem.RadioInfo{}, modem.DeviceStats{},

@@ -838,10 +838,7 @@ func TestRegionPrefixLookup(t *testing.T) {
 	}
 }
 
-// The firmware does not ACL-gate telemetry. It reads the first reserved byte as
-// an INVERSE mask the requester supplies (perm_mask = ~payload[0]) and answers
-// admin and guest alike. Treating that byte as granted permissions, or gating
-// on the client's role, would drop readings a real client asked for.
+// Telemetry is not ACL-gated, and payload[0] is an INVERSE mask, not granted permissions.
 func TestTelemetryHonoursTheRequestersInverseMask(t *testing.T) {
 	newRepeater := func() *Repeater {
 		r := &Repeater{}
@@ -885,9 +882,7 @@ func TestTelemetryHonoursTheRequestersInverseMask(t *testing.T) {
 	}
 }
 
-// A host with no battery must omit the voltage rather than publish 0 V, which
-// every client would read as a dead cell. This diverges from the firmware,
-// where getBattMilliVolts cannot express "no battery" and returns 0.
+// A host with no battery omits the voltage; the firmware cannot express that and returns 0.
 func TestTelemetryOmitsBatteryWhenTheHostHasNone(t *testing.T) {
 	r := &Repeater{} // batteryMV left at 0, as on a Raspberry Pi
 	r.mcuTempC.Store(352)

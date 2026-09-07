@@ -8,11 +8,7 @@ func strPtr(s string) *string   { return &s }
 func intPtr2(i int) *int        { return &i }
 func fltPtr(f float64) *float64 { return &f }
 
-// Every settings column is written and read back with a distinct value. The
-// INSERT lists its columns and its placeholders separately and Scan lists the
-// destinations a third time, so adding a column in two of those three places
-// compiles, runs, and silently shifts every value after it into the wrong
-// field. A round trip is the only thing that notices.
+// Columns, placeholders and Scan destinations are listed three separate times, so only a round trip catches a column added to just two of them.
 func TestSettings_RoundTripsEveryColumn(t *testing.T) {
 	t.Parallel()
 	st := newTestStore(t)
@@ -92,9 +88,7 @@ func TestSettings_RoundTripsEveryColumn(t *testing.T) {
 	}
 }
 
-// A KISS install leaves spi_board NULL, and it must stay NULL rather than come
-// back as the empty string: the config layer rejects an spi:// connection whose
-// board is unset, and "" would read as set.
+// spi_board must stay NULL for KISS: the config layer rejects an spi:// connection whose board is unset, and "" would read as set.
 func TestSettings_SPIBoardStaysNullForKiss(t *testing.T) {
 	t.Parallel()
 	st := newTestStore(t)

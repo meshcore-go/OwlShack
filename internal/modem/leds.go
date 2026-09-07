@@ -22,14 +22,12 @@ type ledPins struct {
 
 func (p ledPins) any() bool { return p.Tx != "" || p.Rx != "" }
 
-// activityLEDs blinks a board's TX and RX LEDs.
 type activityLEDs struct {
 	tx *blinker
 	rx *blinker
 }
 
-// openLEDs claims the LED pins, skipping any that will not open: refusing to
-// start over an LED would be worse than a dark one.
+// openLEDs claims the LED pins, skipping any that will not open.
 func openLEDs(p ledPins) *activityLEDs {
 	if !p.any() {
 		return nil
@@ -72,7 +70,7 @@ func (l *activityLEDs) noteRx() {
 	}
 }
 
-// Close darkens both LEDs; one left lit shows a node still transmitting.
+// Close darkens both LEDs.
 func (l *activityLEDs) Close() error {
 	if l == nil {
 		return nil
@@ -144,10 +142,7 @@ func (b *blinker) set(level gpio.Level) {
 	}
 }
 
-// ledModem blinks the RX LED on each received packet. The concrete type is
-// embedded, not node.Modem, so Close and Dead still promote: hiding Dead would
-// leave the supervisor's reconnect watcher dead with no log line saying why.
-// TX needs no override, since the driver already calls outbound handlers.
+// ledModem blinks the RX LED on each received packet; the concrete type is embedded, not node.Modem, so Close and Dead still promote.
 type ledModem struct {
 	*sx12xx.Modem
 	leds *activityLEDs
