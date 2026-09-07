@@ -78,16 +78,24 @@ func (p *sx12xxStatsProvider) Stats(context.Context) DeviceStats {
 // and are reported through CRCErrors instead of being folded in, because a
 // noisy channel and a driver fault call for different responses.
 //
-// ponytail: the remaining zeroes are still indistinguishable from "measured,
-// none happened", the same ambiguity battery_mv carries. Making them omittable
-// is a wire change shared with meshcore-bot and CoreScope, so it is Wesley's
-// call, not this file's.
+// The remaining KISS-shaped zeroes are true zeroes on this path: there are no
+// HW_RESP_ERROR frames, no TX_DONE waits and no signal-report frames to pair,
+// so none of those events can occur. HandlerSlow is the exception — the driver
+// keeps no dispatch timer — but its consequence is counted, since a consumer
+// too slow to keep up shows up in InboundDroppedNew.
 func (p *sx12xxStatsProvider) LinkStats() LinkStats {
+	driver := p.driverErrors.Load()
 	m := p.modem.Load()
 	if m == nil {
-		return LinkStats{}
+		// Driver errors are counted through the error handler, which is wired
+		// up before the modem is attached, so a radio that failed to come up
+		// at all still reports why.
+		return LinkStats{DriverErrors: &driver}
 	}
-	return radioLinkStats(m.Stats())
+	ls := radioLinkStats(m.Stats())
+	recoveries := m.RecvRecoveries()
+	ls.DriverErrors, ls.RecvRecoveries = &driver, &recoveries
+	return ls
 }
 
 // radioLinkStats maps the driver's counters onto the KISS-shaped fields. Pure,
@@ -95,42 +103,11 @@ func (p *sx12xxStatsProvider) LinkStats() LinkStats {
 // eight similar-looking fields, which is exactly the kind of thing that gets
 // cross-wired and then reads as a plausible number.
 func radioLinkStats(s sx12xx.RadioStats) LinkStats {
+	crc := s.PacketsCRCErrors
 	return LinkStats{
 		InboundDroppedNew: s.PacketsDropped,
 		HwDecodeErrors:    s.PacketsRecvErrors,
-	}
-}
-
-// RadioCounters are the driver's own counters, for the parts of the SPI path
-// that have no KISS field to land in.
-type RadioCounters struct {
-	PacketsRecv uint64
-	PacketsSent uint64
-	CRCErrors   uint64
-	// DriverErrors is faults the driver reported through its error handler:
-	// SPI transaction failures, busy-line timeouts, IRQ reads that failed.
-	DriverErrors uint64
-}
-
-// Counters reports the driver's counters. Zero-valued when no modem is
-// attached, which the caller can tell apart by checking the provider type.
-func (p *sx12xxStatsProvider) Counters() RadioCounters {
-	driver := p.driverErrors.Load()
-	m := p.modem.Load()
-	if m == nil {
-		return RadioCounters{DriverErrors: driver}
-	}
-	return radioCounters(m.Stats(), driver)
-}
-
-// radioCounters maps the driver's counters onto ours. Pure, for the same reason
-// as radioLinkStats.
-func radioCounters(s sx12xx.RadioStats, driverErrors uint64) RadioCounters {
-	return RadioCounters{
-		PacketsRecv:  s.PacketsRecv,
-		PacketsSent:  s.PacketsSent,
-		CRCErrors:    s.PacketsCRCErrors,
-		DriverErrors: driverErrors,
+		CRCErrors:         &crc,
 	}
 }
 

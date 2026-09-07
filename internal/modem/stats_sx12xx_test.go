@@ -3,6 +3,7 @@ package modem
 import (
 	"testing"
 
+	"github.com/meshcore-go/meshcore-go/hardware"
 	"github.com/meshcore-go/meshcore-go/hardware/sx12xx"
 )
 
@@ -16,8 +17,9 @@ func TestSx12xxStats_ReportsNoBoardReadingsItCannotMeasure(t *testing.T) {
 	p := NewSx12xxStatsProvider(RadioInfo{FreqHz: 917_375_000, BwHz: 62_500, SF: 7, CR: 5, TxPower: 22})
 
 	ds := p.Stats(t.Context())
-	if ds.BatteryMV != 0 {
-		t.Errorf("BatteryMV = %d, want 0: there is no battery to read", ds.BatteryMV)
+	if ds.BatteryMV != 0 || ds.HaveBattery {
+		t.Errorf("battery = %d mV (have=%v), want absent: there is no battery to read",
+			ds.BatteryMV, ds.HaveBattery)
 	}
 	if ds.HaveMCUTemp {
 		t.Error("HaveMCUTemp = true, but there is no MCU sensor on this path")
@@ -31,31 +33,16 @@ func TestSx12xxStats_ReportsNoBoardReadingsItCannotMeasure(t *testing.T) {
 // together would have an operator chasing software for an antenna problem, so
 // they stay separate — and neither is silently reported as the other.
 func TestSx12xxStats_KeepsCRCAndDriverErrorsSeparate(t *testing.T) {
-	p := NewSx12xxStatsProvider(RadioInfo{})
-	p.NoteError(errFake{})
-
-	if got := p.Counters().DriverErrors; got != 1 {
-		t.Errorf("DriverErrors = %d, want 1", got)
-	}
-
 	// Distinct values per field, so a cross-wired mapping shows up as the wrong
 	// number rather than coincidentally matching.
 	s := sx12xx.RadioStats{
 		PacketsRecv: 100, PacketsSent: 20,
 		PacketsRecvErrors: 3, PacketsCRCErrors: 7, PacketsDropped: 5,
 	}
-	c := radioCounters(s, 11)
-	if c.PacketsRecv != 100 || c.PacketsSent != 20 {
-		t.Errorf("counters = %+v, want recv 100 / sent 20", c)
-	}
-	if c.CRCErrors != 7 {
-		t.Errorf("CRCErrors = %d, want 7 (the driver's CRC count, not another counter)", c.CRCErrors)
-	}
-	if c.DriverErrors != 11 {
-		t.Errorf("DriverErrors = %d, want 11; a CRC error is a noisy channel, not our fault", c.DriverErrors)
-	}
-
 	ls := radioLinkStats(s)
+	if ls.CRCErrors == nil || *ls.CRCErrors != 7 {
+		t.Errorf("CRCErrors = %v, want 7 (the driver's CRC count, not another counter)", ls.CRCErrors)
+	}
 	if ls.InboundDroppedNew != 5 {
 		t.Errorf("InboundDroppedNew = %d, want 5 (PacketsDropped)", ls.InboundDroppedNew)
 	}
@@ -67,6 +54,32 @@ func TestSx12xxStats_KeepsCRCAndDriverErrorsSeparate(t *testing.T) {
 	if ls.RxMetaTimeouts != 0 || ls.RxMetaMisattributed != 0 || ls.HwErrors != 0 ||
 		ls.TxOutcomeLost != 0 || ls.InboundDroppedOldest != 0 || ls.HandlerSlow != 0 {
 		t.Errorf("a KISS-only field was populated on the SPI path: %+v", ls)
+	}
+}
+
+// A KISS modem counts none of the SPI driver's faults. Reporting them as 0
+// would read as "measured, none happened" on every KISS node on the mesh, which
+// is the failure this whole seam exists to avoid.
+func TestKissLinkStats_LeavesTheSPICountersUnmeasured(t *testing.T) {
+	ls := (&kissStatsProvider{modem: &hardware.KissModem{}}).LinkStats()
+	if ls.CRCErrors != nil || ls.DriverErrors != nil || ls.RecvRecoveries != nil {
+		t.Errorf("a KISS modem reported an SPI counter: crc=%v driver=%v recoveries=%v",
+			ls.CRCErrors, ls.DriverErrors, ls.RecvRecoveries)
+	}
+}
+
+// The error handler is wired up before the modem is attached, so a radio that
+// never came up at all must still report why rather than looking unmeasured.
+func TestSx12xxStats_ReportsDriverErrorsBeforeAttach(t *testing.T) {
+	p := NewSx12xxStatsProvider(RadioInfo{})
+	p.NoteError(errFake{})
+
+	ls := p.LinkStats()
+	if ls.DriverErrors == nil || *ls.DriverErrors != 1 {
+		t.Errorf("DriverErrors = %v with no modem attached, want 1", ls.DriverErrors)
+	}
+	if ls.CRCErrors != nil || ls.RecvRecoveries != nil {
+		t.Error("a counter that only the modem can supply was reported without one")
 	}
 }
 

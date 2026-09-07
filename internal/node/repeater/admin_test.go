@@ -221,6 +221,7 @@ func TestClearStats(t *testing.T) {
 func TestTelemetryBody(t *testing.T) {
 	r := &Repeater{}
 	r.batteryMV.Store(4168)
+	r.haveBattery.Store(true)
 
 	body, ok := r.buildReqResponse(&store.RepeaterACLEntry{Permissions: permAdmin}, reqTypeGetTelemetryData, nil)
 	if !ok {
@@ -845,6 +846,7 @@ func TestTelemetryHonoursTheRequestersInverseMask(t *testing.T) {
 	newRepeater := func() *Repeater {
 		r := &Repeater{}
 		r.batteryMV.Store(4168)
+		r.haveBattery.Store(true)
 		r.mcuTempC.Store(215)
 		r.haveMCUTemp.Store(true)
 		return r
@@ -903,6 +905,7 @@ func TestTelemetryOmitsBatteryWhenTheHostHasNone(t *testing.T) {
 
 	// A board that does report a battery still publishes it.
 	r.batteryMV.Store(4168)
+	r.haveBattery.Store(true)
 	body, _ = r.buildReqResponse(&store.RepeaterACLEntry{Permissions: permAdmin}, reqTypeGetTelemetryData, nil)
 	readings, _ = meshcore.LPPDecode(body)
 	// LPP voltage has 0.01 V resolution, so 4168 mV comes back as 4.16.

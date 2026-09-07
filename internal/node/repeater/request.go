@@ -125,8 +125,8 @@ func (r *Repeater) buildReqResponse(client *store.RepeaterACLEntry, reqType byte
 			// asks, so it is omitted instead. The firmware's own intent is
 			// visible in getMCUTemperature, which defaults to NAN and is
 			// skipped by an isnan check.
-			if mv := r.batteryMV.Load(); mv > 0 {
-				enc.AddVoltage(telemChannelSelf, float64(mv)/1000)
+			if r.haveBattery.Load() {
+				enc.AddVoltage(telemChannelSelf, float64(r.batteryMV.Load())/1000)
 			}
 			if r.haveMCUTemp.Load() {
 				enc.AddTemperature(telemChannelSelf, float64(r.mcuTempC.Load())/10)
