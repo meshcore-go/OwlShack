@@ -9,10 +9,7 @@ import (
 
 var _ StatsProvider = (*sx12xxStatsProvider)(nil)
 
-// A Pi has no battery and no MCU temperature sensor, and there is no firmware
-// to ask. Those readings must stay absent rather than arrive as zeroes that
-// look like a flat battery and a freezing board: a fabricated healthy default
-// is what made a battery-less board report 100%.
+// A Pi has no battery and no MCU sensor, and no firmware to ask, so those readings must stay absent rather than arrive as zeroes.
 func TestSx12xxStats_ReportsNoBoardReadingsItCannotMeasure(t *testing.T) {
 	p := NewSx12xxStatsProvider(RadioInfo{FreqHz: 917_375_000, BwHz: 62_500, SF: 7, CR: 5, TxPower: 22})
 
@@ -29,12 +26,9 @@ func TestSx12xxStats_ReportsNoBoardReadingsItCannotMeasure(t *testing.T) {
 	}
 }
 
-// A CRC error is a noisy channel; a driver error is our fault. Folding them
-// together would have an operator chasing software for an antenna problem, so
-// they stay separate — and neither is silently reported as the other.
+// A CRC error is a noisy channel and a driver error is our own fault, so the two must never be folded together.
 func TestSx12xxStats_KeepsCRCAndDriverErrorsSeparate(t *testing.T) {
-	// Distinct values per field, so a cross-wired mapping shows up as the wrong
-	// number rather than coincidentally matching.
+	// Distinct values per field, so a cross-wired mapping shows up as a wrong number rather than a coincidental match.
 	s := sx12xx.RadioStats{
 		PacketsRecv: 100, PacketsSent: 20,
 		PacketsRecvErrors: 3, PacketsCRCErrors: 7, PacketsDropped: 5,
@@ -49,15 +43,13 @@ func TestSx12xxStats_KeepsCRCAndDriverErrorsSeparate(t *testing.T) {
 	if ls.HwDecodeErrors != 3 {
 		t.Errorf("HwDecodeErrors = %d, want 3 (PacketsRecvErrors)", ls.HwDecodeErrors)
 	}
-	// The KISS-only fields stay zero rather than being filled with whatever
-	// number was nearest.
 	if ls.RxMetaTimeouts != 0 || ls.RxMetaMisattributed != 0 || ls.HwErrors != 0 ||
 		ls.TxOutcomeLost != 0 || ls.InboundDroppedOldest != 0 || ls.HandlerSlow != 0 {
 		t.Errorf("a KISS-only field was populated on the SPI path: %+v", ls)
 	}
 }
 
-// Reporting 0 would read as "measured, none happened" on every KISS node.
+// A nil counter means the backend cannot measure it; 0 would read as "measured, none happened" on every KISS node.
 func TestKissLinkStats_LeavesTheSPICountersUnmeasured(t *testing.T) {
 	ls := (&kissStatsProvider{modem: &hardware.KissModem{}}).LinkStats()
 	if ls.CRCErrors != nil || ls.DriverErrors != nil || ls.RecvRecoveries != nil {
@@ -80,8 +72,7 @@ func TestSx12xxStats_ReportsDriverErrorsBeforeAttach(t *testing.T) {
 	}
 }
 
-// Before Attach, and after a driver teardown, the provider has no modem to ask.
-// It must return zero rather than dereference one.
+// Before Attach, and after a driver teardown, there is no modem to dereference.
 func TestSx12xxStats_SurvivesWithNoModemAttached(t *testing.T) {
 	p := NewSx12xxStatsProvider(RadioInfo{})
 	if got := p.EstAirtimeMs(64); got != 0 {
@@ -95,8 +86,7 @@ func TestSx12xxStats_SurvivesWithNoModemAttached(t *testing.T) {
 	}
 }
 
-// Driver faults are the only fault signal this path has, so they must be
-// counted rather than only logged.
+// Driver faults are the only fault signal on this path, so they must be counted, not only logged.
 func TestSx12xxStats_CountsDriverErrors(t *testing.T) {
 	p := NewSx12xxStatsProvider(RadioInfo{})
 	if got := p.DriverErrors(); got != 0 {

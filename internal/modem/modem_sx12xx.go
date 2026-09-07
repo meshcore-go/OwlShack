@@ -13,8 +13,7 @@ import (
 	"periph.io/x/host/v3"
 )
 
-// periphOnce guards host.Init, which enumerates the board's buses and GPIOs.
-// Once per process: a reconnect re-opens the SPI port, not the host.
+// periphOnce guards host.Init; a reconnect re-opens the SPI port, not the host.
 var periphOnce struct {
 	sync.Once
 	err error
@@ -29,10 +28,7 @@ func initPeriph() error {
 	return periphOnce.err
 }
 
-// setupSPI drives an SX12xx wired straight to the host's SPI bus. There is no
-// MeshCore firmware in front of the chip, so this process is the radio stack:
-// the modem applies the MeshCore modulation and sync word itself and gates
-// transmissions on channel activity.
+// setupSPI drives an SX12xx wired straight to the host's SPI bus, with no MeshCore firmware in front of the chip, so this process is the radio stack.
 func setupSPI(ms *State, cfg *config.Config, connAddr string, radioConfig *hardware.RadioConfig) error {
 	if cfg.SPIBoard == nil || *cfg.SPIBoard == "" {
 		return fmt.Errorf("spi connection needs spiBoard set (known: %v)", BoardNames())
@@ -44,17 +40,13 @@ func setupSPI(ms *State, cfg *config.Config, connAddr string, radioConfig *hardw
 	if board.Unsupported != "" {
 		return fmt.Errorf("board %s is listed but not supported: %s", board.Name, board.Unsupported)
 	}
-	// A wrong pin here is either a dead radio or a terminated switch, and the
-	// second looks exactly like a working node.
 	if board.Verified != "hardware" {
 		slog.Warn("board wiring has not been verified on hardware here",
 			"component", "modem", "board", board.Name, "provenance", board.Verified,
 			"notes", board.Notes)
 	}
 
-	// Past the module's rating the PA overheats, so this is a hard error rather
-	// than a silent clamp: an operator who asked for 30 dBm on a 22 dBm part
-	// needs to know the number they set is not the number they get.
+	// Past the module's rating the PA cooks, so this is a hard error rather than a clamp.
 	txPower := *cfg.TX
 	if txPower > board.MaxTxPower {
 		return fmt.Errorf("tx power %d dBm exceeds %s maximum of %d dBm",
@@ -82,9 +74,6 @@ func setupSPI(ms *State, cfg *config.Config, connAddr string, radioConfig *hardw
 		return fmt.Errorf("sx126x on %s: %w", portName, err)
 	}
 
-	// Calibration and oscillator faults land here, and a wrong TCXO voltage is
-	// the common one: the radio comes up, reports no error on any setter, and
-	// simply never hears anything.
 	if de, err := radio.DeviceErrors(); err != nil {
 		slog.Warn("radio device errors unreadable", "component", "modem", "error", err)
 	} else if de != 0 {

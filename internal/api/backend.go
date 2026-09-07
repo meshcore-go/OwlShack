@@ -6,8 +6,7 @@ import "context"
 type Backend interface {
 	Companions() []CompanionInfo
 
-	// SPIBoards lists the radio hats this build knows how to wire, for the
-	// settings UI to choose from.
+	// SPIBoards lists the radio hats this build knows how to wire.
 	SPIBoards() []SPIBoardInfo
 
 	// ChannelByHash resolves a channel hash byte across every companion; nil when unknown.
@@ -111,8 +110,7 @@ type SPIBoardInfo struct {
 	Chip       string `json:"chip"`
 	SPIPort    string `json:"spiPort"`
 	MaxTxPower int    `json:"maxTxPower"`
-	// Verified is "hardware" or "community"; shown in the picker, because an
-	// operator should learn a board is untested before the antenna goes up.
+	// Verified is "hardware" or "community"; shown in the picker before an antenna goes up.
 	Verified string `json:"verified"`
 	Notes    string `json:"notes,omitempty"`
 	// Unsupported is why this build refuses the board, empty when it can drive it.
@@ -125,8 +123,7 @@ type SettingsInput struct {
 	ConnectionType *string `json:"connectionType"`
 	Connection     *string `json:"connection"`
 	BaudRate       *int    `json:"baudRate"`
-	// SPIBoard names the radio hat for an spi:// connection. Omitted keeps the
-	// stored value: dropping it would leave a working SPI node with no wiring.
+	// SPIBoard names the hat for an spi:// connection; omitted keeps the stored value.
 	SPIBoard     *string  `json:"spiBoard"`
 	Freq         *float64 `json:"freq"`
 	BW           *float64 `json:"bw"`

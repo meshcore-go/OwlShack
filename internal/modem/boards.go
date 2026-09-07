@@ -13,16 +13,13 @@ import (
 	"periph.io/x/conn/v3/physic"
 )
 
-// boardsJSON is the shipped board list; BoardsFile adds to it without a rebuild.
-//
 //go:embed boards.json
 var boardsJSON []byte
 
 // BoardsFile is an optional board list in the working directory, merged by key.
 const BoardsFile = "boards.json"
 
-// Board is the wiring of one SPI radio hat, fixed by its layout and so chosen
-// by name rather than entered pin by pin.
+// Board is the wiring of one SPI radio hat, chosen by name rather than pin by pin.
 type Board struct {
 	// Name is the stored identifier; Label and Chip are for the UI.
 	Name  string
@@ -35,16 +32,14 @@ type Board struct {
 	// Verified is "hardware" (run on the physical hat here) or "community".
 	Verified string
 	Notes    string
-	// Unsupported is why this build refuses the board; it stays listed, because
-	// known-but-refused is a different answer from missing.
+	// Unsupported is why this build refuses the board, which stays listed anyway.
 	Unsupported string
 
 	leds ledPins
 	opts sx12xx.Opts
 }
 
-// Opts returns the driver options for the board. A copy, so a caller cannot
-// mutate the registry.
+// Opts returns a copy of the board's driver options.
 func (b Board) Opts() sx12xx.Opts { return b.opts }
 
 // LEDs returns the board's activity LED pins, both empty when it has none.
@@ -53,8 +48,7 @@ func (b Board) LEDs() ledPins { return b.leds }
 // HasLEDs reports whether the board drives activity LEDs.
 func (b Board) HasLEDs() bool { return b.leds.any() }
 
-// boardFile is one entry in boards.json. Pins are pointers because 0 is GPIO0,
-// a real pin, so an omitted line cannot be spelled with a zero value.
+// boardFile is one entry in boards.json; pins are pointers because 0 is GPIO0, a real pin.
 type boardFile struct {
 	Label string `json:"label"`
 	Chip  string `json:"chip"`
@@ -69,7 +63,7 @@ type boardFile struct {
 	TxEnPin  *int  `json:"txen_pin"`
 	RxEnPin  *int  `json:"rxen_pin"`
 	EnPins   []int `json:"en_pins"`
-	// EnPin is openhop's singular spelling; a dropped enable line reads as a dead radio.
+	// EnPin is openhop's singular spelling of a single enable line.
 	EnPin    *int `json:"en_pin"`
 	TxLedPin *int `json:"txled_pin"`
 	RxLedPin *int `json:"rxled_pin"`
@@ -100,9 +94,7 @@ func mustLoadBoards() map[string]Board {
 	return out
 }
 
-// LoadBoardOverrides merges BoardsFile over the shipped list. A missing file is
-// fine; a malformed one is an error, since ignoring it would leave the operator
-// picking from a list without the board they just added.
+// LoadBoardOverrides merges BoardsFile over the shipped list; a missing file is fine.
 func LoadBoardOverrides() error {
 	raw, err := os.ReadFile(BoardsFile)
 	if err != nil {
@@ -144,8 +136,6 @@ func parseBoards(raw []byte) (map[string]Board, error) {
 	return out, nil
 }
 
-// board converts one file entry, rejecting anything it cannot express: a board
-// on the wrong pins is the failure mode with no symptom.
 func (bf boardFile) board(name string) (Board, error) {
 	switch bf.Verified {
 	case "hardware", "community":
@@ -208,8 +198,7 @@ func (bf boardFile) board(name string) (Board, error) {
 			RxBoostedGain:     bf.RxBoostedGain,
 		},
 	}
-	// Modules with an integrated switch need neither line, but an imported board
-	// list does not say which kind it is, and a terminated switch looks healthy.
+	// DIO2 and a TX-enable pin are the two RF-switch mechanisms; an integrated switch needs neither, and boards.json cannot say so.
 	if !b.opts.UseDIO2AsRfSwitch && b.opts.TxEnPin == "" {
 		b.Unsupported = "no RF switch control configured: set use_dio2_rf or txen_pin once confirmed against the board's schematic"
 	}
@@ -222,8 +211,7 @@ func (bf boardFile) board(name string) (Board, error) {
 	return b, nil
 }
 
-// tcxoSetting maps the DIO3 TCXO voltage onto the driver's constant. A wrong one
-// comes up clean and then never hears anything.
+// tcxoSetting maps the DIO3 TCXO voltage onto the driver's constant.
 func tcxoSetting(bf boardFile) (voltage byte, delay time.Duration, err error) {
 	if bf.UseDIO3TCXO == nil || !*bf.UseDIO3TCXO {
 		return 0, 0, nil
