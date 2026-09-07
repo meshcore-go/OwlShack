@@ -43,9 +43,27 @@ func TestSx12xxStats_KeepsCRCAndDriverErrorsSeparate(t *testing.T) {
 	if ls.HwDecodeErrors != 3 {
 		t.Errorf("HwDecodeErrors = %d, want 3 (PacketsRecvErrors)", ls.HwDecodeErrors)
 	}
+	// HandlerSlow is absent here because it comes off the modem, not RadioStats.
 	if ls.RxMetaTimeouts != 0 || ls.RxMetaMisattributed != 0 || ls.HwErrors != 0 ||
-		ls.TxOutcomeLost != 0 || ls.InboundDroppedOldest != 0 || ls.HandlerSlow != 0 {
+		ls.TxOutcomeLost != 0 || ls.InboundDroppedOldest != 0 {
 		t.Errorf("a KISS-only field was populated on the SPI path: %+v", ls)
+	}
+}
+
+// Three modem counters land in three similar-looking fields, so a cross-wire reads as a plausible number.
+func TestModemLinkStats_MapsEachCounterToItsOwnField(t *testing.T) {
+	ls := modemLinkStats(LinkStats{InboundDroppedNew: 5}, 11, 2, 3)
+	if ls.DriverErrors == nil || *ls.DriverErrors != 11 {
+		t.Errorf("DriverErrors = %v, want 11", ls.DriverErrors)
+	}
+	if ls.RecvRecoveries == nil || *ls.RecvRecoveries != 2 {
+		t.Errorf("RecvRecoveries = %v, want 2", ls.RecvRecoveries)
+	}
+	if ls.HandlerSlow != 3 {
+		t.Errorf("HandlerSlow = %d, want 3; the driver counts it once setupSPI sets a threshold", ls.HandlerSlow)
+	}
+	if ls.InboundDroppedNew != 5 {
+		t.Errorf("InboundDroppedNew = %d, want the radio counters left intact", ls.InboundDroppedNew)
 	}
 }
 
