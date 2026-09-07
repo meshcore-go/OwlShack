@@ -14,9 +14,7 @@ import (
 )
 
 func init() {
-	// Go's mime table has no ".webmanifest" entry, so the embedded file server
-	// would otherwise sniff the PWA manifest as text/plain. Serve it as the
-	// spec type so browsers don't warn.
+	// Go's mime table has no ".webmanifest" entry, so the manifest would otherwise be sniffed as text/plain.
 	_ = mime.AddExtensionType(".webmanifest", "application/manifest+json")
 }
 
@@ -56,14 +54,11 @@ type RepeaterOps struct {
 	TelemetryReq func(pubkeyHex string) (any, error)
 	// RoomStatusReq is StatusReq for a room server (ServerStats trailer).
 	RoomStatusReq func(pubkeyHex string) (any, error)
-	// RoomKeepAlive sends REQ_TYPE_KEEP_ALIVE (direct only) so the room resumes
-	// pushing posts newer than since (0 = its stored cursor).
+	// RoomKeepAlive sends REQ_TYPE_KEEP_ALIVE (direct only); since 0 means the room's stored cursor.
 	RoomKeepAlive func(pubkeyHex string, since uint32) error
-	// SeriesReq is the sensor min/max/avg history (GET_AVG_MIN_MAX); bounds are
-	// seconds before now, start being the older edge.
+	// SeriesReq is the sensor min/max/avg history (GET_AVG_MIN_MAX); bounds are seconds before now, start older.
 	SeriesReq func(pubkeyHex string, startSecsAgo, endSecsAgo uint32) (any, error)
-	// ContactTelemetryReq requests telemetry from a non-repeater contact
-	// (no login session — uses the ECDH secret with the contact).
+	// ContactTelemetryReq uses the ECDH secret with the contact, not a login session.
 	ContactTelemetryReq func(pubkeyHex string) (any, error)
 	AccessList          func(pubkeyHex string) (any, error)
 	SetPerm             func(pubkeyHex, targetPubkeyHex string, perms uint8) error
@@ -136,8 +131,7 @@ func (s *Server) routes() {
 	s.mux.HandleFunc("POST /api/config/triggers", s.handleSaveTrigger)
 	s.mux.HandleFunc("PUT /api/config/triggers/{id}", s.handleSaveTrigger)
 	s.mux.HandleFunc("DELETE /api/config/triggers/{id}", s.handleDeleteTrigger)
-	// Repeater node config is edited per-section (no whole-config bulk PUT):
-	// create the singleton, then patch one section or one region at a time.
+	// Repeater node config is edited per-section (no whole-config bulk PUT).
 	s.mux.HandleFunc("POST /api/config/repeater", s.handleCreateRepeater)
 	s.mux.HandleFunc("DELETE /api/config/repeater", s.handleDeleteRepeater)
 	s.mux.HandleFunc("PUT /api/config/repeater/node", s.handleUpdateRepeaterNode)
@@ -224,8 +218,7 @@ func (s *Server) Hub() *Hub {
 	return s.hub
 }
 
-// SetBackend installs (or swaps, on config reload / modem reconnect) the
-// domain backend. Safe to call while the server is serving requests.
+// SetBackend installs or swaps the domain backend while the server is serving requests.
 func (s *Server) SetBackend(b Backend) {
 	s.mu.Lock()
 	s.backend = b
@@ -238,9 +231,7 @@ func (s *Server) backendRef() Backend {
 	return s.backend
 }
 
-// SetPoller installs the node poller (the monitor service). Unlike the backend
-// it isn't swapped on reload — the service is long-lived — but it's set after
-// the HTTP server starts, so access is guarded all the same.
+// SetPoller installs the node poller after the HTTP server has already started.
 func (s *Server) SetPoller(p NodePoller) {
 	s.mu.Lock()
 	s.poller = p
@@ -253,9 +244,7 @@ func (s *Server) pollerRef() NodePoller {
 	return s.poller
 }
 
-// SetSignalTester installs the signal-test runner. Like SetPoller, it's a
-// long-lived service set once at startup (not swapped on reload), guarded by
-// the same lock for consistency with concurrent request handling.
+// SetSignalTester installs the signal-test runner after the HTTP server has already started.
 func (s *Server) SetSignalTester(t SignalTester) {
 	s.mu.Lock()
 	s.sigTester = t
@@ -268,9 +257,7 @@ func (s *Server) signalTesterRef() SignalTester {
 	return s.sigTester
 }
 
-// The accessors below adapt the backend into the small func types the handlers
-// consume. Each returns nil when no backend is wired yet, which the handlers
-// guard against (returning 503/404).
+// The accessors below return nil when no backend is wired yet; handlers turn that into 503/404.
 
 func (s *Server) companionProvider() CompanionProvider {
 	if b := s.backendRef(); b != nil {
@@ -286,8 +273,7 @@ func (s *Server) ChannelLookup() ChannelLookup {
 	return nil
 }
 
-// peerAdder returns the in-memory peer registration op, or nil when no backend
-// is wired (the contact row still persists; hydration picks it up on restart).
+// peerAdder is nil without a backend; the contact row still persists and hydration picks it up on restart.
 func (s *Server) peerAdder() func([]byte, string, string) {
 	if b := s.backendRef(); b != nil {
 		return b.AddPeer
@@ -295,8 +281,7 @@ func (s *Server) peerAdder() func([]byte, string, string) {
 	return nil
 }
 
-// peerRemover returns the in-memory peer eviction op, or nil when no backend is
-// wired (the DB delete still runs; in-memory cleanup is best-effort).
+// peerRemover is nil without a backend; the DB delete still runs, in-memory cleanup is best-effort.
 func (s *Server) peerRemover() func([][]byte) {
 	if b := s.backendRef(); b != nil {
 		return b.RemovePeers
@@ -349,16 +334,12 @@ func (s *Server) advertSenderLookup() AdvertSenderLookup {
 func (s *Server) spaHandler() http.Handler {
 	fileServer := http.FileServerFS(s.assets)
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		// Unmatched API paths must 404, not fall through to the SPA index — a
-		// retired endpoint should read as "gone", not return HTML.
+		// Unmatched API paths must 404 rather than fall through to the SPA index.
 		if strings.HasPrefix(r.URL.Path, "/api/") {
 			writeError(w, http.StatusNotFound, "not found")
 			return
 		}
-		// /assets/* are content-hashed => immutable. Everything else (index,
-		// manifest, sw.js, icons) is no-cache so the browser's PWA update check
-		// always revalidates: embed.FS files have no Last-Modified/ETag, so
-		// otherwise a changed manifest can sit stale in its heuristic cache.
+		// embed.FS files carry no Last-Modified/ETag, so anything but the hashed assets must be no-cache.
 		if strings.HasPrefix(r.URL.Path, "/assets/") {
 			w.Header().Set("Cache-Control", "public, max-age=31536000, immutable")
 		} else {
@@ -385,8 +366,7 @@ func writeError(w http.ResponseWriter, status int, msg string) {
 	writeJSON(w, status, map[string]string{"error": msg})
 }
 
-// serverError logs a technical/internal failure (DB, encoding, etc.) and returns
-// an opaque 500 — the underlying error must never leak to API clients.
+// serverError returns an opaque 500; the underlying error must never leak to API clients.
 func (s *Server) serverError(w http.ResponseWriter, msg string, err error) {
 	s.log.Error(msg, "error", err)
 	writeError(w, http.StatusInternalServerError, msg)

@@ -6,8 +6,7 @@ import (
 	"fmt"
 )
 
-// Broker is one MQTT broker target. DisallowedPacketTypes is a leaf string list
-// (newline-encoded TEXT). Password is a secret (redacted on the wire).
+// Broker is one MQTT broker target; DisallowedPacketTypes is newline-encoded TEXT and Password is redacted on the wire.
 type Broker struct {
 	ID                    int64
 	Name                  string

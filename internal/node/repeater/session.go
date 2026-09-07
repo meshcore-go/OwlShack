@@ -16,11 +16,7 @@ import (
 	"github.com/meshcore-go/OwlShack/internal/store"
 )
 
-// Admin-over-mesh: the repeater answers login / status / CLI requests from
-// clients (the official app, other companions, this bot's own repeater client).
-// This is the server side of internal/client/repeater — the wire formats here
-// mirror what that client builds/parses (see the firmware simple_repeater
-// MyMesh.cpp handleLoginReq / handleRequest).
+// Admin-over-mesh: the server side of internal/client/repeater, wire formats mirroring firmware MyMesh.cpp handleLoginReq / handleRequest.
 
 // Permission levels (firmware PERM_ACL_* — lower 2 bits are the role).
 const (
@@ -34,21 +30,17 @@ const (
 const (
 	respServerLoginOK = 0x00 // login response code
 	firmwareVerLevel  = 2    // FIRMWARE_VER_LEVEL advertised in the login reply
-	// serverReplyDelay mirrors the firmware SERVER_RESPONSE_DELAY: hold the reply
-	// briefly so the (half-duplex) requester has switched back to RX.
+	// Firmware SERVER_RESPONSE_DELAY: hold the reply until the half-duplex requester is back in RX.
 	serverReplyDelay = 300 * time.Millisecond
 )
 
-// clientRoute is a learned return path to an admin client (the path hashes from
-// its flood login, and their per-hop byte width).
+// clientRoute is a learned return path to an admin client plus its per-hop hash width.
 type clientRoute struct {
 	path     []byte
 	hashSize uint8
 }
 
-// handleAnonReq answers an ANON_REQ (login). Fires for every ANON_REQ we hear;
-// self-filters by destination hash + MAC (a request for another node won't
-// decrypt with our shared secret).
+// handleAnonReq fires for every ANON_REQ we hear and self-filters by destination hash plus MAC.
 func (r *Repeater) handleAnonReq(pkt *meshcore.Packet) {
 	anon, err := meshcore.AnonReqFromBytes(pkt.Payload)
 	if err != nil {
@@ -59,8 +51,7 @@ func (r *Repeater) handleAnonReq(pkt *meshcore.Packet) {
 		return // not addressed to us
 	}
 
-	// The client puts its STATIC pubkey in EphemeralPubKey (so the repeater's
-	// ACL recognises it across sessions); ECDH with it yields the session key.
+	// The client puts its STATIC pubkey in EphemeralPubKey so the ACL recognises it across sessions.
 	clientPub := anon.EphemeralPubKey
 	secret, err := r.node.SharedSecret(meshcore.NewIdentity(clientPub))
 	if err != nil {
@@ -72,8 +63,7 @@ func (r *Repeater) handleAnonReq(pkt *meshcore.Packet) {
 	}
 	pkt.MarkDoNotRetransmit()
 
-	// [timestamp:4][password:N] — but a leading control byte (0 < b < ' ') marks
-	// an unauthenticated sub-request (regions/owner/clock).
+	// [timestamp:4][password:N], except that a leading control byte (0 < b < ' ') marks an unauthenticated sub-request.
 	ts := binary.LittleEndian.Uint32(plain[:4])
 	if plain[4] != 0 && plain[4] < ' ' {
 		r.handleAnonSubReq(pkt, clientPub, secret, ts, plain[4], plain[5:])
@@ -103,20 +93,14 @@ func (r *Repeater) handleAnonReq(pkt *meshcore.Packet) {
 	}
 }
 
-// Anon ANON_REQ sub-request types (firmware ANON_REQ_TYPE_*): unauthenticated,
-// direct-routed only, answered ahead of any login.
+// Anon sub-request types (firmware ANON_REQ_TYPE_*): unauthenticated, direct-routed only, answered ahead of any login.
 const (
 	anonReqTypeRegions = 0x01
 	anonReqTypeOwner   = 0x02
 	anonReqTypeBasic   = 0x03 // our clock + disabled flag
 )
 
-// handleAnonSubReq answers the anon sub-requests (firmware handleAnon{Regions,
-// Owner,Clock}Req). Reply plaintext = [sender_ts:4][now:4][body] — the sender's
-// timestamp is reflected as the tag and our clock rides along for easy clock
-// sync. Sent as an encrypted RESPONSE datagram direct along the caller-supplied
-// return path (request body = [pathLenByte][path], pathLenByte's upper 2 bits
-// being hashSize-1 and lower 6 the hop count).
+// handleAnonSubReq replies [sender_ts:4][now:4][body] along the caller-supplied return path (request body [pathLenByte][path]).
 func (r *Repeater) handleAnonSubReq(pkt *meshcore.Packet, clientPub [32]byte, secret []byte, ts uint32, subType byte, params []byte) {
 	if pkt.IsRouteFlood() || !r.anonLimiter.allow() {
 		return // firmware answers these on direct requests only
@@ -171,18 +155,12 @@ func (r *Repeater) handleAnonSubReq(pkt *meshcore.Packet, clientPub [32]byte, se
 	}
 }
 
-// regionsExport renders the region names for the anon REGIONS sub-request,
-// mirroring RegionMap::exportNamesTo(mask=DENY_FLOOD): flood-allowed names,
-// comma-separated, "*" first when unscoped flood is allowed.
+// regionsExport mirrors RegionMap::exportNamesTo(mask=DENY_FLOOD): flood-allowed names, "*" first when unscoped flood is allowed.
 func (r *Repeater) regionsExport() string {
 	return regionNames(r.cfgRegions(), false)
 }
 
-// handlePath learns/refreshes an ACL client's return route from an explicit PATH
-// packet (firmware onPeerPathRecv): destination hash = us, source hash picks the
-// ACL client via MAC verification, decrypted body =
-// [pathLenByte][path][extraType][extra...] where the embedded path leads TO that
-// client. No reciprocal path is sent (matching the firmware).
+// handlePath learns a client's return route from a PATH packet body [pathLenByte][path][extraType][extra...]; no reciprocal path is sent, matching the firmware.
 func (r *Repeater) handlePath(pkt *meshcore.Packet) {
 	p, err := meshcore.PathFromBytes(pkt.Payload)
 	if err != nil || p.Destination != r.node.Identity().PublicKey()[0] {
@@ -206,15 +184,11 @@ func (r *Repeater) handlePath(pkt *meshcore.Packet) {
 	r.learnRoute(clientPub, pp.Path, pp.PathHashSize())
 }
 
-// authLogin decides a client's permission from the login password, mirroring
-// the firmware: a blank password re-authenticates an existing ACL client
-// (keeping its role); otherwise the password must match the admin or guest
-// password. Returns the granted permission and whether login is allowed.
+// authLogin grants a permission from the login password; a blank password reauths an existing client, keeping its role.
 func (r *Repeater) authLogin(clientPub [32]byte, password string, ts uint32) (int, bool) {
 	pubHex := hex.EncodeToString(clientPub[:])
 	existing := r.aclGet(pubHex)
 
-	// Blank password: reauth a known client, keeping its stored role.
 	if password == "" && existing != nil {
 		return existing.Permissions, true
 	}
@@ -243,11 +217,7 @@ func (r *Repeater) authLogin(clientPub [32]byte, password string, ts uint32) (in
 	return perms, true
 }
 
-// aclClient looks up the ACL entry whose pubkey-prefix byte matches src and
-// whose shared secret verifies the packet's MAC, returning it plus the derived
-// secret. It's how an authenticated REQ/TXT is tied back to a logged-in client.
-// Reads the in-memory cache (this runs on the packet path); ECDH is done
-// outside the lock since it's comparatively slow.
+// aclClient ties a REQ/TXT to a logged-in client by prefix byte plus MAC; ECDH runs outside the lock because it is slow.
 func (r *Repeater) aclClient(src byte, verify func(secret []byte) bool) (*store.RepeaterACLEntry, []byte, bool) {
 	r.acl.RLock()
 	candidates := make([]store.RepeaterACLEntry, 0, len(r.acl.m))
@@ -275,9 +245,7 @@ func (r *Repeater) aclClient(src byte, verify func(secret []byte) bool) (*store.
 	return nil, nil, false
 }
 
-// touchClient advances a client's replay timestamp + last-seen. It mutates the
-// cached entry in place: aclClient/aclGet hand out copies, and writing one back
-// would revert a concurrent setperm.
+// touchClient mutates the cached entry in place; writing back a copy from aclClient/aclGet would revert a concurrent setperm.
 func (r *Repeater) touchClient(e *store.RepeaterACLEntry, ts uint32) {
 	r.acl.Lock()
 	cur := r.acl.m[e.PubKey]
@@ -300,9 +268,7 @@ func (r *Repeater) touchClient(e *store.RepeaterACLEntry, ts uint32) {
 	})
 }
 
-// aclLoad seeds the in-memory ACL cache from the DB (called at construction,
-// before handlers register). The cache is the read source for the packet path;
-// writes go through aclPut/aclDelete (write-through to the DB).
+// aclLoad seeds the cache from the DB at construction, before handlers register.
 func (r *Repeater) aclLoad() {
 	entries, err := r.store.RepeaterACL.List(context.Background())
 	if err != nil {
@@ -359,8 +325,7 @@ func (r *Repeater) aclDelete(pubHex string) {
 	})
 }
 
-// aclMatchPrefix resolves a pubkey prefix to the full key of a cached client,
-// mirroring the firmware's ClientACL::getClient byte-prefix compare.
+// aclMatchPrefix mirrors the firmware ClientACL::getClient byte-prefix compare.
 func (r *Repeater) aclMatchPrefix(prefix string) (string, bool) {
 	r.acl.RLock()
 	defer r.acl.RUnlock()
@@ -375,8 +340,7 @@ func (r *Repeater) aclMatchPrefix(prefix string) (string, bool) {
 	return "", false
 }
 
-// ACLEntry is an admin-client ACL row for the API, with the pubkey resolved to a
-// display name where known.
+// ACLEntry is an admin-client ACL row for the API.
 type ACLEntry struct {
 	PubKey     string `json:"pubkey"`
 	Name       string `json:"name"`       // resolved from peers/companions; "" if unknown
@@ -384,8 +348,7 @@ type ACLEntry struct {
 	LastSeen   int64  `json:"lastSeen"`   // unix seconds
 }
 
-// ACLList returns the current admin clients, most-recently-seen first, for the
-// Repeater page's access-control view.
+// ACLList returns the current admin clients, most-recently-seen first.
 func (r *Repeater) ACLList() []ACLEntry {
 	r.acl.RLock()
 	rows := make([]store.RepeaterACLEntry, 0, len(r.acl.m))
@@ -407,15 +370,12 @@ func (r *Repeater) ACLList() []ACLEntry {
 	return out
 }
 
-// RevokeACL removes a client's access (drops it from the cache + DB). Mirrors an
-// admin `setperm <pubkey> 0`.
+// RevokeACL mirrors an admin `setperm <pubkey> 0`.
 func (r *Repeater) RevokeACL(pubHex string) error {
 	return r.SetACL(pubHex, 0)
 }
 
-// resolveName maps a full pubkey hex to a display name via discovered_peers,
-// falling back to the companions table (a companion's own pubkey isn't in its
-// peers list). Returns "" when unknown.
+// resolveName falls back to the companions table because a companion's own pubkey isn't in its peers list; "" when unknown.
 func (r *Repeater) resolveName(pubHex string) string {
 	pub, err := hex.DecodeString(pubHex)
 	if err != nil {
@@ -434,16 +394,7 @@ func (r *Repeater) resolveName(pubHex string) string {
 	return ""
 }
 
-// sendServerReply routes an encrypted reply (a login response, or a REQ
-// response) back to the client, mirroring the firmware:
-//   - flood request  → PATH-return (teaches the client our route) sent flooded.
-//     The client's accumulated path is also cached so later direct replies
-//     can route straight back.
-//   - direct request → RESPONSE datagram sent direct along the cached route, or
-//     flooded when we have no route yet (firmware's out_path==UNKNOWN case).
-//
-// respPlaintext is the decrypted reply body (login: 13 bytes; REQ: the reflected
-// [timestamp:4] tag followed by the response data).
+// sendServerReply answers a flood request with a flooded PATH-return and a direct one with a RESPONSE datagram, flooding when no route is cached.
 func (r *Repeater) sendServerReply(reqPkt *meshcore.Packet, clientPub [32]byte, secret, respPlaintext []byte) error {
 	me := r.node.Identity().PublicKey()
 
@@ -490,12 +441,7 @@ func (r *Repeater) sendServerReply(reqPkt *meshcore.Packet, clientPub [32]byte, 
 	return r.sendPkt(out, node.PrioritySend, serverReplyDelay)
 }
 
-// sendFloodScoped ports MyMesh::sendFloodReply + mesh::chooseReplyScope: the
-// flooded reply reuses the request's path-hash width and its scope when the
-// request arrived inside a known non-wildcard region (code 1; code 2 stays 0 —
-// the firmware's "REVISIT" home-region slot); an unscoped flood request gets an
-// unscoped reply; anything else (direct request, unresolved code) falls back to
-// the default scope, or unscoped when none is set.
+// sendFloodScoped ports MyMesh::sendFloodReply + chooseReplyScope: reuse the request's scope, else the default, else unscoped.
 func (r *Repeater) sendFloodScoped(out, reqPkt *meshcore.Packet, priority uint8, delay time.Duration) error {
 	var scope *meshcore.Region
 	switch rg := r.node.Regions().FindFloodMatch(reqPkt); {
@@ -512,8 +458,7 @@ func (r *Repeater) sendFloodScoped(out, reqPkt *meshcore.Packet, priority uint8,
 	return r.sendPkt(out, priority, delay)
 }
 
-// learnFloodRoute caches the send-order return path implied by a client's flood
-// request (its accumulated path, reversed).
+// learnFloodRoute caches a flood request's accumulated path, reversed into send order.
 func (r *Repeater) learnFloodRoute(clientPub [32]byte, pkt *meshcore.Packet) {
 	r.learnRoute(clientPub, reverseHops(pkt.Path, pkt.PathHashSize()), pkt.PathHashSize())
 }
@@ -526,8 +471,7 @@ func (r *Repeater) learnRoute(clientPub [32]byte, path []byte, hashSize uint8) {
 	r.routes.Unlock()
 }
 
-// replyRoute picks the send route for a direct reply to clientPub: direct along
-// the cached path when known, otherwise flood (always reaches the client).
+// replyRoute goes direct along a cached path, otherwise floods so the reply still reaches the client.
 func (r *Repeater) replyRoute(clientPub [32]byte) (routeType byte, pathLen uint8, path []byte) {
 	r.routes.Lock()
 	route, ok := r.routes.m[clientPub]
@@ -545,8 +489,7 @@ func (r *Repeater) replyRoute(clientPub [32]byte) (routeType byte, pathLen uint8
 	return meshcore.RouteTypeDirect, uint8(hashSize-1)<<6 | uint8(len(route.path)/hashSize), route.path
 }
 
-// encPacket encrypts plaintext with the session secret, splits the 2-byte MAC
-// prefix from the ciphertext, and hands both to build the wire packet payload.
+// encPacket splits the 2-byte MAC prefix off the ciphertext and hands both to build.
 func encPacket(secret []byte, build func(mac [2]byte, enc []byte) ([]byte, error), plaintext []byte) ([]byte, error) {
 	encrypted, err := meshcore.EncryptThenMAC(secret, plaintext)
 	if err != nil {

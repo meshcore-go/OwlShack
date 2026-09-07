@@ -768,8 +768,7 @@ function SettingsTab({ rep, reload }: { rep: ConfigRepeater; reload: () => void 
     return Number.isFinite(n) ? n : null;
   };
 
-  // Advert intervals are stored in seconds but entered in the firmware's CLI
-  // units, so `get advert.interval` reports back what was typed here.
+  // Advert intervals are stored in seconds but entered in the firmware's CLI units.
   const toSecs = (s: string, perUnit: number): number | null => {
     const n = num(s);
     return n === null ? null : n * perUnit;

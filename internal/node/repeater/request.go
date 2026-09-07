@@ -22,14 +22,11 @@ const (
 
 	telemChannelSelf = 1   // firmware TELEM_CHANNEL_SELF
 	maxPacketPayload = 184 // firmware MAX_PACKET_PAYLOAD (sizeof reply_data)
-	// neighboursMaxBody caps the neighbour entries in one reply, matching the
-	// firmware's results_buffer so the response still fits a packet.
+	// Matches the firmware's results_buffer so a neighbours reply still fits one packet.
 	neighboursMaxBody = 130
 )
 
-// handleReq answers a REQ (status / neighbours / access-list / owner-info) from
-// a logged-in client. Fires for every REQ we hear; self-filters by destination
-// hash + MAC-against-ACL.
+// handleReq fires for every REQ we hear and self-filters by destination hash plus MAC-against-ACL.
 func (r *Repeater) handleReq(pkt *meshcore.Packet) {
 	req, err := meshcore.RequestFromBytes(pkt.Payload)
 	if err != nil {
@@ -59,8 +56,7 @@ func (r *Repeater) handleReq(pkt *meshcore.Packet) {
 		return
 	}
 
-	// Response plaintext: [reflected tag:4][body]. The client matches the reply
-	// to its pending request by this echoed tag.
+	// Response plaintext is [reflected tag:4][body]; the client matches its pending request by the echoed tag.
 	reply := make([]byte, 4+len(body))
 	binary.LittleEndian.PutUint32(reply[:4], tag)
 	copy(reply[4:], body)
@@ -76,8 +72,7 @@ func (r *Repeater) handleReq(pkt *meshcore.Packet) {
 	}
 }
 
-// buildReqResponse builds the response body for a request type (everything after
-// the reflected timestamp tag). Returns false to answer nothing.
+// buildReqResponse builds everything after the reflected timestamp tag; false answers nothing.
 func (r *Repeater) buildReqResponse(client *store.RepeaterACLEntry, reqType byte, params []byte) ([]byte, bool) {
 	switch reqType {
 	case reqTypeGetStatus:
@@ -98,10 +93,7 @@ func (r *Repeater) buildReqResponse(client *store.RepeaterACLEntry, reqType byte
 		}
 		return r.accessListBody(), true
 	case reqTypeGetTelemetryData:
-		// Base telemetry on the self channel (ch1): battery voltage then MCU
-		// temperature, both read from the KISS modem board. The firmware adds
-		// the temperature only when the board can measure one (its isnan
-		// check), so a modem answering HW_ERR_NO_CALLBACK omits it too.
+		// The firmware omits temperature when the board can't measure one (its isnan check), so we do too.
 		enc := meshcore.NewLPPEncoder()
 		enc.AddVoltage(telemChannelSelf, float64(r.batteryMV.Load())/1000)
 		if r.haveMCUTemp.Load() {
@@ -113,9 +105,7 @@ func (r *Repeater) buildReqResponse(client *store.RepeaterACLEntry, reqType byte
 	}
 }
 
-// statusBody builds the RepeaterStats blob (firmware layout, little-endian).
-// Emits the full 56-byte form (incl. rx_air_time + recv_errors, which the
-// client parses when present). Counters we don't track are left zero.
+// statusBody builds the full 56-byte RepeaterStats blob (firmware layout, little-endian); untracked counters stay zero.
 func (r *Repeater) statusBody() []byte {
 	rc := r.routeCounters()
 	r.mu.Lock()
@@ -152,9 +142,7 @@ func (r *Repeater) statusBody() []byte {
 	return b
 }
 
-// neighboursBody builds the neighbours response: [total:2][results:2] then
-// [prefix:prefixLen][secsAgo:4][snr:i8] entries, ordered per the request's
-// order_by selector (newest first by default).
+// neighboursBody builds [total:2][results:2] then [prefix:prefixLen][secsAgo:4][snr:i8] entries.
 func (r *Repeater) neighboursBody(params []byte) []byte {
 	// params: [version:1][count:1][offset:2][order_by:1][prefix_len:1][rand:4]
 	count := 255
@@ -198,9 +186,7 @@ func (r *Repeater) neighboursBody(params []byte) []byte {
 	return body
 }
 
-// sortNeighbours orders a neighbour list per the request's order_by selector
-// (firmware REQ_TYPE_GET_NEIGHBOURS): 0=newest first (the snapshot's native
-// order), 1=oldest first, 2=strongest first, 3=weakest first.
+// sortNeighbours applies the firmware order_by selector: 0=newest (native order), 1=oldest, 2=strongest, 3=weakest.
 func sortNeighbours(list []neighbor, orderBy byte) {
 	switch orderBy {
 	case 1:
@@ -212,9 +198,7 @@ func sortNeighbours(list []neighbor, orderBy byte) {
 	}
 }
 
-// accessListBody builds the ACL response: [pubkey-prefix:6][permissions:1] per
-// non-guest client (firmware returns 6-byte prefixes only), capped like the
-// firmware's `ofs + 7 <= sizeof(reply_data) - 4` loop bound.
+// accessListBody builds [pubkey-prefix:6][permissions:1] per non-guest client, capped like the firmware's `ofs + 7 <= sizeof(reply_data) - 4`.
 func (r *Repeater) accessListBody() []byte {
 	r.acl.RLock()
 	keys := make([]string, 0, len(r.acl.m))

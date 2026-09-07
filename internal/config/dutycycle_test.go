@@ -8,10 +8,7 @@ import (
 	"github.com/meshcore-go/meshcore-go/node"
 )
 
-// The conversion must match the firmware's, which is the authority here:
-// CommonCLI.cpp `set dutycycle` does airtime_factor = (100/dc) - 1, and
-// `get dutycycle` reports 100/(af+1). A SMALLER factor is a HIGHER duty cycle,
-// which is the trap this indirection exists to hide.
+// CommonCLI.cpp `set dutycycle` does airtime_factor = (100/dc) - 1, so a SMALLER factor is a HIGHER duty cycle.
 func TestAirtimeFactorMatchesFirmwareConversion(t *testing.T) {
 	for _, tc := range []struct {
 		pct        float64
@@ -69,11 +66,7 @@ func TestDutyCycleValidation(t *testing.T) {
 	}
 }
 
-// The airtime factor lives on the RadioMux, which is only rebuilt when the
-// modem reconnects. A change must therefore count as a modem change, or it
-// persists and silently never applies — but only a change in the EFFECTIVE
-// budget should churn the radio, since a reconnect drops the serial link and
-// every node's sessions.
+// The airtime factor lives on the RadioMux, rebuilt only on reconnect: a change must count as a modem change, but only a change in the EFFECTIVE budget.
 func TestDutyCycleChangeForcesModemReconnect(t *testing.T) {
 	pct := func(v float64) *float64 { return &v }
 
@@ -87,14 +80,12 @@ func TestDutyCycleChangeForcesModemReconnect(t *testing.T) {
 		{"unset -> 10%", nil, pct(10), true},
 		{"1% -> 0.1%", pct(1), pct(0.1), true},
 		{"unchanged", pct(50), pct(50), false},
-		// Unset resolves to 50%, so these are the same budget. Comparing the
-		// stored percentage instead of the resolved factor gets them wrong.
+		// Unset resolves to 50%, so these are the same budget.
 		{"unset -> explicit 50%", nil, pct(50), false},
 		{"explicit 50% -> unset", pct(50), nil, false},
 		{"both unset", nil, nil, false},
 	} {
-		// If DefaultAirtimeFactor ever moves off 1.0, the two equivalence cases
-		// below become precision-dependent — see the note in load.go.
+		// If DefaultAirtimeFactor moves off 1.0 these equivalence cases turn precision-dependent — see the note in load.go.
 		got := ModemSettingsChanged(&Config{DutyCycle: tc.from}, &Config{DutyCycle: tc.to})
 		if got != tc.want {
 			t.Errorf("%s: reconnect = %v, want %v", tc.name, got, tc.want)
@@ -102,9 +93,7 @@ func TestDutyCycleChangeForcesModemReconnect(t *testing.T) {
 	}
 }
 
-// A dropped optional would silently revert the budget to 50%, so pin the
-// round trip through every format the loader accepts, in both the set and
-// unset cases.
+// A dropped optional would silently revert the budget to 50%, so pin the round trip through every format the loader accepts.
 func TestDutyCycleSurvivesRoundTrip(t *testing.T) {
 	for _, ext := range []string{".json", ".yaml", ".toml"} {
 		for _, want := range []*float64{nil, ptrFloat(0.1), ptrFloat(50), ptrFloat(100)} {

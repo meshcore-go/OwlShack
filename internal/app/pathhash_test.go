@@ -8,9 +8,7 @@ import (
 
 func ptr(v int) *int { return &v }
 
-// TestPathHashSizeInheritance: the Settings default flows into every node that
-// doesn't set its own, and is resolved into the effective block so the reload
-// diff sees a global change (and restarts only the inheriting nodes).
+// The Settings default must reach the effective block, or the reload diff never sees a global change.
 func TestPathHashSizeInheritance(t *testing.T) {
 	cfg := &config.Config{
 		PathHashSize: ptr(2),
@@ -46,8 +44,7 @@ func TestPathHashSizeInheritance(t *testing.T) {
 		t.Errorf("default repeater = %d, want %d", got, config.DefaultPathHashSize)
 	}
 
-	// Resolving must not mutate the source config — the stored value stays nil
-	// so the node keeps following the global.
+	// Resolving must not mutate the source: a nil stored value is what keeps the node following the global.
 	if cfg.Companions[0].PathHashSize != nil {
 		t.Error("effectiveCompanionConfigs mutated the source companion")
 	}

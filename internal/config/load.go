@@ -20,9 +20,7 @@ var defaultConfigNames = []string{
 	"config.json",
 }
 
-// Load reads the config from path, or searches the working directory for a
-// default-named config file when path is empty. It returns the parsed config
-// and the resolved file path.
+// Load reads the config at path, or the first default-named file in the working directory when path is empty.
 func Load(path string) (*Config, string, error) {
 	if path == "" {
 		return loadFromCwd()
@@ -47,8 +45,7 @@ func loadFromCwd() (*Config, string, error) {
 	return nil, "", fmt.Errorf("no config file found in %s (tried %s)", cwd, strings.Join(defaultConfigNames, ", "))
 }
 
-// FindDefaultConfig returns the path of a default-named config file in the
-// working directory, or "" when none exists.
+// FindDefaultConfig returns the path of a default-named config file in the working directory, or "".
 func FindDefaultConfig() string {
 	for _, name := range defaultConfigNames {
 		if _, err := os.Stat(name); err == nil {
@@ -58,8 +55,7 @@ func FindDefaultConfig() string {
 	return ""
 }
 
-// LoadFromPath reads and parses the config at path, selecting the decoder from
-// the file extension.
+// LoadFromPath parses the config at path, selecting the decoder from its extension.
 func LoadFromPath(path string) (*Config, string, error) {
 	data, err := os.ReadFile(path)
 	if err != nil {
@@ -97,8 +93,7 @@ func Marshal(path string, cfg *Config) ([]byte, error) {
 	}
 }
 
-// ParseConnection splits a connection string of the form "serial://<addr>" or
-// "tcp://<addr>" into its scheme and address.
+// ParseConnection splits "serial://<addr>" or "tcp://<addr>" into scheme and address.
 func ParseConnection(conn string) (scheme, addr string, ok bool) {
 	for _, prefix := range []string{"serial://", "tcp://"} {
 		if strings.HasPrefix(conn, prefix) {
@@ -108,8 +103,7 @@ func ParseConnection(conn string) (scheme, addr string, ok bool) {
 	return "", "", false
 }
 
-// Validate checks that the config's fields are within acceptable ranges. Nil
-// pointer fields are treated as "use default" and skipped.
+// Validate checks field ranges; nil pointers mean "use default" and are skipped.
 func (c *Config) Validate() error {
 	if c.Connection != nil {
 		_, _, ok := ParseConnection(*c.Connection)
@@ -146,12 +140,9 @@ func (c *Config) Validate() error {
 		return fmt.Errorf("pathHashSize must be %d-%d bytes", MinPathHashSize, MaxPathHashSize)
 	}
 
-	// Zero companions is a valid state: a fresh install boots quietly until the
-	// first-run wizard creates one, and an observer-only setup may keep none.
+	// Zero companions is valid: a fresh install and an observer-only setup both have none.
 
-	// A startCompanions failure after a reload exits the process, so anything
-	// that would fail companion construction (bad regex/cron/channel key) must
-	// be rejected here, before the config is ever written.
+	// A startCompanions failure after a reload exits the process, so anything that would fail companion construction must be rejected here.
 	seen := make(map[string]bool, len(c.Companions))
 	seenKeys := make(map[string]string, len(c.Companions))
 	for i, comp := range c.Companions {
@@ -182,8 +173,7 @@ func (c *Config) Validate() error {
 				}
 			}
 		}
-		// Validate the companion's own channels too, not just trigger-referenced
-		// ones: a bad standalone channel key still fails companion construction.
+		// Standalone channels too: a bad key still fails companion construction.
 		if comp.Channels != nil {
 			for j, ch := range *comp.Channels {
 				if err := ch.Validate(); err != nil {
@@ -193,9 +183,7 @@ func (c *Config) Validate() error {
 		}
 	}
 
-	// At most one repeater (a single radio can host only one relay identity).
-	// Its name shares the companion namespace so the two never collide in the
-	// UI / registry, and it can't reuse a companion's private key.
+	// The repeater's name shares the companion namespace, and it can't reuse a companion's private key.
 	if r := c.Repeater; r != nil {
 		if r.Name == "" {
 			return fmt.Errorf("repeater: name is required")
@@ -289,10 +277,7 @@ func (c *Config) Validate() error {
 	}
 
 	if c.DutyCycle != nil && (*c.DutyCycle <= 0 || *c.DutyCycle > 100) {
-		// Deliberate divergence: the firmware's `set dutycycle` validates 1-100
-		// and reaches sub-1% only via the unvalidated `set af`. Some EU868
-		// sub-bands are 0.1%, so a fraction is allowed here rather than adding
-		// a second raw-factor key that could disagree with this one.
+		// Deliberate divergence from the firmware's 1-100: some EU868 sub-bands are 0.1%.
 		return fmt.Errorf("dutyCycle is a percentage: must be greater than 0 and at most 100")
 	}
 
@@ -300,9 +285,7 @@ func (c *Config) Validate() error {
 		if c.Mqtt.Node != nil && *c.Mqtt.Node != "" && !seen[*c.Mqtt.Node] {
 			return fmt.Errorf("mqtt node %q does not match any companion", *c.Mqtt.Node)
 		}
-		// Names must be unique: the observer's health map and
-		// GET /api/mqtt/status both key on them, so duplicates make one broker
-		// report the other's connection state.
+		// Broker names must be unique: the observer's health map and /api/mqtt/status key on them.
 		seenBroker := make(map[string]bool, len(c.Mqtt.Brokers))
 		for i, b := range c.Mqtt.Brokers {
 			if err := b.Validate(); err != nil {
@@ -318,8 +301,7 @@ func (c *Config) Validate() error {
 	return nil
 }
 
-// ModemSettingsChanged reports whether a config reload altered any field that
-// requires tearing down and re-establishing the modem connection.
+// ModemSettingsChanged reports whether a reload altered a field that requires reconnecting the modem.
 func ModemSettingsChanged(old, new_ *Config) bool {
 	return derefStr(old.Connection) != derefStr(new_.Connection) ||
 		derefInt(old.BaudRate) != derefInt(new_.BaudRate) ||
@@ -328,18 +310,8 @@ func ModemSettingsChanged(old, new_ *Config) bool {
 		derefUint8(old.SF) != derefUint8(new_.SF) ||
 		derefUint8(old.CR) != derefUint8(new_.CR) ||
 		derefUint8(old.TX) != derefUint8(new_.TX) ||
-		// The airtime factor is baked into the RadioMux at modem.Setup, and the
-		// mux is only rebuilt on reconnect — so without this a duty-cycle change
-		// persists and silently does nothing until the process restarts.
-		// Compare the RESOLVED factor, not the stored percentage: unset and an
-		// explicit 50 are the same budget, and a reconnect drops the serial
-		// link and every node's sessions, so a no-op must not trigger one.
-		// ponytail: exact float compare. Set-to-set is bitwise safe (same
-		// computation, same input), but unset-vs-equivalent-explicit is exact
-		// only because DefaultAirtimeFactor is 1.0 and both 50 and 1.0 are
-		// representable. If that constant moves to a value whose percent is
-		// inexact, this starts churning a reconnect on a no-op and wants an
-		// epsilon.
+		// The airtime factor is baked into the RadioMux at modem.Setup, which is only rebuilt on reconnect; compare the RESOLVED factor so a no-op budget doesn't churn one.
+		// ponytail: exact float compare, safe only while DefaultAirtimeFactor is 1.0; wants an epsilon if that moves.
 		old.AirtimeFactorOr() != new_.AirtimeFactorOr()
 }
 

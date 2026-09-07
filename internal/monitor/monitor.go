@@ -1,18 +1,4 @@
-// Package monitor runs the background node-monitoring poller: on a staggered
-// schedule it asks each registered Collector for the current readings of the
-// nodes it owns, persists them to the generic time-series store (node_metrics),
-// updates each node's latest snapshot (node_state), and broadcasts live updates
-// over the "metrics" WebSocket topic. It also prunes old time-series rows.
-//
-// The engine is type-agnostic on two seams:
-//   - a Lister supplies the current set of monitor Targets (the app implements
-//     it by scanning companions' contacts for the per-node monitor flag — which
-//     nodes are monitored is interactive state, not config);
-//   - a Collector (one per node kind — repeater, sensor, …) performs the actual
-//     protocol round-trip.
-//
-// So the monitor package never imports the companion runtime or the repeater
-// client, keeping the dependency arrow pointing inward (app -> monitor -> store).
+// Package monitor polls each node's registered Collector on a staggered schedule, persists readings and broadcasts them.
 package monitor
 
 import (
@@ -30,50 +16,30 @@ import (
 // WSTopicMetrics is the WebSocket topic live readings are broadcast on.
 const WSTopicMetrics = "metrics"
 
-// Global scheduler tuning. These are infrastructure constants, not user config:
-// per-node cadence is set per monitor (Target.IntervalSecs); everything below is
-// poller-wide behaviour that isn't meaningful to vary per node.
+// Poller-wide tuning; per-node cadence comes from Target.IntervalSecs instead.
 const (
-	// pollTick is how often the scheduler wakes to check which monitors are due.
 	pollTick = 30 * time.Second
-	// requestTimeout bounds a single Collector.Collect call (a repeater poll
-	// chains login + status + telemetry + neighbours, each with its own tighter
-	// per-request timeout, so this backstop is generous).
-	requestTimeout = 2 * time.Minute
-	// defaultInterval is the poll cadence for a monitor that doesn't set its own.
+	// requestTimeout is a generous backstop: each sub-request of a poll has its own tighter timeout.
+	requestTimeout  = 2 * time.Minute
 	defaultInterval = 6 * time.Hour
-	// stagger is the gap inserted between polling consecutive nodes in a cycle,
-	// to avoid bursts of RF collisions.
-	stagger = 30 * time.Second
-	// retention bounds raw time-series storage; older rows are pruned.
-	retention = 90 * 24 * time.Hour
-	// pruneInterval is how often the retention prune runs.
+	// stagger gaps consecutive polls within a cycle to avoid bursts of RF collisions.
+	stagger       = 30 * time.Second
+	retention     = 90 * 24 * time.Hour
 	pruneInterval = 6 * time.Hour
-	// retryInterval is when to re-attempt after a failed poll, instead of
-	// waiting the full (potentially 6h) interval — transient login/RF failures
-	// (common right after restart, before paths are re-learned) shouldn't blank
-	// a node for hours.
+	// retryInterval re-attempts sooner than the full interval, so transient RF failures don't blank a node for hours.
 	retryInterval = 5 * time.Minute
-	// defaultMaxRetries bounds consecutive fast re-attempts after a failed poll
-	// before the node falls back to its normal interval, so a permanently
-	// unreachable node isn't polled on the retry cadence forever.
+	// defaultMaxRetries bounds consecutive fast re-attempts before the node falls back to its normal interval.
 	defaultMaxRetries = 3
 )
 
-// DefaultIntervalSecs is defaultInterval in seconds. Exported so the API can
-// report each node's effective poll cadence to the UI, which derives its
-// staleness threshold from it rather than hardcoding one — keeping the default
-// in a single place.
+// DefaultIntervalSecs is defaultInterval in seconds, exported so the UI derives its staleness threshold from it.
 const DefaultIntervalSecs = int64(defaultInterval / time.Second)
 
-// DefaultRetrySecs/DefaultMaxRetries are retryInterval/defaultMaxRetries in
-// seconds/count, exported so the API can validate per-node retry overrides
-// against the poller's actual defaults without duplicating the values.
+// DefaultRetrySecs/DefaultMaxRetries are the poller defaults the API validates per-node overrides against.
 const DefaultRetrySecs = int64(retryInterval / time.Second)
 const DefaultMaxRetries = defaultMaxRetries
 
-// Broadcaster is the subset of *api.Hub the monitor needs. Declared here so the
-// package stays decoupled and unit-testable.
+// Broadcaster is the subset of *api.Hub the monitor needs.
 type Broadcaster interface {
 	Broadcast(topic string, data any)
 }
@@ -89,8 +55,7 @@ type Target struct {
 	Probes       []string // request bundles to run; nil/empty = all
 }
 
-// Lister supplies the current set of monitor targets. Called once per cycle, so
-// adding/removing a monitor takes effect on the next tick with no restart.
+// Lister supplies the current monitor targets; called once per cycle, so changes take effect on the next tick.
 type Lister interface {
 	Targets(ctx context.Context) ([]Target, error)
 }
@@ -100,8 +65,7 @@ type ListerFunc func(ctx context.Context) ([]Target, error)
 
 func (f ListerFunc) Targets(ctx context.Context) ([]Target, error) { return f(ctx) }
 
-// Reading is one decoded value a Collector reports for a node. Channel is the
-// CayenneLPP channel for sensor readings (0 for status fields with no channel).
+// Reading is one decoded value; Channel is the CayenneLPP channel for sensor readings (0 when there is none).
 type Reading struct {
 	Metric  string
 	Channel int
@@ -117,25 +81,16 @@ type NeighborSample struct {
 // CollectResult is what a Collector returns for one poll of one node.
 type CollectResult struct {
 	// Name, if non-empty, updates the node's display name in node_state.
-	Name string
-	// Readings are the time-series values to persist.
-	Readings []Reading
-	// Neighbors are optional neighbour SNR samples (topology over time).
+	Name      string
+	Readings  []Reading
 	Neighbors []NeighborSample
-	// RetryFailure marks a poll that got valid data (persisted normally) but
-	// should still count as a failed poll for retry scheduling — e.g. a link
-	// monitor's trace timed out (no reply is itself a measurement).
+	// RetryFailure counts a poll that returned valid data as failed for retry scheduling (e.g. a trace that timed out).
 	RetryFailure bool
 }
 
-// Collector knows how to poll one kind of node and report its current readings.
-// Implementations live in the app layer (so they may use the companion runtime
-// and protocol clients) and are registered via Service.RegisterCollector.
+// Collector polls one kind of node; implementations live in the app layer and register via Service.RegisterCollector.
 type Collector interface {
-	// Collect performs one poll of the node described by t and returns its
-	// readings. It must honour ctx (which carries a per-request timeout) and not
-	// block indefinitely. A returned error marks the poll failed; the node's
-	// last_error is recorded and history is left untouched.
+	// Collect must honour ctx; an error marks the poll failed and leaves history untouched.
 	Collect(ctx context.Context, t Target) (*CollectResult, error)
 }
 
@@ -151,9 +106,7 @@ type Service struct {
 	nextDue    map[string]time.Time // keyed by pubkey hex
 	failures   map[string]int       // consecutive failed polls, keyed by pubkey hex
 
-	// pollMu serializes the actual collector round-trips so a manual PollNow
-	// can't run concurrently with a scheduled poll (which would put two RF
-	// conversations on the air at once — the whole stagger design avoids that).
+	// pollMu keeps only one collector round-trip on the air at a time.
 	pollMu sync.Mutex
 }
 
@@ -173,10 +126,7 @@ func New(st *store.Store, bc Broadcaster, lister Lister, log *slog.Logger) *Serv
 	}
 }
 
-// rescheduleAfter sets the node's next due time following a poll. A failed poll
-// re-attempts at retryDelay up to maxRetries consecutive times, then falls back
-// to the normal interval (resetting the counter) so an unreachable node isn't
-// polled on the short retry cadence forever. A success clears the counter.
+// rescheduleAfter sets the next due time: a failed poll retries fast up to maxRetries times, then resumes the normal interval.
 func (s *Service) rescheduleAfter(key string, t Target, ok bool) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
@@ -189,10 +139,7 @@ func (s *Service) rescheduleAfter(key string, t Target, ok bool) {
 		delete(s.failures, key)
 	} else {
 		s.failures[key]++
-		// MaxRetries resolution: 0 = poller default; negative (the UI's
-		// "None" option sends -1) = explicitly no retries, so any failure
-		// goes straight back to the normal interval instead of a fast
-		// re-attempt.
+		// MaxRetries: 0 = poller default, negative (the UI's "None" sends -1) = no fast re-attempt.
 		maxRetries := defaultMaxRetries
 		if t.MaxRetries < 0 {
 			maxRetries = 0
@@ -215,42 +162,31 @@ func (s *Service) rescheduleAfter(key string, t Target, ok bool) {
 	s.nextDue[key] = time.Now().Add(interval)
 }
 
-// Targets returns the current monitor target set from the lister — the nodes
-// whose monitor toggle is on right now. The API uses this to list monitored
-// nodes, so a freshly enrolled node shows up before its first poll completes.
+// Targets returns the nodes whose monitor toggle is on right now.
 func (s *Service) Targets(ctx context.Context) ([]Target, error) {
 	return s.lister.Targets(ctx)
 }
 
-// AirtimeLock exposes the poll mutex so other radio-driving services (the
-// signal-test runner) can serialize their own RF round-trips against monitor
-// polls, one operation at a time, instead of contending for airtime. Callers
-// must lock/unlock per-operation, not for an extended duration — holding it
-// for a whole multi-minute test would starve scheduled polls.
+// AirtimeLock lets other radio-driving services serialize against polls; lock per RF operation, never for a whole test run.
 func (s *Service) AirtimeLock() *sync.Mutex {
 	return &s.pollMu
 }
 
-// RegisterCollector wires a Collector for the given node kind (e.g. "repeater").
-// Safe to call before Start; calling for an existing kind replaces it.
+// RegisterCollector wires a Collector for a node kind; re-registering a kind replaces it.
 func (s *Service) RegisterCollector(kind string, c Collector) {
 	s.mu.Lock()
 	s.collectors[kind] = c
 	s.mu.Unlock()
 }
 
-// Start launches the scheduler and prune goroutines, running until ctx is
-// cancelled. Start returns immediately. The poller idles when no nodes are
-// flagged for monitoring, so there's no global enable switch.
+// Start launches the scheduler and prune goroutines and returns immediately.
 func (s *Service) Start(ctx context.Context) {
 	s.log.Info("node monitoring started", "defaultInterval", defaultInterval, "stagger", stagger, "retention", retention)
 	go s.scheduleLoop(ctx)
 	go s.pruneLoop(ctx)
 }
 
-// scheduleLoop wakes every pollTick, polls every monitor that's due, and sleeps
-// again. Polls run sequentially within a cycle with a stagger gap between them,
-// so one cycle never overlaps the next and RF requests don't burst.
+// scheduleLoop polls due monitors sequentially so one cycle never overlaps the next.
 func (s *Service) scheduleLoop(ctx context.Context) {
 	s.runCycle(ctx)
 	for {
@@ -281,7 +217,6 @@ func (s *Service) runCycle(ctx context.Context) {
 			continue
 		}
 
-		// Stagger consecutive polls within a cycle (skip the gap before the first).
 		if !first && stagger > 0 {
 			if !sleepCtx(ctx, stagger) {
 				return
@@ -297,10 +232,7 @@ func (s *Service) runCycle(ctx context.Context) {
 	}
 }
 
-// poll runs one Collector call and persists/broadcasts the result. err is
-// non-nil only when the poll itself failed (no data to persist). retryFailure
-// is set separately: true when the poll got data but CollectResult.RetryFailure
-// still wants it treated as a failure for retry scheduling. Callers must hold s.pollMu.
+// poll runs one Collector call and persists/broadcasts the result; callers must hold s.pollMu.
 func (s *Service) poll(ctx context.Context, t Target) (retryFailure bool, err error) {
 	s.mu.RLock()
 	collector := s.collectors[t.Kind]
@@ -362,9 +294,7 @@ func (s *Service) poll(ctx context.Context, t Target) (retryFailure bool, err er
 		})
 	}
 
-	// Persist metrics + neighbours + state on the writer goroutine. The poll
-	// ctx is a per-request timeout that's cancelled once poll() returns, so the
-	// async closure must use a background ctx instead of capturing it.
+	// The poll ctx is cancelled when poll() returns, so the async closure must not capture it.
 	s.st.WriteAsync(func() {
 		if err := s.st.Metrics.RecordMetrics(context.Background(), metrics); err != nil {
 			s.log.Error("recording metrics", "error", err)
@@ -390,13 +320,7 @@ func (s *Service) poll(ctx context.Context, t Target) (retryFailure bool, err er
 	return res.RetryFailure, nil
 }
 
-// PollNow performs an immediate, out-of-band poll of a single node, bypassing
-// the schedule — used by the UI's per-node "poll" button. It resolves the
-// node's current target from the lister (so companion/kind/probes match a
-// scheduled poll), runs the collector, persists + broadcasts exactly as a
-// scheduled poll, and resets the node's next scheduled poll relative to now.
-// Returns an error if the node isn't currently monitored, the poll fails, or a
-// poll is already in flight.
+// PollNow polls one node out of band and resets its schedule; it errors if the node isn't monitored or a poll is in flight.
 func (s *Service) PollNow(ctx context.Context, pubkey []byte) error {
 	if !s.pollMu.TryLock() {
 		return fmt.Errorf("a poll is already in progress; try again shortly")
@@ -424,8 +348,7 @@ func (s *Service) PollNow(ctx context.Context, pubkey []byte) error {
 	return pollErr
 }
 
-// persistState records a poll failure without clobbering the last-known-good
-// snapshot (preserves last_ok_ts + metric state).
+// persistState records a poll failure without clobbering the last-known-good snapshot.
 func (s *Service) persistState(state store.NodeState) {
 	s.st.WriteAsync(func() {
 		if err := s.st.Metrics.MarkPollFailure(context.Background(), &state); err != nil {
@@ -436,7 +359,6 @@ func (s *Service) persistState(state store.NodeState) {
 
 // pruneLoop periodically drops time-series rows older than the retention window.
 func (s *Service) pruneLoop(ctx context.Context) {
-	// Prune once shortly after start, then on the interval.
 	if !sleepCtx(ctx, time.Minute) {
 		return
 	}

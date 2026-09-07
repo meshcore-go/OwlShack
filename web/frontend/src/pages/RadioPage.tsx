@@ -58,8 +58,7 @@ export function RadioPage() {
     setSaving(true);
     try {
       await configApi.putSettings({
-        // Round-trip the connection type so a radio save never resets it (it is
-        // not editable here yet, but will gain values like sx1262_hat).
+        // Round-trip the connection type so a radio save never resets it.
         connectionType: settings.connectionType,
         connection,
         baudRate: parseInt(baudRate, 10) || 115200,

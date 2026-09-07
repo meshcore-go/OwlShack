@@ -2,38 +2,26 @@ package repeater
 
 import meshcore "github.com/meshcore-go/meshcore-go"
 
-// Loop-detect thresholds indexed by path hash size (1..3 bytes), mirroring the
-// firmware's max_loop_{minimal,moderate,strict} tables. Index 0 is unused (hash
-// size is never 0). Value N means: drop if our own hash already appears >= N
-// times in the path (i.e. we've relayed this flood N times already).
+// Firmware max_loop_* tables indexed by path hash size; value N means drop once our own hash appears >= N times.
 var (
 	maxLoopMinimal  = [4]int{0, 4, 2, 1}
 	maxLoopModerate = [4]int{0, 2, 1, 1}
 	maxLoopStrict   = [4]int{0, 1, 1, 1}
 )
 
-// allowForward is the repeater's relay policy — the Go port of the firmware's
-// MyMesh::allowPacketForward. meshcore-go's router calls it before relaying a
-// flood or direct packet; returning false makes the router deliver locally
-// without re-transmitting. The router already handles dedup and path-size
-// overflow, so this only layers on the repeater-specific policy.
+// allowForward ports MyMesh::allowPacketForward; the router already handles dedup and path overflow, so only policy lives here.
 func (r *Repeater) allowForward(pkt *meshcore.Packet) bool {
 	if r.cfg.IsFwdDisabled() {
 		return false
 	}
 
 	if pkt.IsRouteFlood() {
-		// Region gating: the port of filterRecvFloodPacket + the firmware's
-		// `if (isRouteFlood() && recv_pkt_region == NULL) return false`. With
-		// only the default wildcard region this passes plain FLOOD and drops
-		// scoped/transport FLOOD we have no transport key for.
+		// Firmware filterRecvFloodPacket: a flood with no matching region is dropped, so scoped floods we hold no transport key for die here.
 		if r.node.Regions().FindFloodMatch(pkt) == nil {
 			return false
 		}
 
-		// Hop caps, in the firmware's order: the general cap, then the extra
-		// unscoped cap (plain ROUTE_TYPE_FLOOD only — transport-scoped floods
-		// bypass it), then the advert-specific cap.
+		// Firmware order: general cap, then the unscoped-only cap, then the advert cap.
 		hops := int(pkt.PathHashCount())
 		if hops >= r.cfg.FloodMaxOr() {
 			return false
@@ -50,8 +38,6 @@ func (r *Repeater) allowForward(pkt *meshcore.Packet) bool {
 		}
 	}
 
-	// Accumulate estimated TX airtime for the relay we're about to do (the bulk
-	// of a repeater's transmissions; our own adverts/replies are negligible).
 	// Wire size ~ header + pathLen byte + path + payload.
 	if r.airtime != nil {
 		r.txAirtimeMs.Add(uint64(r.airtime(2 + len(pkt.Path) + len(pkt.Payload))))
@@ -61,9 +47,7 @@ func (r *Repeater) allowForward(pkt *meshcore.Packet) bool {
 	return true
 }
 
-// loopThreshold returns the max number of times our own hash may appear in a
-// path of the given hash size before the packet counts as looped, for a given
-// loop-detect level. 0 means "no check" (level off, or an out-of-range size).
+// loopThreshold returns how many times our own hash may appear before the packet counts as looped; 0 means no check.
 func loopThreshold(level string, hashSize int) int {
 	if hashSize < 1 || hashSize > 3 {
 		return 0
@@ -80,9 +64,7 @@ func loopThreshold(level string, hashSize int) int {
 	}
 }
 
-// isLooped ports MyMesh::isLooped: counts how many times our own path hash
-// already appears in the packet's path and compares against the configured
-// loop-detect threshold for the packet's hash size.
+// isLooped ports MyMesh::isLooped.
 func (r *Repeater) isLooped(pkt *meshcore.Packet) bool {
 	threshold := loopThreshold(r.cfg.LoopDetectOr(), int(pkt.PathHashSize()))
 	if threshold == 0 {

@@ -54,8 +54,7 @@ type Status struct {
 	FloodDups   uint16  `json:"floodDups"`
 	RecvErrors  uint32  `json:"recvErrors"`
 	ChanUtil    float64 `json:"chanUtil"`
-	// Room servers only (ServerStats): posts stored, and pushes sent to clients.
-	// nil on repeaters.
+	// Room servers only (ServerStats); nil on repeaters.
 	Posted     *uint16 `json:"posted,omitempty"`
 	PostPushes *uint16 `json:"postPushes,omitempty"`
 }
@@ -117,10 +116,7 @@ func parseRepeaterOwnerInfo(data []byte) *OwnerInfo {
 	return info
 }
 
-// parseRoomStatus decodes a room server's ServerStats: the repeater layout for
-// the first 48 bytes, then n_posted and n_post_push (u16 each) where a
-// repeater carries rx_air_time_secs — so it must not go through
-// parseRepeaterStatus, which would read the two counters as airtime.
+// parseRoomStatus: bytes 48-52 are n_posted and n_post_push (u16 each) where a repeater carries rx_air_time_secs.
 func parseRoomStatus(data []byte) (*Status, error) {
 	if len(data) < 52 {
 		return nil, fmt.Errorf("room status data too short: got %d, need 52", len(data))

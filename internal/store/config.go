@@ -7,16 +7,9 @@ import (
 	"strings"
 )
 
-// This file and its config_* siblings hold the relational config schema (the
-// config tables in migrateV1): one row per entity with a surrogate INTEGER id,
-// so names, pubkeys and private keys are all mutable columns that nothing
-// references. Repos are
-// dumb persistence — validation and the supervisor reload are orchestrated one
-// layer up (internal/app), after a write.
+// The config tables key on a surrogate INTEGER id, so names, pubkeys and keys are mutable columns nothing references; validation lives in internal/app.
 
-// encodeList / decodeList store a leaf string list (a trigger's match patterns
-// or contacts, a broker's disallowed packet types) in a single TEXT column,
-// newline-separated so a value may legally contain a comma.
+// encodeList/decodeList store a leaf string list in one TEXT column, newline-separated so a value may contain a comma.
 func encodeList(items []string) string {
 	return strings.Join(items, "\n")
 }
@@ -42,8 +35,7 @@ type Settings struct {
 	ListenAddr     *string
 	MapTileKey     *string // CARTO basemap API key; nil/"" = keyless tiles
 	PathHashSize   *int    // default flood path hash width in bytes; nil = 1
-	// DutyCyclePct caps TX airtime per hour as a percentage; nil = library
-	// default (50%, matching the firmware roles).
+	// DutyCyclePct caps TX airtime per hour as a percentage; nil = library default (50%).
 	DutyCyclePct  *float64
 	SetupComplete bool
 }
@@ -87,8 +79,7 @@ func (r *SettingsRepo) Set(ctx context.Context, s *Settings) error {
 	return nil
 }
 
-// MqttSettings is the single-row top-level MQTT config. NodeCompanionID selects
-// the feeding companion by surrogate id (not name), so renaming it is harmless.
+// MqttSettings is the single-row MQTT config; NodeCompanionID is a surrogate id, so renaming the companion is harmless.
 type MqttSettings struct {
 	Enabled         *bool
 	NodeCompanionID *int64

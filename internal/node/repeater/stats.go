@@ -93,9 +93,7 @@ func (r *Repeater) Stats() Stats {
 	return s
 }
 
-// snapshotNeighbors returns a copy of the directly-heard neighbours, newest
-// first. It owns the lock + sort so callers only format the result (CLI text /
-// wire bytes / JSON) — see neighborsList, neighboursBody, Neighbors.
+// snapshotNeighbors copies the directly-heard neighbours under the lock, newest first; callers only format.
 func (r *Repeater) snapshotNeighbors() []neighbor {
 	r.neighbors.Lock()
 	out := make([]neighbor, 0, len(r.neighbors.m))
@@ -123,10 +121,7 @@ func (r *Repeater) Neighbors() []NeighborInfo {
 	return out
 }
 
-// countTx counts a transmission by route type. The firmware counts these in
-// the Dispatcher as each packet actually goes out, so they cover our own
-// adverts and replies as well as relays: relays land here via allowForward,
-// everything we originate via sendPkt / sendAdvert.
+// countTx mirrors the firmware Dispatcher: our own adverts and replies count, not just relays.
 func (r *Repeater) countTx(flood bool) {
 	if flood {
 		r.sentFlood.Add(1)
@@ -144,8 +139,7 @@ func (r *Repeater) sendPkt(pkt *meshcore.Packet, priority uint8, delay time.Dura
 	return r.node.SendPacketDelayed(pkt, priority, delay)
 }
 
-// removeNeighbor drops every neighbour matching a pubkey prefix (firmware
-// `neighbor.remove` clears each entry whose key starts with the bytes supplied).
+// removeNeighbor drops every neighbour whose key starts with the prefix, as firmware `neighbor.remove` does.
 func (r *Repeater) removeNeighbor(prefix []byte) {
 	r.neighbors.Lock()
 	defer r.neighbors.Unlock()

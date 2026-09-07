@@ -60,16 +60,10 @@ interface ContactLike {
   metadata?: MonitorMetadata;
 }
 
-// NodeKind selects which settings apply. Repeaters take a login password and
-// answer status/telemetry/neighbours; companions (chat nodes) answer exactly
-// one thing — a sessionless contact-telemetry request (firmware has no login
-// handler) — so password and probe selection don't exist for them.
+// Companions have no firmware login handler: only a sessionless contact-telemetry request.
 export type NodeKind = "repeater" | "companion";
 
-// MonitoringSettings is the single per-node monitoring config form, rendered on
-// the repeater detail page, the contact detail page (companions), and the
-// monitoring node-detail page (which fetches the contact itself). It writes
-// the full contact metadata via PATCH, preserving fields it doesn't own.
+// PATCHes the full contact metadata, preserving fields this form doesn't own.
 export function MonitoringSettings({
   companionName,
   pubkey,
@@ -107,7 +101,6 @@ export function MonitoringSettings({
     setLoaded(true);
   }, []);
 
-  // When metadata is supplied by the parent, mirror it; otherwise fetch it.
   useEffect(() => {
     if (metadata) {
       apply(metadata);
@@ -150,9 +143,7 @@ export function MonitoringSettings({
       // Omit when all probes are on so it stays the implicit "all" default.
       meta.monitorProbes = allOn ? undefined : enabledProbes;
     } else {
-      // Companions answer telemetry only — never write isRepeater (a stray
-      // flag would route the node to the login-based repeater collector),
-      // never a password, and no probe selection (implicit "all" = telemetry).
+      // Never write isRepeater here — a stray flag routes the node to the login-based repeater collector.
       meta.monitorProbes = undefined;
     }
     try {

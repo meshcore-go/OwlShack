@@ -1,10 +1,6 @@
 import { formatBattery, formatUptime } from "@/lib/format";
 
-// Shared catalogue of node-monitoring metrics. Cards and history charts both
-// read from here so labels, units, formatting and chart-axis assignment stay
-// consistent. Keys match the metric names the Go collector emits
-// (statusReadings in internal/app/monitor_collector.go); telemetry metrics are
-// dynamic, so unknown keys fall back to a humanized label.
+// Keys match the metric names statusReadings emits in internal/app/monitor_collector.go.
 
 export type MetricKind = "gauge" | "counter";
 
@@ -14,15 +10,9 @@ export interface MetricDef {
   format: (v: number) => string;
   // Chart token (--chart-1..5) used for the series colour.
   color: string;
-  // gauge   = instantaneous value (battery, SNR, temperature) → area chart.
-  // counter = monotonic-since-boot total (packets, airtime, dups, errors). A raw
-  //           line only ever climbs and is meaningless, so we plot the per-bucket
-  //           delta (rate of change) as bars instead.
+  // gauge → area chart; counter is monotonic since boot, so it charts as per-bucket delta bars.
   kind: MetricKind;
-  // When true the metric is shown only as a current-value stat tile, never
-  // charted — a time-series of it carries no information (e.g. uptime climbs
-  // 1:1 with wall-clock, so a line is a 45° ramp and its per-bucket delta is
-  // just the bucket size).
+  // Stat tile only: a time-series of this carries no information (e.g. uptime).
   noChart?: boolean;
 }
 
@@ -37,10 +27,7 @@ export const METRIC_DEFS: Record<string, MetricDef> = {
   last_rssi: { label: "RSSI", unit: "dBm", format: (v) => `${Math.round(v)} dBm`, color: "var(--chart-2)", kind: "gauge" },
   noise_floor: { label: "Noise floor", unit: "dBm", format: (v) => `${Math.round(v)} dBm`, color: "var(--chart-4)", kind: "gauge" },
   chan_util: { label: "Channel util", unit: "%", format: (v) => `${v.toFixed(1)}%`, color: "var(--chart-5)", kind: "gauge" },
-  // environment sensors (telemetry). External sensors use clean names; the
-  // collector only appends "_chN" when a node has multiple of the same type, and
-  // metricDef() resolves those back to these defs. (Firmware <=1.15 puts these on
-  // the self channel, 1.16+ on their own — same key either way.)
+  // environment sensors (telemetry); the collector appends "_chN" only when a node has several of one type.
   temperature: { label: "Temperature", unit: "°C", format: (v) => `${v.toFixed(1)}°C`, color: "var(--chart-5)", kind: "gauge" },
   humidity: { label: "Humidity", unit: "%", format: (v) => `${v.toFixed(1)}%`, color: "var(--chart-2)", kind: "gauge" },
   pressure: { label: "Pressure", unit: "hPa", format: (v) => `${v.toFixed(0)} hPa`, color: "var(--chart-1)", kind: "gauge" },
@@ -59,9 +46,7 @@ export const METRIC_DEFS: Record<string, MetricDef> = {
   rx_air_secs: { label: "RX airtime", unit: "s", format: COUNT, color: "var(--chart-5)", kind: "counter" },
   tx_air_secs: { label: "TX airtime", unit: "s", format: COUNT, color: "var(--chart-4)", kind: "counter" },
   // errors (counters → rate bars)
-  // _err_flags bitmask (sticky fatal-event flags) — an instantaneous flag set,
-  // not a count, so kind is "gauge" and noChart suppresses it; it's decoded into
-  // labels via lib/errEvents and shown as chips instead. See Dispatcher.h.
+  // A sticky flag set, not a count — decoded to chips via lib/errEvents, never charted.
   err_events: { label: "Error events", format: COUNT, color: "var(--chart-2)", kind: "gauge", noChart: true },
   recv_errors: { label: "Recv errors", format: COUNT, color: "var(--chart-4)", kind: "counter" },
   flood_dups: { label: "Flood dups", format: COUNT, color: "var(--chart-5)", kind: "counter" },
@@ -71,14 +56,10 @@ export const METRIC_DEFS: Record<string, MetricDef> = {
   elapsed_ms: { label: "RTT", unit: "ms", format: (v) => `${Math.round(v)} ms`, color: "var(--chart-2)", kind: "gauge" },
 };
 
-// METRIC_ORDER is the canonical display order for charts/tiles, grouped
-// logically (power → signal → sensors → health → traffic → errors). The detail
-// page sorts available metrics by this; unknown keys sort to the end.
+// Display order for charts/tiles: METRIC_DEFS above is written in that order.
 export const METRIC_ORDER: string[] = Object.keys(METRIC_DEFS);
 
-// metricOrderIndex gives a metric's position in METRIC_ORDER, resolving a
-// channel-suffixed external sensor ("temperature_ch2") to its base so it sorts
-// alongside the catalogue instead of falling to the end. -1 if truly unknown.
+// A channel-suffixed sensor sorts beside its base metric; -1 if truly unknown.
 export function metricOrderIndex(key: string): number {
   const i = METRIC_ORDER.indexOf(key);
   if (i >= 0) return i;
@@ -86,9 +67,6 @@ export function metricOrderIndex(key: string): number {
   return METRIC_ORDER.indexOf(key.replace(/_ch\d+$/, ""));
 }
 
-// humanizeMetric turns a snake/suffix metric key into a readable label, used for
-// telemetry metrics (temperature, humidity, voltage, …_ch2) that aren't in the
-// static catalogue.
 export function humanizeMetric(key: string): string {
   return key
     .replace(/_/g, " ")
@@ -98,15 +76,12 @@ export function humanizeMetric(key: string): string {
 
 export function metricDef(key: string): MetricDef {
   if (METRIC_DEFS[key]) return METRIC_DEFS[key];
-  // A "_chN"-suffixed key is a disambiguated duplicate sensor (e.g. a second
-  // temperature probe). Resolve it to the base def so it keeps the right unit /
-  // colour / format, tagging the label with the channel.
+  // "_chN" is a disambiguated duplicate sensor; keep the base def's unit/colour/format.
   const ch = key.match(/^(.+)_ch(\d+)$/);
   if (ch && METRIC_DEFS[ch[1]]) {
     return { ...METRIC_DEFS[ch[1]], label: `${METRIC_DEFS[ch[1]].label} (ch${ch[2]})` };
   }
-  // "snr_hopN" is one series per hop of a monitored link's path (see the link
-  // collector); reuse last_snr's format/colour, just relabeled per hop.
+  // "snr_hopN" is one series per hop of a monitored link's path.
   const hop = key.match(/^snr_hop(\d+)$/);
   if (hop) {
     return { ...METRIC_DEFS.last_snr, label: `SNR hop ${hop[1]}` };

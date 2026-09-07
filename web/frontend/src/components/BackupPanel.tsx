@@ -4,9 +4,7 @@ import { SectionTitle } from "@/components/SectionTitle";
 import { BackupWizard } from "@/components/BackupWizard";
 import { Button } from "@/components/ui/button";
 
-// BackupPanel is export only. Restoring is offered on the first-run screen:
-// applying a backup to a node that is already configured and on the air is
-// what breaks — identities collide and live sessions dangle.
+// Export only — restore lives on the first-run screen, where identities can't collide.
 export function BackupPanel() {
   const [open, setOpen] = useState(false);
 

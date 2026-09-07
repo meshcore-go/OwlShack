@@ -20,8 +20,7 @@ export interface TelemetryData {
   raw: string;
 }
 
-// Requests + renders CayenneLPP telemetry from `${apiBase}/telemetry`. Shared by
-// the repeater tab and contact page. autoFetch fires once; else waits for Request.
+// autoFetch fires once; otherwise it waits for Request.
 export function TelemetryPanel({
   apiBase,
   autoFetch = false,
@@ -29,8 +28,7 @@ export function TelemetryPanel({
 }: {
   apiBase: string;
   autoFetch?: boolean;
-  // Shown under a failed request — the caller knows why this node might not
-  // answer (e.g. a sensor only replies to clients in its ACL).
+  // Shown under a failed request — e.g. a sensor only replies to clients in its ACL.
   errorHint?: string;
 }) {
   const [data, setData] = useState<TelemetryData | null>(null);

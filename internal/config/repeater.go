@@ -6,25 +6,14 @@ import (
 	meshcore "github.com/meshcore-go/meshcore-go"
 )
 
-// RepeaterConfig is a repeater node personality the bot RUNS on the mesh: it
-// relays flood/direct packets, advertises as a REPEATER, tracks neighbours and
-// (Phase 2) answers login/status/CLI admin requests. It is a sibling of
-// CompanionConfig, not a variant — a repeater has no channels, triggers or DMs,
-// but carries relay policy and admin credentials a companion never needs.
-//
-// Fields mirror the firmware NodePrefs subset a repeater actually uses (see
-// examples/simple_repeater). Relay-policy pointers are nil == "use default";
-// the *Or accessors resolve the effective value so the node code stays clean.
+// RepeaterConfig is a repeater node we RUN on the mesh; fields mirror the firmware NodePrefs subset (examples/simple_repeater), nil == default resolved by the *Or accessors.
 type RepeaterConfig struct {
 	Name string `json:"name" yaml:"name" toml:"name"`
 
-	// PrivateKey is the repeater's identity as a hex ed25519 seed (64 hex
-	// chars). Empty == generated when the config is persisted.
+	// PrivateKey is a hex ed25519 seed (64 hex chars); empty == generated when persisted.
 	PrivateKey string `json:"privateKey,omitempty" yaml:"privateKey,omitempty" toml:"privateKey,omitempty"`
 
-	// Advert data. AdvertInterval is the local (zero-hop) advert period in
-	// seconds; FloodAdvertInterval the mesh-wide flood advert period. nil ==
-	// default, 0 == off (matches CompanionConfig.AdvertInterval semantics).
+	// Advert data; the zero-hop and flood advert periods are SECONDS, nil == default, 0 == off.
 	Latitude            *float64 `json:"latitude" yaml:"latitude" toml:"latitude"`
 	Longitude           *float64 `json:"longitude" yaml:"longitude" toml:"longitude"`
 	AdvertInterval      *int     `json:"advertInterval,omitempty" yaml:"advertInterval,omitempty" toml:"advertInterval,omitempty"`
@@ -37,61 +26,40 @@ type RepeaterConfig struct {
 	FloodMaxAdvert   *int    `json:"floodMaxAdvert,omitempty" yaml:"floodMaxAdvert,omitempty" toml:"floodMaxAdvert,omitempty"`       // advert-specific hop cap (firmware default 8)
 	LoopDetect       *string `json:"loopDetect,omitempty" yaml:"loopDetect,omitempty" toml:"loopDetect,omitempty"`                   // off|minimal|moderate|strict
 
-	// DefaultRegion names the region our own flood adverts are scoped to
-	// (firmware default_scope). Empty = unscoped flood advert, which is valid
-	// firmware behaviour. Must name a configured non-wildcard region when set.
+	// Scope for our own flood adverts (firmware default_scope); empty = unscoped, which is valid.
 	DefaultRegion string `json:"defaultRegion,omitempty" yaml:"defaultRegion,omitempty" toml:"defaultRegion,omitempty"`
 
-	// HomeRegion labels one region as this node's home (firmware home_id). The
-	// firmware stores and reports it but never routes on it; so do we. Must
-	// name a configured region when set.
+	// Labels this node's home region (firmware home_id): stored and reported, never routed on.
 	HomeRegion string `json:"homeRegion,omitempty" yaml:"homeRegion,omitempty" toml:"homeRegion,omitempty"`
 
-	// PathHashSize overrides the global Config.PathHashSize for this repeater:
-	// the per-hop path hash width in BYTES for the flood packets it originates.
-	// nil == inherit (resolved at startup). The firmware's `path.hash.mode` is
-	// this minus one — convert only at that CLI boundary.
+	// Overrides Config.PathHashSize (BYTES); nil == inherit. The firmware's `path.hash.mode` is this minus one.
 	PathHashSize *int `json:"pathHashSize,omitempty" yaml:"pathHashSize,omitempty" toml:"pathHashSize,omitempty"`
 
-	// Relay timing (firmware NodePrefs tx_delay_factor / direct_tx_delay_factor /
-	// rx_delay_base / multi_acks). nil == firmware default.
+	// Relay timing (firmware NodePrefs tx_delay_factor / direct_tx_delay_factor / rx_delay_base / multi_acks); nil == firmware default.
 	TxDelayFactor       *float64 `json:"txDelayFactor,omitempty" yaml:"txDelayFactor,omitempty" toml:"txDelayFactor,omitempty"`
 	DirectTxDelayFactor *float64 `json:"directTxDelayFactor,omitempty" yaml:"directTxDelayFactor,omitempty" toml:"directTxDelayFactor,omitempty"`
 	RxDelayBase         *float64 `json:"rxDelayBase,omitempty" yaml:"rxDelayBase,omitempty" toml:"rxDelayBase,omitempty"`
 	MultiAcks           *int     `json:"multiAcks,omitempty" yaml:"multiAcks,omitempty" toml:"multiAcks,omitempty"`
 
-	// Admin surface (Phase 2: login / CLI). Blank admin password is allowed
-	// (some repeaters have none). OwnerInfo is advertised in owner-info replies.
+	// A blank admin password is allowed — some repeaters have none.
 	AdminPassword string `json:"adminPassword,omitempty" yaml:"adminPassword,omitempty" toml:"adminPassword,omitempty"`
 	GuestPassword string `json:"guestPassword,omitempty" yaml:"guestPassword,omitempty" toml:"guestPassword,omitempty"`
 	OwnerInfo     string `json:"ownerInfo,omitempty" yaml:"ownerInfo,omitempty" toml:"ownerInfo,omitempty"`
 
-	// Regions the repeater participates in: it relays transport-flood packets
-	// whose scope matches one of these. The transport key is derived from the
-	// region name (SHA256(name)[:16], firmware getAutoKeyFor) — not a hashtag.
+	// Transport-flood scopes the repeater relays; the key is SHA256(name)[:16] (firmware getAutoKeyFor), not a hashtag.
 	Regions []RepeaterRegion `json:"regions,omitempty" yaml:"regions,omitempty" toml:"region,omitempty"`
 }
 
-// RepeaterRegion is one transport scope the repeater serves. DenyFlood excludes
-// the region from flood relaying (known but not re-flooded); default false =
-// relay its scoped flood.
+// RepeaterRegion is one transport scope the repeater serves; DenyFlood keeps it known but not re-flooded.
 type RepeaterRegion struct {
 	Name      string `json:"name" yaml:"name" toml:"name"`
 	DenyFlood bool   `json:"denyFlood,omitempty" yaml:"denyFlood,omitempty" toml:"denyFlood,omitempty"`
 }
 
-// WildcardRegion ("*") is the unscoped flood scope: plain FLOOD packets that
-// carry no transport code. Firmware models it as a permanent, implicit struct;
-// we model it as an ordinary editable Regions entry so it can be listed,
-// toggled, deleted (stop relaying unscoped flood) and re-added from the UI/CLI.
-// Seeded into a new repeater on create; its absence means unscoped flood is not
-// relayed (see regionsFromConfig).
+// WildcardRegion ("*") is the unscoped flood scope, modelled as an editable Regions entry; its absence means unscoped flood is not relayed.
 const WildcardRegion = "*"
 
-// validateRegionName checks a region name against the firmware's constraints
-// (RegionMap::is_name_char, MAX_REGION_NAME): non-empty, within length, and
-// only allowed characters. The wildcard "*" is exempt (it's not a named
-// transport scope, so the firmware's is_name_char rules don't apply).
+// validateRegionName mirrors the firmware's RegionMap::is_name_char / MAX_REGION_NAME; the wildcard "*" is exempt.
 func validateRegionName(name string) error {
 	if name == WildcardRegion {
 		return nil
@@ -116,29 +84,16 @@ const (
 	DefaultFloodMaxUnscoped = 64
 	DefaultFloodMaxAdvert   = 8
 	DefaultLoopDetect       = "off"
-	// DefaultFloodAdvertIntervalSecs is the flood self-advert period used when
-	// none is configured. Matches the firmware default (MyMesh.cpp:
-	// flood_advert_interval = 47 hours) — flood adverts propagate mesh-wide, so
-	// they're deliberately infrequent. Zero-hop adverts default OFF (0), also
-	// matching the firmware: its 2-min new-install default is auto-disabled on
-	// first config (MIN_LOCAL_ADVERT_INTERVAL = 60 min), and our repeater is
-	// always configured. Kept here so the advert loop and the over-mesh
-	// `get flood.advert.interval` report the same effective value.
+	// Firmware default (MyMesh.cpp flood_advert_interval = 47 hours).
 	DefaultFloodAdvertIntervalSecs = 47 * 60 * 60
 
-	// Advert interval bounds, in seconds, mirroring the firmware CommonCLI
-	// ranges: zero-hop is 0 (off) or 60-240 minutes (MIN_LOCAL_ADVERT_INTERVAL),
-	// flood is 0 (off) or 3-168 hours. Stored in seconds because that is what
-	// the advert loop schedules on; the CLI converts to the firmware's units.
+	// Firmware CommonCLI ranges, in seconds: zero-hop 0 (off) or 60-240 minutes, flood 0 (off) or 3-168 hours.
 	MinAdvertIntervalSecs      = 60 * 60
 	MaxAdvertIntervalSecs      = 240 * 60
 	MinFloodAdvertIntervalSecs = 3 * 60 * 60
 	MaxFloodAdvertIntervalSecs = 168 * 60 * 60
 
-	// Path hash width bounds in bytes. The firmware's `set path.hash.mode`
-	// accepts 0-2 (it checks `mode < 3`) and uses `path_hash_mode + 1` as the
-	// width, so 1-3 bytes. The wire field could carry 4, but nothing in the
-	// ecosystem selects it.
+	// The firmware's `set path.hash.mode` accepts 0-2 and uses mode+1 as the width, so 1-3 bytes.
 	DefaultPathHashSize = 1
 	MinPathHashSize     = 1
 	MaxPathHashSize     = 3
@@ -153,8 +108,7 @@ const (
 // Valid loop-detect levels, matching the firmware's LOOP_DETECT_* enum.
 var loopDetectLevels = map[string]bool{"off": true, "minimal": true, "moderate": true, "strict": true}
 
-// IsValidLoopDetect reports whether s is a known loop-detect level. Shared by
-// config validation and the repeater's over-mesh `set loop.detect` handler.
+// IsValidLoopDetect reports whether s is a known loop-detect level.
 func IsValidLoopDetect(s string) bool { return loopDetectLevels[s] }
 
 func (c *RepeaterConfig) HasLatLon() bool {
@@ -164,8 +118,7 @@ func (c *RepeaterConfig) HasLatLon() bool {
 	return *c.Latitude != 0 && *c.Longitude != 0
 }
 
-// FloodMaxOr / FloodMaxAdvertOr / LoopDetectOr / IsFwdDisabled resolve the
-// effective relay-policy value, applying firmware defaults for nil fields.
+// FloodMaxOr / FloodMaxAdvertOr / LoopDetectOr / IsFwdDisabled apply firmware defaults for nil fields.
 func (c *RepeaterConfig) FloodMaxOr() int {
 	if c.FloodMax == nil {
 		return DefaultFloodMax
@@ -235,10 +188,7 @@ func (c *RepeaterConfig) MultiAcksOr() int {
 	return *c.MultiAcks
 }
 
-// AdvertIntervalOr / FloodAdvertIntervalOr resolve the effective self-advert
-// periods in SECONDS, applying defaults for nil (zero-hop off; flood 30 min).
-// The advert loop and the over-mesh `get advert.interval` share these so a
-// client fetching intervals sees the values actually in effect, not 0.
+// AdvertIntervalOr / FloodAdvertIntervalOr resolve the effective self-advert periods in SECONDS.
 func (c *RepeaterConfig) AdvertIntervalOr() int {
 	if c.AdvertInterval == nil {
 		return 0 // zero-hop advert default: off

@@ -26,12 +26,9 @@ const (
 	cliReplyDelay  = 600 * time.Millisecond
 	// txtAckDelay mirrors the firmware TXT_ACK_DELAY for legacy plain-text CLI.
 	txtAckDelay = 200 * time.Millisecond
-	// cliAdvertDelay matches the firmware's sendSelfAdvertisement(1500, ...) for
-	// CLI-triggered adverts: hold the advert so the CLI reply (queued at
-	// cliReplyDelay) transmits first.
+	// Firmware sendSelfAdvertisement(1500, ...): hold a CLI-triggered advert so the reply transmits first.
 	cliAdvertDelay = 1500 * time.Millisecond
-	// neighborsTextMax mirrors the firmware's `dp - reply < 134` loop bound: it
-	// keeps appending entries while the reply is still shorter than this.
+	// Firmware's `dp - reply < 134` loop bound: keep appending while the reply is shorter than this.
 	neighborsTextMax = 134
 
 	// Firmware NodePrefs buffer sizes (StrHelper::strncpy truncates to size-1).
@@ -43,8 +40,7 @@ const (
 	radioReadOnlyOnMesh = "ERR: radio settings are read-only over the mesh"
 )
 
-// handleCLI answers a CLI command (get/set/setperm/advert...) from a logged-in
-// ADMIN client over TXT_MSG. Mirrors the firmware onPeerDataRecv TXT_MSG path.
+// handleCLI answers an ADMIN client's TXT_MSG command, mirroring the firmware onPeerDataRecv TXT_MSG path.
 func (r *Repeater) handleCLI(pkt *meshcore.Packet) {
 	txt, err := meshcore.TextMessageFromBytes(pkt.Payload)
 	if err != nil {
@@ -101,10 +97,7 @@ func (r *Repeater) handleCLI(pkt *meshcore.Packet) {
 	}
 }
 
-// sendLegacyAck ACKs a legacy plain-text CLI command (firmware TXT_TYPE_PLAIN
-// branch of onPeerDataRecv): a bare 4-byte CRC over [timestamp][flags][text] +
-// the client's pubkey, sent along the learned route (flooded — with the
-// request's scope — when unknown) after TXT_ACK_DELAY.
+// sendLegacyAck sends the firmware's bare 4-byte CRC over [timestamp][flags][text] plus the client's pubkey.
 func (r *Repeater) sendLegacyAck(reqPkt *meshcore.Packet, clientPub [32]byte, ackPlaintext []byte) {
 	payload := make([]byte, 4)
 	binary.LittleEndian.PutUint32(payload, meshcore.CalcAckHash(ackPlaintext, clientPub[:]))
@@ -127,8 +120,7 @@ func (r *Repeater) sendLegacyAck(reqPkt *meshcore.Packet, clientPub [32]byte, ac
 	}
 }
 
-// runCLI strips the optional "XX|" correlation prefix (reflected back on the
-// reply so async clients can match responses), then dispatches the command.
+// runCLI strips the optional "XX|" correlation prefix and reflects it back so async clients can match responses.
 func (r *Repeater) runCLI(command string) string {
 	command = strings.TrimLeft(command, " ")
 	prefix := ""
@@ -139,10 +131,7 @@ func (r *Repeater) runCLI(command string) string {
 	return prefix + r.dispatchCLI(command)
 }
 
-// dispatchCLI runs one command and returns its reply text (firmware `get`
-// replies are prefixed with "> "). Config-mutating commands (set/password/
-// region writes) persist + reload asynchronously via r.reconfigure; the reply
-// is optimistic (the value is validated inline first).
+// dispatchCLI returns the reply text; config-mutating commands validate inline and reply optimistically before reconfigure runs.
 func (r *Repeater) dispatchCLI(cmd string) string {
 	cmd = strings.TrimSpace(cmd)
 	switch {
@@ -151,8 +140,7 @@ func (r *Repeater) dispatchCLI(cmd string) string {
 	case cmd == "clock":
 		return formatClock(time.Now())
 	case strings.HasPrefix(cmd, "clock sync"):
-		// Host time is authoritative and already correct, so there is nothing to
-		// set; reply in the firmware's shape so a client sees our clock.
+		// Host time is authoritative, so there is nothing to set; reply in the firmware's shape anyway.
 		return "OK - clock set: " + formatClock(time.Now())
 	case cmd == "advert.zerohop":
 		r.advertAfterReply(false)
@@ -201,9 +189,7 @@ func (r *Repeater) dispatchCLI(cmd string) string {
 	}
 }
 
-// isUnsupportedCmd reports firmware commands that don't apply to a Linux-hosted
-// Go relay (power/board/GPS/sensors/firmware-flash/chip-specific) — answered
-// with a clear error rather than "Unknown command".
+// isUnsupportedCmd reports firmware commands a Linux-hosted relay can't do, answered with a clear error not "Unknown command".
 func isUnsupportedCmd(cmd string) bool {
 	for _, p := range []string{
 		"poweroff", "shutdown", "reboot", "clkreboot", "board",
@@ -218,9 +204,7 @@ func isUnsupportedCmd(cmd string) bool {
 	return false
 }
 
-// Firmware config keys we don't model (chip/board/bridge tuning, rekeying,
-// serial-only reads): answered "not supported" instead of the firmware's
-// unknown-key reply, which would misreport them as non-existent.
+// Config keys we don't model: answered "not supported", since the unknown-key reply would misreport them as non-existent.
 var unsupportedGetKeys = []string{
 	"dutycycle", "af", "int.thresh", "cad", "agc.reset.interval",
 	"allow.read.only", "prv.key", "acl", "radio.rxgain", "radio.fem.rxgain", "radio.fem.txgain",
@@ -240,8 +224,7 @@ func isUnsupportedKey(keys []string, key string) bool {
 	})
 }
 
-// cliGet reads a config value. Radio params come from the shared Settings (the
-// repeater shares the modem); the rest from the repeater's own config.
+// cliGet reads radio params from the shared Settings and everything else from the repeater's own config.
 func (r *Repeater) cliGet(key string) string {
 	cfg := r.cfgSnapshot()
 	switch key {
@@ -321,9 +304,7 @@ var (
 	errInvalidParams = errors.New("invalid params")
 )
 
-// cliSetPerm handles `setperm <pubkey-hex> <perms-int8>` (firmware MyMesh
-// handleCommand): a role of 0 removes the client (prefix allowed), anything
-// else needs the full key and stores the whole permission byte.
+// cliSetPerm handles `setperm <pubkey-hex> <perms-int8>`.
 func (r *Repeater) cliSetPerm(args string) string {
 	sp := strings.IndexByte(args, ' ')
 	if sp < 0 {
@@ -343,9 +324,7 @@ func (r *Repeater) cliSetPerm(args string) string {
 	}
 }
 
-// SetACL applies setperm semantics (firmware ClientACL::applyPermissions): a
-// guest role revokes and may name the client by a pubkey prefix; any other role
-// needs the full key. The permission byte is stored whole.
+// SetACL ports ClientACL::applyPermissions: a guest role revokes and accepts a pubkey prefix, any other role needs the full key.
 func (r *Repeater) SetACL(pubHex string, perms int) error {
 	pubHex = strings.ToLower(strings.TrimSpace(pubHex))
 	pub, err := hex.DecodeString(pubHex)
@@ -375,9 +354,7 @@ func (r *Repeater) SetACL(pubHex string, perms int) error {
 
 func (r *Repeater) ClearStats() { r.clearStats() }
 
-// advertAfterReply sends a CLI-triggered self-advert after cliAdvertDelay so
-// the CLI reply (queued at cliReplyDelay) transmits first — matching the
-// firmware's sendSelfAdvertisement(1500, ...).
+// advertAfterReply delays the advert so the CLI reply, queued at cliReplyDelay, transmits first.
 func (r *Repeater) advertAfterReply(flood bool) {
 	go func() {
 		t := time.NewTimer(cliAdvertDelay)
@@ -392,10 +369,7 @@ func (r *Repeater) advertAfterReply(flood bool) {
 	}()
 }
 
-// sendText sends a CLI reply as a TXT_MSG datagram (never a PATH-return, per
-// firmware), direct along the learned route or flooded — with the request's
-// scope — when unknown. The reply timestamp is unique and never equal to the
-// command's (the firmware's CLI-view workaround).
+// sendText replies as a TXT_MSG datagram, never a PATH-return, with a timestamp never equal to the command's (firmware CLI-view workaround).
 func (r *Repeater) sendText(reqPkt *meshcore.Packet, clientPub [32]byte, secret []byte, senderTS uint32, text string) error {
 	ts := r.uniqueTimestamp()
 	if ts == senderTS {
@@ -422,9 +396,7 @@ func (r *Repeater) sendText(reqPkt *meshcore.Packet, clientPub [32]byte, secret 
 	return r.sendPkt(out, node.PrioritySend, cliReplyDelay)
 }
 
-// cliSet handles `set <key> <value>` for the repeater's own config. The value
-// is validated inline (firmware-style errors); on success the change is
-// persisted + reloaded asynchronously via reconfigure.
+// cliSet handles `set <key> <value>` for the repeater's own config.
 func (r *Repeater) cliSet(kv string) string {
 	key, val, ok := strings.Cut(kv, " ")
 	if !ok {
@@ -437,10 +409,7 @@ func (r *Repeater) cliSet(kv string) string {
 	return r.applyCfg(mutate, reply)
 }
 
-// setMutation validates a `set` value and returns the config mutation + success
-// reply, or (nil, errorReply). Mirrors the firmware CommonCLI set-branch
-// parsing (atoi/atof leniency, uint8 truncation, prefix keywords), units,
-// ranges and messages.
+// setMutation returns the config mutation plus success reply, or (nil, errorReply), mirroring the firmware CommonCLI set branch.
 func (r *Repeater) setMutation(key, val string) (func(*config.RepeaterConfig), string) {
 	switch key {
 	case "name":
@@ -544,16 +513,13 @@ func (r *Repeater) setMutation(key, val string) (func(*config.RepeaterConfig), s
 	}
 }
 
-// cliPassword handles `password <new>` — change the admin password (firmware
-// reply echoes the stored, 15-char-truncated password). Persisted + reloaded
-// via reconfigure.
+// cliPassword echoes the stored, 15-char-truncated password, as the firmware reply does.
 func (r *Repeater) cliPassword(pass string) string {
 	pass = truncate(pass, maxPasswordLen)
 	return r.applyCfg(func(c *config.RepeaterConfig) { c.AdminPassword = pass }, "password now: "+pass)
 }
 
-// cliNeighborRemove handles `neighbor.remove <pubkey-hex>`, matching on the
-// bytes supplied (the firmware accepts a prefix).
+// cliNeighborRemove matches on the bytes supplied; the firmware accepts a prefix.
 func (r *Repeater) cliNeighborRemove(pubHex string) string {
 	pub, err := hex.DecodeString(strings.ToLower(pubHex))
 	if err != nil || len(pub) == 0 || len(pub) > 32 {
@@ -563,10 +529,7 @@ func (r *Repeater) cliNeighborRemove(pubHex string) string {
 	return "OK"
 }
 
-// cliRegion ports CommonCLI::handleRegionCmd onto our flat name+denyFlood list
-// (no parent tree, so `region def` isn't supported and parents are only
-// validated). Lookups use the firmware's exact-then-prefix match; the "*"
-// wildcard always exists. Reads are immediate; writes go through reconfigure.
+// cliRegion ports CommonCLI::handleRegionCmd onto our flat list: no parent tree, so `region def` isn't supported and parents are only validated.
 func (r *Repeater) cliRegion(cmd string) string {
 	if cmd == "region def" || strings.HasPrefix(cmd, "region def ") {
 		return notSupportedOnNode
@@ -708,8 +671,7 @@ func regionByName(regions []config.RepeaterRegion, name string) (string, bool) {
 	return "", false
 }
 
-// regionByPrefix is RegionMap::findByNamePrefix: an exact match wins, else the
-// last region whose name starts with the prefix.
+// regionByPrefix is RegionMap::findByNamePrefix: exact match wins, else the last region starting with the prefix.
 func regionByPrefix(regions []config.RepeaterRegion, prefix string) (string, bool) {
 	if name, ok := regionByName(regions, prefix); ok {
 		return name, true
@@ -724,8 +686,7 @@ func regionByPrefix(regions []config.RepeaterRegion, prefix string) (string, boo
 	return partial, partial != ""
 }
 
-// regionDenies reports a region's deny-flood flag; the wildcard denies when it
-// has no config entry.
+// regionDenies reports the deny-flood flag; the wildcard denies when it has no config entry.
 func regionDenies(regions []config.RepeaterRegion, name string) bool {
 	for _, rg := range regions {
 		if rg.Name == name {
@@ -735,8 +696,7 @@ func regionDenies(regions []config.RepeaterRegion, name string) bool {
 	return true
 }
 
-// setRegionDeny sets a region's deny-flood flag, creating the entry if needed
-// (so `allowf *` materialises the wildcard entry).
+// setRegionDeny creates the entry if needed, so `allowf *` materialises the wildcard.
 func setRegionDeny(c *config.RepeaterConfig, name string, deny bool) {
 	for i := range c.Regions {
 		if c.Regions[i].Name == name {
@@ -747,8 +707,7 @@ func setRegionDeny(c *config.RepeaterConfig, name string, deny bool) {
 	c.Regions = append(c.Regions, config.RepeaterRegion{Name: name, DenyFlood: deny})
 }
 
-// isValidRegionName is RegionMap::is_name_char over every byte: alnum, "-",
-// "$", "#" and anything at or above 'A' (accented UTF-8 bytes included).
+// isValidRegionName is RegionMap::is_name_char per byte: alnum, "-", "$", "#" and anything at or above 'A'.
 func isValidRegionName(s string) bool {
 	if s == "" {
 		return false
@@ -762,9 +721,7 @@ func isValidRegionName(s string) bool {
 	return true
 }
 
-// cfgRegions snapshots the region list under the lock. ApplyRegions replaces
-// the slice (never mutates it in place) from the reload goroutine, so a reader
-// can iterate the returned snapshot safely after unlocking.
+// cfgRegions is safe to iterate after unlocking because ApplyRegions replaces the slice rather than mutating it.
 func (r *Repeater) cfgRegions() []config.RepeaterRegion {
 	r.mu.Lock()
 	defer r.mu.Unlock()
@@ -778,9 +735,7 @@ func (r *Repeater) cfgSnapshot() config.RepeaterConfig {
 	return r.cfg
 }
 
-// regionNames renders RegionMap::exportNamesTo(mask=DENY_FLOOD): the regions
-// whose deny-flood flag matches `denied`, comma-separated, "*" first (the
-// wildcard denies when it has no entry), leading "#" stripped.
+// regionNames renders RegionMap::exportNamesTo(mask=DENY_FLOOD): names matching `denied`, "*" first, leading "#" stripped.
 func regionNames(regions []config.RepeaterRegion, denied bool) string {
 	var names []string
 	if regionDenies(regions, config.WildcardRegion) == denied {
@@ -794,11 +749,7 @@ func regionNames(regions []config.RepeaterRegion, denied bool) string {
 	return strings.Join(names, ",")
 }
 
-// regionTree renders the region map the way the firmware's exportTo does: the
-// wildcard first, then its children indented one space, each line suffixed "^"
-// for the home region (the wildcard when none is set) and " F" when flood is
-// allowed, every line newline-terminated. Our model is flat, so every named
-// region is a direct child of the wildcard.
+// regionTree renders the firmware exportTo shape: wildcard first, children indented one space, "^" for home and " F" for flood-allowed.
 func (r *Repeater) regionTree() string {
 	cfg := r.cfgSnapshot()
 	home := cfg.HomeRegion
@@ -826,9 +777,7 @@ func (r *Repeater) regionTree() string {
 	return b.String()
 }
 
-// clearStats resets what the firmware's `clear stats` does: the radio's
-// recv/sent counters, the Dispatcher's route counters and the dup counters —
-// not airtime and not the last signal reading.
+// clearStats resets what the firmware's `clear stats` does: recv/sent, route and dup counters, but not airtime or the last signal.
 func (r *Repeater) clearStats() {
 	r.recvCount.Store(0)
 	r.fwdCount.Store(0)
@@ -842,8 +791,7 @@ func (r *Repeater) clearStats() {
 	}
 }
 
-// neighborsList renders the neighbours as text (firmware `neighbors`):
-// "hexprefix:secsAgo:snrX4" per line, newest first, or "-none-".
+// neighborsList renders "hexprefix:secsAgo:snrX4" per line, newest first, or "-none-".
 func (r *Repeater) neighborsList() string {
 	list := r.snapshotNeighbors()
 	if len(list) == 0 {
@@ -863,9 +811,7 @@ func (r *Repeater) neighborsList() string {
 	return b.String()
 }
 
-// applyCfg is the common tail of every config-mutating CLI command: guard the
-// missing-reconfigure case, then schedule the mutation to persist + reload after
-// the reply TXes. Returns ok on success, or the unavailable-reply.
+// applyCfg guards the missing-reconfigure case, then schedules the mutation for after the reply TXes.
 func (r *Repeater) applyCfg(mutate func(*config.RepeaterConfig), ok string) string {
 	if r.reconfigure == nil {
 		return "ERR: config changes not available"
@@ -874,8 +820,7 @@ func (r *Repeater) applyCfg(mutate func(*config.RepeaterConfig), ok string) stri
 	return ok
 }
 
-// reconfigureAfterReply persists + reloads a config change after the CLI reply
-// has had time to transmit (reload restarts this node, so we can't do it inline).
+// reconfigureAfterReply waits for the CLI reply to transmit because the reload restarts this node.
 func (r *Repeater) reconfigureAfterReply(mutate func(*config.RepeaterConfig)) {
 	go func() {
 		t := time.NewTimer(cliReplyDelay + 400*time.Millisecond)
@@ -891,22 +836,18 @@ func (r *Repeater) reconfigureAfterReply(mutate func(*config.RepeaterConfig)) {
 	}()
 }
 
-// isValidRepeaterName mirrors the firmware isValidName (rejects the chars the
-// mesh name syntax reserves). Unlike the firmware we also refuse an empty name,
-// which this node cannot run under.
+// isValidRepeaterName mirrors the firmware isValidName, but also refuses an empty name, which this node cannot run under.
 func isValidRepeaterName(s string) bool {
 	return s != "" && !strings.ContainsAny(s, "[]\\:,?*")
 }
 
-// formatClock renders a time the way the firmware's DateTime replies do:
-// "HH:MM - D/M/YYYY UTC" (only the time is zero-padded).
+// formatClock renders the firmware DateTime shape "HH:MM - D/M/YYYY UTC"; only the time is zero-padded.
 func formatClock(t time.Time) string {
 	t = t.UTC()
 	return fmt.Sprintf("%02d:%02d - %d/%d/%d UTC", t.Hour(), t.Minute(), t.Day(), int(t.Month()), t.Year())
 }
 
-// floatOrZero renders a float the way the firmware's StrHelper::ftoa does:
-// always with a decimal point, so 915 reads "915.0" and nil reads "0.0".
+// floatOrZero renders like StrHelper::ftoa, always with a decimal point, so 915 reads "915.0" and nil reads "0.0".
 func floatOrZero(f *float64) string {
 	v := 0.0
 	if f != nil {
@@ -949,8 +890,7 @@ func atoi(s string) int {
 	return n
 }
 
-// digits is the firmware's _atoi: unsigned decimal digits from the start, 0
-// otherwise — no sign, no whitespace.
+// digits is the firmware's _atoi: unsigned decimal digits from the start, no sign or whitespace, else 0.
 func digits(s string) uint32 {
 	var n uint32
 	for i := 0; i < len(s) && s[i] >= '0' && s[i] <= '9'; i++ {

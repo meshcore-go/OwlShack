@@ -9,12 +9,10 @@ import (
 	"github.com/meshcore-go/OwlShack/internal/store"
 )
 
-// linkMonitorDefaultIntervalSecs is the poll cadence for a link monitor that
-// doesn't override it.
+// linkMonitorDefaultIntervalSecs is the cadence for a link monitor that doesn't override it.
 const linkMonitorDefaultIntervalSecs = 900
 
-// newMergedLister concatenates multiple Listers into one, since
-// monitor.Service only takes a single Lister.
+// newMergedLister concatenates Listers because monitor.Service takes only one.
 func newMergedLister(ls ...monitor.Lister) monitor.ListerFunc {
 	return func(ctx context.Context) ([]monitor.Target, error) {
 		var out []monitor.Target
@@ -29,10 +27,7 @@ func newMergedLister(ls ...monitor.Lister) monitor.ListerFunc {
 	}
 }
 
-// newLinkLister builds a monitor.Lister from enabled link_monitors rows. Each
-// row's synthetic key stands in for Target.Pubkey. Links whose companion no
-// longer resolves (mid-reload) are skipped for the cycle rather than erroring
-// the whole listing.
+// newLinkLister puts each row's synthetic key in Target.Pubkey; a link whose companion is mid-reload is skipped for the cycle.
 func newLinkLister(reg *companionRegistry, db *store.Store) monitor.ListerFunc {
 	return func(ctx context.Context) ([]monitor.Target, error) {
 		links, err := db.LinkMonitors.ListEnabled(ctx)
@@ -62,9 +57,7 @@ func newLinkLister(reg *companionRegistry, db *store.Store) monitor.ListerFunc {
 	}
 }
 
-// linkCollector polls a monitored link by running one trace and mapping the
-// result onto per-hop SNR readings plus a delivery flag. A timed-out trace is
-// a measurement (packet loss), not a failed poll.
+// linkCollector traces a monitored link; a timed-out trace is a measurement (packet loss), not a failed poll.
 type linkCollector struct {
 	reg *companionRegistry
 	db  *store.Store
@@ -78,9 +71,7 @@ func newLinkCollector(reg *companionRegistry, db *store.Store, log *slog.Logger)
 	return &linkCollector{reg: reg, db: db, log: log.With("component", "link-collector")}
 }
 
-// Collect runs under monitor.Service's pollMu, which is the same mutex as the
-// signal-test runner's airtime lock — must not acquire that lock too, or a
-// link poll would deadlock against itself.
+// Collect already runs under monitor.Service's pollMu, which is the signal-test airtime lock: taking it again deadlocks.
 func (lc *linkCollector) Collect(ctx context.Context, t monitor.Target) (*monitor.CollectResult, error) {
 	lm, err := lc.db.LinkMonitors.GetByKey(ctx, t.Pubkey)
 	if err != nil {
@@ -103,8 +94,7 @@ func (lc *linkCollector) Collect(ctx context.Context, t monitor.Target) (*monito
 	if name == "" {
 		name = "link"
 	}
-	// A timed-out trace is recorded like any other poll; it only asks for a
-	// fast retry when the user has explicitly opted in (MaxRetries > 0).
+	// A timed-out trace asks for a fast retry only when the user opted in (MaxRetries > 0).
 	res := &monitor.CollectResult{Name: name, RetryFailure: lm.MaxRetries > 0 && !out.Complete}
 
 	ok01 := 0.0

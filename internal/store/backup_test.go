@@ -8,8 +8,7 @@ import (
 	"testing"
 )
 
-// openWritable opens a database file directly, bypassing migrations, so a test
-// can plant a schema version or a foreign table.
+// openWritable bypasses migrations so a test can plant a schema version or a foreign table.
 func openWritable(path string) (*sql.DB, error) {
 	db, err := sql.Open("sqlite", "file:"+path)
 	if err != nil {
@@ -46,8 +45,7 @@ func TestBackupTo_ProducesAdoptableCopy(t *testing.T) {
 		t.Errorf("backup schema = %d, want %d", v, want)
 	}
 
-	// VACUUM INTO refuses an existing target, so BackupTo must too rather than
-	// producing a confusing SQLite error.
+	// VACUUM INTO refuses an existing target, so BackupTo must too.
 	if err := st.BackupTo(ctx, dst); err == nil {
 		t.Error("BackupTo overwrote an existing file")
 	}
@@ -199,8 +197,7 @@ func TestStageRestore_AndAdopt(t *testing.T) {
 	}
 }
 
-// seedForPrune builds a database with two companions and a mix of fresh and
-// stale history, then returns a backup copy's path for pruning.
+// seedForPrune returns a backup copy of a DB with two companions and mixed fresh/stale history.
 func seedForPrune(t *testing.T, opts PruneOptions) *sql.DB {
 	t.Helper()
 	ctx := context.Background()
@@ -232,8 +229,7 @@ func seedForPrune(t *testing.T, opts PruneOptions) *sql.DB {
 		(unixepoch('now','-1 days'),'p1','battery',1),
 		(unixepoch('now','-40 days'),'p1','battery',2)`)
 	exec(`INSERT INTO repeater (id, name, private_key) VALUES (1,'rptr','cc')`)
-	// The settings singleton must survive every prune — it is the one thing a
-	// backup always carries.
+	// The settings singleton must survive every prune.
 	exec(`INSERT INTO settings (id, freq) VALUES (1, 917.375)`)
 
 	backup := filepath.Join(dir, "backup.db")
@@ -329,9 +325,7 @@ func TestPruneBackup_KeepsEverythingWhenAsked(t *testing.T) {
 	}
 }
 
-// The selection is exactly what is kept: empty keeps none, every id keeps all.
-// Nothing may mean "all" implicitly — an unset field reaching here as an empty
-// slice must produce the smallest backup, never the largest.
+// The selection is exactly what is kept: an empty slice must produce the smallest backup, never the largest.
 func TestPruneBackup_CompanionSelectionSemantics(t *testing.T) {
 	t.Run("every id keeps all", func(t *testing.T) {
 		db := seedForPrune(t, PruneOptions{CompanionIDs: []int64{1, 2}, Contacts: true})

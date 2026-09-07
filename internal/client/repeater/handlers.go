@@ -114,8 +114,7 @@ func (rm *Client) HandlePathPacket(pkt *meshcore.Packet) bool {
 		return true
 	}
 
-	// Sessionless PATH-wrapped responses (flood contact telemetry): match by
-	// carried secret, learn any return path, deliver by tag.
+	// Sessionless PATH-wrapped responses match by carried secret and deliver by tag.
 	rm.pendingMu.Lock()
 	pendings := make([]*pendingRequest, 0, len(rm.pending))
 	for _, pr := range rm.pending {

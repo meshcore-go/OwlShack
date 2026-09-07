@@ -1,13 +1,4 @@
-// Package repeater implements the repeater NODE personality: a node the bot
-// RUNS on the mesh that relays flood/direct packets, advertises itself as a
-// REPEATER, and tracks its RF neighbours. It is the server-side mirror of
-// internal/client/repeater (which drives *remote* repeaters).
-//
-// Relay mechanics live in meshcore-go's node router (the Go port of the base
-// mesh::Mesh forwarding): it appends our path hash, dedups, and re-transmits.
-// This package supplies only the *policy* — the allowForward handler mirroring
-// the firmware's MyMesh::allowPacketForward (see examples/simple_repeater) —
-// plus adverts and neighbour tracking.
+// Package repeater is the repeater personality we run: relay policy, adverts and neighbours, with meshcore-go's router doing the forwarding.
 package repeater
 
 import (
@@ -29,8 +20,7 @@ import (
 	"github.com/meshcore-go/OwlShack/internal/store"
 )
 
-// neighbor is a directly-heard (zero-hop) repeater advert — the firmware's
-// NeighbourInfo. Kept in memory only, matching the firmware (lost on restart).
+// neighbor is a directly-heard zero-hop repeater (firmware NeighbourInfo), in memory only and lost on restart.
 type neighbor struct {
 	pubkey [32]byte
 	name   string
@@ -52,20 +42,14 @@ type Repeater struct {
 	recvCount atomic.Uint64 // raw packets received (radio raw handler)
 	fwdCount  atomic.Uint64 // packets we relayed (allowForward returned true)
 
-	// TX counters for the STATUS response (firmware Dispatcher getNumSentFlood /
-	// getNumSentDirect). RX / dup counters come from the router (routeStats),
-	// rebased at `clear stats` via statsBase.
+	// TX counters; RX / dup counters come from the router, rebased at `clear stats` via statsBase.
 	sentFlood  atomic.Uint64
 	sentDirect atomic.Uint64
 	routeStats func() node.RouteStats
 	statsBase  node.RouteStats
 	sf         uint8 // spreading factor, for the rx-delay packet score (0 = unknown)
 
-	// Signal + airtime, for the over-mesh STATUS response. lastRSSI/lastSNRx4
-	// are the last heard values (SNR in firmware quarter-dB); noise floor is
-	// derived as rssi-snr. rx/txAirtimeMs accumulate estimated LoRa time-on-air
-	// for packets heard / relayed. airtime is the ToA estimator (nil when radio
-	// params are unknown); set once at construction, before the node is live.
+	// Last heard signal and accumulated airtime; airtime is nil when the radio params are unknown, and is set before the node is live.
 	lastRSSI    atomic.Int32
 	lastSNRx4   atomic.Int32
 	haveSignal  atomic.Bool
@@ -74,8 +58,7 @@ type Repeater struct {
 	airtime     func(packetLen int) uint32
 	logging     atomic.Bool // `log start/stop` — per-packet trace to the bot log
 
-	// Device readings polled from the shared modem (noise floor + battery), for
-	// the STATUS response and telemetry. Cached; refreshed by deviceStatsLoop.
+	// Cached modem readings, refreshed by deviceStatsLoop.
 	noiseFloor      atomic.Int32
 	batteryMV       atomic.Uint32
 	haveDeviceStats atomic.Bool
@@ -83,22 +66,17 @@ type Repeater struct {
 	mcuTempC        atomic.Int32 // tenths of a degree C
 	haveMCUTemp     atomic.Bool
 
-	// reconfigure applies an over-mesh CLI config change (set/password/region):
-	// persist + validate + reload. nil disables config writes. Called off the
-	// dispatch path (it restarts this node).
+	// reconfigure persists + validates + reloads a config change; nil disables config writes, and it restarts this node so it must stay off the dispatch path.
 	reconfigure func(mutate func(*config.RepeaterConfig)) error
 
-	// discover tracks an in-flight `discover.neighbors` request: responses whose
-	// tag matches (within the window) are recorded as neighbours.
+	// discover tracks an in-flight `discover.neighbors` request; responses matching the tag inside the window become neighbours.
 	discover struct {
 		sync.Mutex
 		tag   uint32
 		until time.Time
 	}
 
-	// anonLimiter / discoverLimiter gate our unauthenticated replies (firmware
-	// anon_limiter 4 per 3min for the anon sub-requests, discover_limiter 4 per
-	// 2min for discovery responses) so a spammer can't turn us into a beacon.
+	// Gate unauthenticated replies (firmware anon_limiter / discover_limiter) so a spammer can't turn us into a beacon.
 	anonLimiter     *rateLimiter
 	discoverLimiter *rateLimiter
 
@@ -107,19 +85,13 @@ type Repeater struct {
 		m map[[32]byte]*neighbor
 	}
 
-	// routes caches each admin client's return path, learned from its flood
-	// login (the accumulated path hashes). Direct-request replies route along
-	// it; unknown clients get a flooded reply. In-memory only — relearned on
-	// the next flood login after a restart, so it needs no persistence.
+	// routes caches each admin client's return path from its flood login; an unknown client gets a flooded reply, so a restart just relearns.
 	routes struct {
 		sync.Mutex
 		m map[[32]byte]clientRoute
 	}
 
-	// acl mirrors the persisted admin-client ACL in memory so the packet path
-	// (aclClient runs on ~1/256 of all TXT/REQ traffic — anything colliding with
-	// our destination-hash prefix) never hits the DB. Write-through:
-	// aclPut/aclDelete update the map and persist async; loaded at construction.
+	// acl mirrors the persisted ACL so the packet path never hits the DB; aclPut/aclDelete write through and persist async.
 	acl struct {
 		sync.RWMutex
 		m map[string]*store.RepeaterACLEntry // keyed by full pubkey hex
@@ -132,8 +104,7 @@ type Repeater struct {
 	runCtx context.Context
 }
 
-// uniqueTimestamp mirrors the firmware's getCurrentTimeUnique(): strictly
-// increasing across every timestamp we stamp on outgoing traffic.
+// uniqueTimestamp mirrors firmware getCurrentTimeUnique: strictly increasing across every timestamp we stamp on outgoing traffic.
 func (r *Repeater) uniqueTimestamp() uint32 {
 	for {
 		last := r.lastTS.Load()
@@ -144,8 +115,7 @@ func (r *Repeater) uniqueTimestamp() uint32 {
 	}
 }
 
-// reverseHops flips a received path into send order (the sender's neighbour
-// last); a flood request's accumulated path lists the client's neighbour first.
+// reverseHops flips a received path into send order: a flood request accumulates the client's neighbour first.
 func reverseHops(path []byte, hashSize uint8) []byte {
 	hs := int(hashSize)
 	if hs == 0 {
@@ -159,15 +129,11 @@ func reverseHops(path []byte, hashSize uint8) []byte {
 	return out
 }
 
-// Hooks are the app-provided callbacks the repeater needs but can't build
-// itself (they reach into the config/reload machinery and the modem). Kept as a
-// struct so the node stays decoupled from those packages (plain func fields).
+// Hooks are the app-provided callbacks the repeater can't build itself.
 type Hooks struct {
-	// Reconfigure persists + validates + reloads a repeater config change (the
-	// over-mesh CLI set/password/region commands). nil disables config writes.
+	// Reconfigure persists + validates + reloads a config change; nil disables config writes.
 	Reconfigure func(mutate func(*config.RepeaterConfig)) error
-	// PollStats reads the shared modem's device stats. nil when unavailable
-	// (those STATUS/telemetry fields then stay 0).
+	// PollStats reads the shared modem's device stats; nil leaves those fields 0.
 	PollStats func(ctx context.Context) DeviceStats
 }
 
@@ -200,9 +166,7 @@ func NewRepeater(cfg config.RepeaterConfig, mux *node.RadioMux, st *store.Store,
 	r.anonLimiter = newRateLimiter(4, 3*time.Minute)     // firmware anon_limiter(4, 180)
 	r.discoverLimiter = newRateLimiter(4, 2*time.Minute) // firmware discover_limiter(4, 120)
 	r.aclLoad()                                          // seed the ACL cache from the DB before handlers register
-	// Build the LoRa time-on-air estimator from the shared radio settings, the
-	// same way the modem does. Set before the node goes live so the raw handler
-	// and allowForward (both airtime accumulators) never see a torn value.
+	// Set before the node goes live so neither airtime accumulator sees a torn value.
 	r.airtime, r.sf = buildAirtimeEstimator(st)
 
 	opts := []node.Option{
@@ -212,15 +176,10 @@ func NewRepeater(cfg config.RepeaterConfig, mux *node.RadioMux, st *store.Store,
 		node.WithDirectRetransmitDelay(r.directRelayDelay),
 		node.WithRxDelay(r.rxDelay),
 		node.WithExtraAckTransmitCount(r.extraAcks),
-		// The relay policy — this is what makes the node a repeater. A node
-		// with no allowForward handler never relays (the router's canForward
-		// returns false), which is why a companion doesn't forward.
+		// A node with no allowForward handler never relays — this is what makes it a repeater.
 		node.WithAllowForwardHandler(r.allowForward),
 	}
-	// Regions the repeater serves: named scopes' transport keys derive from the
-	// region name (SHA256(name)[:16]), matching the firmware. Adding them lets
-	// the repeater relay those scoped (transport-flood) packets via
-	// FindFloodMatch. The "*" wildcard governs plain unscoped flood separately.
+	// Registering named scopes is what lets FindFloodMatch relay their transport-flood packets.
 	named, wildcardFlags := regionsFromConfig(cfg.Regions)
 	if len(named) > 0 {
 		opts = append(opts, node.WithRegions(named...))
@@ -234,11 +193,7 @@ func NewRepeater(cfg config.RepeaterConfig, mux *node.RadioMux, st *store.Store,
 	return r, nil
 }
 
-// buildAirtimeEstimator builds a LoRa time-on-air estimator from the shared
-// radio Settings, mirroring how the modem builds its own. Returns nil when the
-// radio params aren't set (no relaying happens without them, so airtime stays
-// 0). Used to accumulate rx/tx airtime for the over-mesh STATUS response.
-// Also returns the spreading factor, which the rx-delay packet score needs.
+// buildAirtimeEstimator returns a nil estimator and SF 0 when the radio params aren't set.
 func buildAirtimeEstimator(st *store.Store) (func(int) uint32, uint8) {
 	s, err := st.Settings.Get(context.Background())
 	if err != nil || s.Freq == nil || s.BW == nil || s.SF == nil || s.CR == nil {
@@ -252,8 +207,7 @@ func buildAirtimeEstimator(st *store.Store) (func(int) uint32, uint8) {
 	}), uint8(*s.SF)
 }
 
-// runContext guards the nil r.runCtx window: node.New registers the radio
-// handler inside NewRepeater, so CLI traffic can arrive before Start.
+// runContext guards the nil r.runCtx window: node.New registers the radio handler in NewRepeater, so traffic can arrive before Start.
 func (r *Repeater) runContext() context.Context {
 	r.mu.Lock()
 	defer r.mu.Unlock()
@@ -271,8 +225,6 @@ func (r *Repeater) Start(ctx context.Context) error {
 	r.startedAt = time.Now()
 	r.mu.Unlock()
 
-	// advertLoop announces on start and runs both the zero-hop and flood
-	// schedules; each is independently disabled by a 0 interval.
 	go r.advertLoop(ctx)
 	if r.pollStats != nil {
 		go r.deviceStatsLoop(ctx)
@@ -282,10 +234,7 @@ func (r *Repeater) Start(ctx context.Context) error {
 	return nil
 }
 
-// deviceStatsLoop refreshes the cached noise floor + battery from the shared
-// modem (pollStats blocks ~500ms, so it can't run on the packet path). Polled
-// periodically since STATUS/telemetry requests are infrequent and these values
-// vary slowly.
+// deviceStatsLoop refreshes the cached readings because pollStats blocks ~500ms and can't run on the packet path.
 func (r *Repeater) deviceStatsLoop(ctx context.Context) {
 	const interval = 60 * time.Second
 	refresh := func() {
@@ -324,13 +273,7 @@ func (r *Repeater) Stop() error {
 	return nil
 }
 
-// regionsFromConfig splits the config regions into the named transport scopes
-// and the "*" wildcard scope (plain unscoped flood). Named scopes derive their
-// transport key from the name (SHA256(name)[:16] — firmware getAutoKeyFor, not
-// the '#'-prefixed hashtag scheme). The wildcard is returned as flags for the
-// node's built-in wildcard region: a "*" entry maps to its DenyFlood, and no
-// "*" entry means unscoped flood is NOT relayed (the entry was deleted). "*" is
-// never a named region, so it's excluded from the returned slice.
+// regionsFromConfig derives each named scope's key from its name (SHA256(name)[:16], firmware getAutoKeyFor); "*" is never a named region.
 func regionsFromConfig(cfg []config.RepeaterRegion) (named []*meshcore.Region, wildcardFlags uint8) {
 	wildcardFlags = meshcore.RegionDenyFlood // no "*" entry ⇒ don't relay unscoped flood
 	for _, rg := range cfg {
@@ -351,11 +294,7 @@ func regionsFromConfig(cfg []config.RepeaterRegion) (named []*meshcore.Region, w
 	return named, wildcardFlags
 }
 
-// ApplyRegions updates the running node's region set (and default advert
-// scope) in place. The reload path uses it when ONLY regions/default-region
-// changed, so such an edit doesn't restart the node (a restart would wipe the
-// neighbour list, learned routes and relay counters). It reconciles the live
-// RegionMap and the config snapshot that regionList/regionHas read.
+// ApplyRegions updates regions in place so a region-only edit doesn't restart the node and wipe neighbours, routes and counters.
 func (r *Repeater) ApplyRegions(regions []config.RepeaterRegion, defaultRegion, homeRegion string) {
 	named, wildcardFlags := regionsFromConfig(regions)
 	rm := r.node.Regions()
@@ -365,9 +304,7 @@ func (r *Repeater) ApplyRegions(regions []config.RepeaterRegion, defaultRegion, 
 	for _, rg := range named {
 		want[rg.Name] = rg
 	}
-	// Drop regions no longer wanted; a deny-flood change is a remove+re-add (the
-	// RegionMap has no in-place flag setter, and mutating a returned *Region
-	// would race FindFloodMatch on the packet path).
+	// A deny-flood change is remove+re-add: mutating a returned *Region would race FindFloodMatch on the packet path.
 	for _, cur := range rm.All() {
 		w, keep := want[cur.Name]
 		if !keep {
@@ -393,8 +330,7 @@ func (r *Repeater) ApplyRegions(regions []config.RepeaterRegion, defaultRegion, 
 
 func (r *Repeater) Name() string { return r.cfg.Name }
 
-// rateLimiter is a sliding-window limiter mirroring the firmware's Limiter
-// helper: at most max allows per window. A nil limiter never blocks (tests).
+// rateLimiter mirrors the firmware Limiter: max allows per sliding window, and a nil limiter never blocks.
 type rateLimiter struct {
 	mu     sync.Mutex
 	stamps []time.Time
@@ -427,9 +363,7 @@ func (l *rateLimiter) allow() bool {
 	return true
 }
 
-// DeviceStats are the shared modem's board readings, polled for the over-mesh
-// STATUS and telemetry replies. HaveMCUTemp is false when the board can't
-// measure a temperature, so 0 °C isn't mistaken for a reading.
+// DeviceStats are the shared modem's board readings; HaveMCUTemp false means the board can't measure, not 0 °C.
 type DeviceStats struct {
 	NoiseFloor  int16
 	BatteryMV   uint16

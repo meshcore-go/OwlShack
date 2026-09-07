@@ -14,13 +14,9 @@ import (
 	"github.com/meshcore-go/meshcore-go/node"
 )
 
-// The repeater is a singleton (at most one runs — a radio hosts one relay
-// identity), so its lifecycle is a simple start/stop/reconcile rather than the
-// diff-based set reconciliation companions need.
+// At most one repeater runs — a radio hosts one relay identity — so the lifecycle is start/stop, not set reconciliation.
 
-// effectiveRepeaterConfig resolves the inherited settings into the repeater's
-// own block, so the node reads only its own fields and a change to a global
-// default shows up in the reload diff.
+// effectiveRepeaterConfig resolves inherited settings into the block, so a change to a global default shows in the reload diff.
 func effectiveRepeaterConfig(cfg *config.Config) *config.RepeaterConfig {
 	if cfg.Repeater == nil {
 		return nil
@@ -58,17 +54,13 @@ func stopRepeater(rep *repeater.Repeater) {
 	}
 }
 
-// reloadRepeater reconciles the running repeater with newCfg: an unchanged
-// block keeps the running instance (no relay gap, no re-advert); otherwise the
-// old one is stopped and the new one (if any) started.
+// reloadRepeater keeps the running instance on an unchanged block: no relay gap, no re-advert.
 func reloadRepeater(ctx context.Context, oldCfg, newCfg *config.Config, running *repeater.Repeater, mux *node.RadioMux, db *store.Store, hub *api.Hub, stats modem.StatsProvider, reload func() error) (*repeater.Repeater, error) {
 	// reflect.DeepEqual handles nil/one-nil/deep on the two *RepeaterConfig.
 	if running != nil && oldCfg != nil && reflect.DeepEqual(effectiveRepeaterConfig(oldCfg), effectiveRepeaterConfig(newCfg)) {
 		return running, nil
 	}
-	// Region-only change: apply it to the live node instead of restarting, so
-	// the neighbour list, learned routes and relay counters survive (region
-	// edits are frequent — every add/remove/deny-flood toggle from the UI).
+	// Region-only change: apply it live so the neighbour list, learned routes and relay counters survive.
 	if running != nil && oldCfg != nil && onlyRegionsDiffer(effectiveRepeaterConfig(oldCfg), effectiveRepeaterConfig(newCfg)) {
 		running.ApplyRegions(newCfg.Repeater.Regions, newCfg.Repeater.DefaultRegion, newCfg.Repeater.HomeRegion)
 		return running, nil
@@ -77,9 +69,7 @@ func reloadRepeater(ctx context.Context, oldCfg, newCfg *config.Config, running 
 	return startRepeater(ctx, newCfg, mux, db, hub, stats, reload)
 }
 
-// onlyRegionsDiffer reports whether a and b are identical apart from their
-// Regions / DefaultRegion / HomeRegion — the changes the reload path can
-// apply live (no node restart).
+// onlyRegionsDiffer reports the differences the reload path can apply live, without restarting the node.
 func onlyRegionsDiffer(a, b *config.RepeaterConfig) bool {
 	if a == nil || b == nil {
 		return false
@@ -91,9 +81,7 @@ func onlyRegionsDiffer(a, b *config.RepeaterConfig) bool {
 	return reflect.DeepEqual(x, y)
 }
 
-// statsPoller adapts the modem's device-stats provider to the plain func the
-// repeater node consumes (keeps the node package decoupled from modem). nil
-// provider → nil poller (noise floor / battery stay 0).
+// statsPoller maps a nil provider to a nil poller, leaving noise floor and battery at 0.
 func statsPoller(stats modem.StatsProvider) func(context.Context) repeater.DeviceStats {
 	if stats == nil {
 		return nil
@@ -109,13 +97,7 @@ func statsPoller(stats modem.StatsProvider) func(context.Context) repeater.Devic
 	}
 }
 
-// repeaterReconfigurer returns the callback the repeater node uses to apply an
-// over-mesh CLI `set`/`password`/`region` change: it loads the current config,
-// applies the mutation to the repeater block, validates the WHOLE config (the
-// crash guard — a bad value is rejected before it persists), writes it back,
-// then triggers a reload so the running node picks it up. Mirrors configMutate
-// but scoped to the repeater block. Runs on its own goroutine (the node calls
-// it off its dispatch path), so the reload's node-restart can't deadlock.
+// repeaterReconfigurer applies an over-mesh CLI change; the node calls it off its dispatch path, so the reload's node restart can't deadlock.
 func repeaterReconfigurer(db *store.Store, reload func() error) func(func(*config.RepeaterConfig)) error {
 	return func(mutate func(*config.RepeaterConfig)) error {
 		ctx := context.Background()

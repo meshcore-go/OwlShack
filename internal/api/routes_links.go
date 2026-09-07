@@ -12,8 +12,7 @@ import (
 	"github.com/meshcore-go/OwlShack/internal/store"
 )
 
-// linkMonitorKey derives the synthetic 32-byte key a link monitor is polled
-// under (see internal/app's link collector).
+// linkMonitorKey derives the synthetic 32-byte key a link monitor is polled under.
 func linkMonitorKey(companionID int64, pathHashSize uint8, path []byte) []byte {
 	h := sha256.New()
 	fmt.Fprintf(h, "link|%d|%d|%x", companionID, pathHashSize, path)
@@ -56,10 +55,7 @@ func (s *Server) toLinkMonitorJSON(ctx context.Context, l store.LinkMonitor) lin
 	}
 }
 
-// validateLinkRetry ensures a link's retry span (delay × max retries) fits
-// within its poll interval. Only applies when maxRetries is explicitly
-// positive — 0 (default) or negative ("no retries") never schedule a fast
-// retry, so there's nothing to validate.
+// validateLinkRetry keeps delay × maxRetries inside the poll interval; only a positive maxRetries retries.
 func validateLinkRetry(intervalSecs, retrySecs, maxRetries int) error {
 	if maxRetries <= 0 {
 		return nil
@@ -196,8 +192,7 @@ type updateLinkRequest struct {
 	HideLastSnr    *bool   `json:"hideLastSnr"`
 }
 
-// handleUpdateLink patches a link monitor's settings. Takes effect on the
-// monitor engine's next scheduling tick — no restart.
+// handleUpdateLink takes effect on the monitor engine's next scheduling tick, without a restart.
 func (s *Server) handleUpdateLink(w http.ResponseWriter, r *http.Request) {
 	lm, ok := s.linkMonitorByID(w, r)
 	if !ok {

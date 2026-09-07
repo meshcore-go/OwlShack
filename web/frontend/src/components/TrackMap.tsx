@@ -10,13 +10,11 @@ export interface TrackPoint {
   alt?: number;
 }
 
-// ALT_LOW/HIGH are the gradient endpoints used to colour the track by altitude
-// (blue = low → green = high); the legend mirrors them.
+// Gradient endpoints for altitude colouring, blue low → green high; the legend mirrors them.
 const ALT_LOW = "hsl(220, 80%, 55%)";
 const ALT_HIGH = "hsl(110, 80%, 55%)";
 
-// altColor maps a normalized altitude (0 low … 1 high) onto the ALT_LOW→ALT_HIGH
-// ramp. When a track has no altitude data, segments use the midpoint colour.
+// A track with no altitude data gets the midpoint colour.
 function altColor(t: number): string {
   const hue = 220 - 110 * Math.max(0, Math.min(1, t));
   return `hsl(${hue}, 80%, 55%)`;
@@ -31,9 +29,7 @@ function dotIcon(color: string, size: number): L.DivIcon {
   });
 }
 
-// TrackMap draws a node's GPS track as an altitude-coloured polyline with start
-// and current-position markers, auto-fitting the view to the path. Presentational:
-// the parent supplies the ordered points (lat/lon required, alt optional).
+// The parent supplies the ordered points; alt is optional.
 export function TrackMap({
   points,
   height = 300,
@@ -74,7 +70,6 @@ export function TrackMap({
 
   useThemeTiles(mapRef, tileRef);
 
-  // Redraw the track whenever the points (or altitude range) change.
   useEffect(() => {
     const map = mapRef.current;
     const layer = layerRef.current;

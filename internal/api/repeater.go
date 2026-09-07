@@ -38,8 +38,7 @@ func (s *Server) handleRepeaterLogin(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, result)
 }
 
-// handleRoomLogin logs in to a room server. When the body omits syncSince it
-// is derived from the newest stored post, so only unseen posts backfill.
+// handleRoomLogin derives syncSince from the newest stored post when the body omits it.
 func (s *Server) handleRoomLogin(w http.ResponseWriter, r *http.Request) {
 	name := r.PathValue("name")
 	ops, ok := s.repeaterOps(name)
@@ -98,9 +97,7 @@ func (s *Server) handleRoomStatus(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, res)
 }
 
-// handleRoomKeepAlive: body {since?} (unix secs; omit = the room's own cursor).
-// The room answers with a direct ACK and resumes its push stream; the posts
-// then arrive through the normal DM path, so there is nothing to return here.
+// handleRoomKeepAlive: body {since?} in unix secs, omitted = the room's own cursor; posts arrive over the DM path.
 func (s *Server) handleRoomKeepAlive(w http.ResponseWriter, r *http.Request) {
 	ops, ok := s.repeaterOps(r.PathValue("name"))
 	if !ok {
@@ -269,8 +266,7 @@ func (s *Server) handleRepeaterNeighbors(w http.ResponseWriter, r *http.Request)
 		return
 	}
 
-	// Default to 10 — the firmware's results buffer holds ~11 entries with a
-	// 6-byte prefix + 4 + 1 = 11-byte stride, so 10 is a safe ceiling per page.
+	// The firmware's results buffer holds ~11 entries at an 11-byte stride, so 10 is a safe page.
 	count := uint8(10)
 	if v := r.URL.Query().Get("count"); v != "" {
 		if n, err := strconv.ParseUint(v, 10, 8); err == nil && n > 0 {
@@ -385,9 +381,7 @@ func (s *Server) handleRepeaterTelemetry(w http.ResponseWriter, r *http.Request)
 	writeJSON(w, http.StatusOK, res)
 }
 
-// handleRepeaterSeries: ?from= and ?to= are seconds before now (from is the
-// older edge; default the last 24 h). Sensor firmware answers only for
-// read-only or better, so a guest session gets a timeout here.
+// handleRepeaterSeries: ?from=/?to= are seconds before now (from is older); the firmware ignores guest sessions.
 func (s *Server) handleRepeaterSeries(w http.ResponseWriter, r *http.Request) {
 	ops, ok := s.repeaterOps(r.PathValue("name"))
 	if !ok {

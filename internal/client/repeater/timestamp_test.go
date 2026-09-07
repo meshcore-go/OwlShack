@@ -2,8 +2,7 @@ package repeater
 
 import "testing"
 
-// TestUniqueTimestamp: every value is strictly greater than the last, even
-// within one wall-clock second (the firmware getCurrentTimeUnique contract).
+// Every value must be strictly greater than the last, even within one wall-clock second.
 func TestUniqueTimestamp(t *testing.T) {
 	rm := &Client{}
 	prev := rm.UniqueTimestamp()

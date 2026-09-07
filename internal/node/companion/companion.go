@@ -27,9 +27,7 @@ type triggerEntry struct {
 	channels []*meshcore.ChannelEntry
 }
 
-// groupTextHandler is implemented by triggers that react to group-text packets
-// (channel triggers). The companion's single GrpTxt dispatcher fans messages
-// out to these; non-implementers (e.g. cron triggers) are skipped.
+// groupTextHandler is implemented by triggers that react to group-text packets; non-implementers (e.g. cron) are skipped.
 type groupTextHandler interface {
 	HandleGroupText(*meshcore.Packet)
 }
@@ -43,7 +41,6 @@ type Companion struct {
 	templater *trigger.Templater
 	log       *slog.Logger
 
-	// Persistence & live updates
 	store *store.Store
 	hub   *api.Hub
 
@@ -58,16 +55,14 @@ type Companion struct {
 
 	traceWaiters traceWaiters
 
-	// -- Bot Triggers
 	triggers []triggerEntry
 
-	// MQTT Brokers - Out only
+	// MQTT: outbound only
 	obs *mqtt.Observer
 
 	mu     sync.Mutex
 	cancel context.CancelFunc
-	// runCtx is the context the triggers/observer were started with. Kept so
-	// ReloadTriggers can start freshly-built triggers without a full restart.
+	// runCtx is kept so ReloadTriggers can start new triggers without a full restart.
 	runCtx context.Context
 }
 
@@ -88,8 +83,7 @@ func NewCompanion(cfg config.CompanionConfig, mux *node.RadioMux, st *store.Stor
 	// Out-paths learned via path-returns only; appended last to set on the final table.
 	opts = append(opts, node.WithLearnedPathsOnly())
 
-	// Identities are pinned in the config (EnsureCompanionKeys fills empty
-	// ones before any config is persisted).
+	// Identities are pinned in the config; EnsureCompanionKeys fills empty ones before it is persisted.
 	id, err := identityFromHexSeed(cfg.PrivateKey)
 	if err != nil {
 		return nil, fmt.Errorf("companion identity: %w", err)
@@ -110,10 +104,7 @@ func NewCompanion(cfg config.CompanionConfig, mux *node.RadioMux, st *store.Stor
 		repeaters:   repeater.NewClient(n, st, cfg.ID, log),
 	}
 
-	// Register the companion's channels — the single source of truth for which
-	// channels this node listens on. Triggers reference these by name; they do
-	// not register channels themselves (ApplyDefaults guarantees every channel a
-	// trigger names is also in the companion's channel list).
+	// The companion's channels are the only ones this node listens on; triggers reference them by name and register none of their own.
 	if cfg.Channels != nil {
 		for i, chRef := range *cfg.Channels {
 			ch, err := channelFromRef(chRef)
@@ -124,14 +115,11 @@ func NewCompanion(cfg config.CompanionConfig, mux *node.RadioMux, st *store.Stor
 		}
 	}
 
-	// Build triggers. A channel trigger keeps a name filter (the channels it
-	// reacts to); decryption uses the companion channels registered above.
 	companion.triggers, err = companion.buildTriggers(cfg)
 	if err != nil {
 		return nil, err
 	}
 
-	// Register MQTT
 	if companion.cfg.Mqtt != nil {
 		mqttCfg := *companion.cfg.Mqtt
 
@@ -147,8 +135,7 @@ func NewCompanion(cfg config.CompanionConfig, mux *node.RadioMux, st *store.Stor
 	return companion, nil
 }
 
-// MqttStatus reports the connection state of this companion's MQTT brokers,
-// or ok=false when it isn't the node feeding MQTT.
+// MqttStatus reports this companion's MQTT broker state; ok=false when it isn't the node feeding MQTT.
 func (c *Companion) MqttStatus() ([]mqtt.BrokerStatus, bool) {
 	if c.obs == nil {
 		return nil, false
@@ -163,7 +150,6 @@ func (c *Companion) Start(ctx context.Context) error {
 	c.runCtx = ctx
 	c.mu.Unlock()
 
-	// Start triggers
 	for i, entry := range c.triggers {
 		e := entry
 		if err := e.trigger.Start(ctx, c.makeCallback(ctx, e)); err != nil {
@@ -172,7 +158,6 @@ func (c *Companion) Start(ctx context.Context) error {
 		}
 	}
 
-	// Start MQTT
 	if c.obs != nil {
 		obsErr := c.obs.Start(ctx)
 		if obsErr != nil {
@@ -180,7 +165,6 @@ func (c *Companion) Start(ctx context.Context) error {
 		}
 	}
 
-	// Start Advertising
 	if c.cfg.AdvertInterval == nil || *c.cfg.AdvertInterval != 0 {
 		go c.advertLoop(ctx)
 	}
@@ -195,12 +179,10 @@ func (c *Companion) Stop() error {
 	}
 	c.mu.Unlock()
 
-	// Stop Triggers
 	for _, trig := range c.triggers {
 		trig.trigger.Stop()
 	}
 
-	// Stop MQTT
 	if c.obs != nil {
 		c.obs.Stop()
 	}
@@ -213,9 +195,7 @@ func (c *Companion) Name() string {
 	return c.cfg.Name
 }
 
-// ID returns the companion's surrogate primary key, the stable key its history
-// (messages, contacts, conversations, blocks) is stored under — so a rename
-// (which only changes Name) keeps that history attached.
+// ID returns the surrogate primary key all of this companion's history is stored under, so a rename keeps it attached.
 func (c *Companion) ID() int64 {
 	return c.cfg.ID
 }
@@ -229,12 +209,9 @@ func (c *Companion) Node() *node.Node {
 	return c.node
 }
 
-// Repeaters exposes the companion's repeater manager for the API layer.
 func (c *Companion) Repeaters() *repeater.Client {
 	return c.repeaters
 }
 
-// Observer returns this companion's MQTT observer, or nil when it isn't the
-// feeding node. Callers use it to push what only the process knows: the TX
-// stream (from the modem's outbound handler) and the relay flag.
+// Observer returns this companion's MQTT observer, or nil when it isn't the feeding node.
 func (c *Companion) Observer() *mqtt.Observer { return c.obs }

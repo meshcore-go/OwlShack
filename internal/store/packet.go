@@ -13,20 +13,13 @@ import (
 
 const DefaultMaxPackets = 10000
 
-// PacketFieldsFromPkt returns the hex packet hash and hex hop-path of a parsed
-// packet. This is the single canonical derivation of those two values: the RX
-// path (packet logger), the API read path, and the migration backfill all go
-// through it (directly or via derivePacketFields) so the stored, broadcast,
-// and displayed forms can never drift.
+// PacketFieldsFromPkt is the single derivation of the hex packet hash and hop path, so stored, broadcast and displayed forms cannot drift.
 func PacketFieldsFromPkt(pkt *meshcore.Packet) (packetHash, path string) {
 	h := pkt.PacketHash()
 	return hex.EncodeToString(h[:]), hex.EncodeToString(pkt.Path)
 }
 
-// derivePacketFields is the raw-bytes form of PacketFieldsFromPkt, used where
-// no parsed packet is on hand (the migration backfill, and the Insert fallback
-// for callers that didn't pre-derive). Unparseable bytes yield empty strings
-// (still searchable as "").
+// derivePacketFields is the raw-bytes form of PacketFieldsFromPkt; unparseable bytes yield empty strings.
 func derivePacketFields(raw []byte) (packetHash, path string) {
 	pkt, err := meshcore.PacketFromBytes(raw)
 	if err != nil {
@@ -50,9 +43,7 @@ type PacketRecord struct {
 	PayloadType *uint8
 	SNR         *float64
 	RSSI        *int8
-	// PacketHash and Path are the indexed search columns. Callers that already
-	// parsed the packet should set them (via PacketFieldsFromPkt) to avoid a
-	// re-parse; Insert derives them from Raw when both are left empty.
+	// Set these via PacketFieldsFromPkt to avoid a re-parse; Insert derives them from Raw when both are empty.
 	PacketHash string
 	Path       string
 }
@@ -90,8 +81,7 @@ func (r *PacketRepo) List(ctx context.Context, limit, offset int, filter PacketF
 		args = append(args, *filter.PayloadType)
 	}
 	if q := strings.ToLower(strings.TrimSpace(filter.Search)); q != "" {
-		// packet_hash and path are stored as lowercase hex, so a lowercased
-		// needle makes instr() a case-insensitive substring match.
+		// packet_hash and path are lowercase hex, so a lowercased needle makes instr() case-insensitive.
 		where += " AND (instr(packet_hash, ?) > 0 OR instr(path, ?) > 0)"
 		args = append(args, q, q)
 	}

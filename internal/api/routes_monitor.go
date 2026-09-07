@@ -14,25 +14,15 @@ import (
 	"github.com/meshcore-go/OwlShack/internal/store"
 )
 
-// NodePoller is the monitor-service seam: triggering an immediate out-of-band
-// poll, and reading the current target set (which nodes have the monitor toggle
-// on). Implemented by *monitor.Service and installed via Server.SetPoller;
-// PollNow is the one monitoring write path (the rest are reads off the store).
+// NodePoller is the monitor-service seam, implemented by *monitor.Service and installed via Server.SetPoller.
 type NodePoller interface {
 	PollNow(ctx context.Context, pubkey []byte) error
 	Targets(ctx context.Context) ([]monitor.Target, error)
 }
 
-// Node monitoring read endpoints. Which nodes are monitored is toggled through
-// the existing contact-metadata PATCH (monitor / monitorIntervalSecs), so there
-// is no write endpoint here — these only expose the polled time-series data.
+// Monitoring is toggled through the contact-metadata PATCH, so these endpoints are read-only.
 
-// handleListMonitoredNodes returns one entry per node whose monitor toggle is
-// on (the poller's current target set), merged with the latest node_state
-// snapshot when one exists. Membership is decided by the toggle, not by polled
-// data: a freshly enrolled node appears immediately with zero timestamps and
-// empty metrics ("waiting for first poll"), and a node toggled off disappears
-// even though its node_state row is retained.
+// handleListMonitoredNodes lists the poller's target set, merged with the latest node_state snapshot.
 func (s *Server) handleListMonitoredNodes(w http.ResponseWriter, r *http.Request) {
 	poller := s.pollerRef()
 	if poller == nil {
@@ -69,9 +59,7 @@ func (s *Server) handleListMonitoredNodes(w http.ResponseWriter, r *http.Request
 	out := make([]nodeJSON, 0, len(targets))
 	for _, t := range targets {
 		key := hex.EncodeToString(t.Pubkey)
-		// Effective poll cadence: the target carries the contact's override, or
-		// 0 for the scheduler default. The UI derives its staleness threshold
-		// from this.
+		// The target carries the contact's override, or 0 for the scheduler default.
 		interval := monitor.DefaultIntervalSecs
 		if t.IntervalSecs > 0 {
 			interval = t.IntervalSecs
@@ -90,15 +78,11 @@ func (s *Server) handleListMonitoredNodes(w http.ResponseWriter, r *http.Request
 			n.LastError = st.LastError
 			if st.State != "" {
 				if err := json.Unmarshal([]byte(st.State), &n.Metrics); err != nil {
-					// Degrade to empty metrics rather than failing the list,
-					// but don't hide the corruption.
 					s.log.Warn("corrupt node_state snapshot", "pubkey", key, "error", err)
 				}
 			}
 		}
-		// A link's display name is its saved label, read live — node_state.name
-		// is only a snapshot from the last poll, so a rename would otherwise
-		// stay invisible until the next scheduled poll.
+		// node_state.name is only a snapshot from the last poll, so read a link's label live.
 		if t.Kind == "link" {
 			if lm, err := s.store.LinkMonitors.GetByKey(r.Context(), t.Pubkey); err == nil && lm != nil && lm.Label != "" {
 				n.Name = lm.Label
@@ -106,16 +90,14 @@ func (s *Server) handleListMonitoredNodes(w http.ResponseWriter, r *http.Request
 				n.Name = "link"
 			}
 		} else if n.Name == "" {
-			// node_state only learns the name from a successful poll; fall back
-			// to the discovered-peers table so an unpolled node isn't nameless.
+			// node_state only learns the name from a successful poll, so an unpolled node needs a fallback.
 			if p, err := s.store.Peers.GetByPubKey(r.Context(), t.Pubkey); err == nil && p != nil {
 				n.Name = p.Name
 			}
 		}
 		out = append(out, n)
 	}
-	// Stable order regardless of lister map iteration: name (case-insensitive),
-	// pubkey as tiebreaker for unnamed nodes.
+	// Stable order regardless of the lister's map iteration.
 	slices.SortFunc(out, func(a, b nodeJSON) int {
 		if c := strings.Compare(strings.ToLower(a.Name), strings.ToLower(b.Name)); c != 0 {
 			return c
@@ -125,18 +107,10 @@ func (s *Server) handleListMonitoredNodes(w http.ResponseWriter, r *http.Request
 	writeJSON(w, http.StatusOK, out)
 }
 
-// neighborLinkFreshness bounds how old a neighbour sample can be and still
-// count as a "current" link on the map. The default poll interval is 6h, so
-// 24h tolerates a few missed/retried cycles before a link is considered gone.
+// neighborLinkFreshness: the default poll interval is 6h, so 24h tolerates a few missed cycles.
 const neighborLinkFreshness = 24 * time.Hour
 
-// handleListNeighborLinks returns the current repeater-to-repeater neighbour
-// topology, with both ends pre-resolved to name/lat/lon so the frontend can
-// draw map lines without further lookups. Each monitored repeater reports its
-// own one-way view of a neighbour's SNR; when two monitored repeaters see each
-// other, the two directional samples are merged into a single entry carrying
-// both SNR values. Links missing a resolvable, located peer on either end are
-// omitted (nothing useful to draw).
+// handleListNeighborLinks merges the two one-way neighbour views into one entry, dropping unlocatable ends.
 func (s *Server) handleListNeighborLinks(w http.ResponseWriter, r *http.Request) {
 	since := time.Now().Add(-neighborLinkFreshness).Unix()
 	rows, err := s.store.Metrics.ListLatestNeighbors(r.Context(), since)
@@ -211,9 +185,7 @@ func (s *Server) handleListNeighborLinks(w http.ResponseWriter, r *http.Request)
 		if n.TS > link.TS {
 			link.TS = n.TS
 		}
-		// n.SNR is the SNR at which the observer (`from`) last heard the
-		// neighbour (`to`) — i.e. the to→from direction. So an A observation
-		// is the B→A link, and a B observation is the A→B link.
+		// n.SNR is how well the observer heard the neighbour, so it is the to→from direction.
 		if fromIsA {
 			link.SNRBtoA = n.SNR
 		} else {
@@ -237,8 +209,7 @@ func (s *Server) handleListNeighborLinks(w http.ResponseWriter, r *http.Request)
 	writeJSON(w, http.StatusOK, out)
 }
 
-// handleListNodeMetricNames returns the distinct metric names recorded for a
-// node, so the frontend can populate a metric picker.
+// handleListNodeMetricNames returns the distinct metric names recorded for a node.
 func (s *Server) handleListNodeMetricNames(w http.ResponseWriter, r *http.Request) {
 	pubkey, err := hex.DecodeString(r.PathValue("pubkey"))
 	if err != nil || len(pubkey) == 0 {
@@ -256,9 +227,7 @@ func (s *Server) handleListNodeMetricNames(w http.ResponseWriter, r *http.Reques
 	writeJSON(w, http.StatusOK, names)
 }
 
-// handleNodeHistory returns a single metric's time-series for a node, averaged
-// into fixed-width buckets. Query params: metric (required), from/to (unix
-// seconds, optional), bucket (seconds, optional — default 300 / 5 min).
+// handleNodeHistory takes metric (required), from/to (unix seconds) and bucket (seconds, default 300).
 func (s *Server) handleNodeHistory(w http.ResponseWriter, r *http.Request) {
 	pubkey, err := hex.DecodeString(r.PathValue("pubkey"))
 	if err != nil || len(pubkey) == 0 {
@@ -287,10 +256,7 @@ func (s *Server) handleNodeHistory(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, points)
 }
 
-// handlePollNode triggers an immediate poll of a node, bypassing the schedule.
-// Used by the per-node "poll" button. Blocks until the poll completes (RF
-// round-trips take a few seconds); on success the fresh metrics are pushed over
-// the "metrics" WS topic, so the caller just needs to react to that.
+// handlePollNode blocks for the RF round-trip; fresh metrics arrive on the "metrics" WS topic.
 func (s *Server) handlePollNode(w http.ResponseWriter, r *http.Request) {
 	pubkey, err := hex.DecodeString(r.PathValue("pubkey"))
 	if err != nil || len(pubkey) == 0 {

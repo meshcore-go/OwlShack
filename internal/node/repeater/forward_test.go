@@ -2,9 +2,7 @@ package repeater
 
 import "testing"
 
-// loopThreshold values are ported from the firmware's max_loop_* tables
-// (examples/simple_repeater MyMesh.cpp). Pin them so a transcription slip is
-// caught — a wrong threshold silently changes relay behaviour on the air.
+// Pin the firmware's max_loop_* tables (examples/simple_repeater MyMesh.cpp); a wrong threshold silently changes on-air relay behaviour.
 func TestLoopThreshold(t *testing.T) {
 	cases := []struct {
 		level string

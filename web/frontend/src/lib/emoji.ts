@@ -1,6 +1,4 @@
-// Lazy-loaded emoji-mart data + search. The dataset is large, so it's
-// dynamic-imported on first use (picker open or ":" autocomplete) and kept out
-// of the initial bundle. init() is idempotent and shared app-wide.
+// emoji-mart's dataset is large; dynamic-importing it keeps it out of the initial bundle.
 let initPromise: Promise<void> | null = null;
 
 export function ensureEmojiInit(): Promise<void> {
@@ -28,9 +26,7 @@ interface RawEmoji {
   skins?: { native?: string }[];
 }
 
-// Record an emoji use into emoji-mart's frequently-used store (localStorage), so
-// the picker's "Frequently used" reflects real usage. The picker tracks its own
-// selections; this covers the inline ":" autocomplete path.
+// The picker records its own selections; this covers the inline ":" autocomplete path.
 export async function trackEmojiUse(id: string): Promise<void> {
   if (!id) return;
   await ensureEmojiInit();
@@ -38,7 +34,6 @@ export async function trackEmojiUse(id: string): Promise<void> {
   FrequentlyUsed.add({ id });
 }
 
-// Headless shortcode/keyword search for the inline ":" autocomplete.
 export async function searchEmojis(query: string, limit = 8): Promise<EmojiHit[]> {
   await ensureEmojiInit();
   const { SearchIndex } = await import("emoji-mart");

@@ -35,9 +35,7 @@ func (cl *ChannelList) UnmarshalJSON(data []byte) error {
 			result = append(result, ChannelRef{Name: s})
 			continue
 		}
-		// Decode into a tag-equivalent struct: ChannelRef implements
-		// encoding.TextUnmarshaler (for TOML string entries), which makes
-		// encoding/json demand a string and reject the object form.
+		// ChannelRef's TextUnmarshaler (for TOML strings) makes encoding/json reject the object form.
 		var ref struct {
 			Name       string `json:"name"`
 			PrivateKey string `json:"privateKey"`
@@ -76,30 +74,22 @@ func (cl *ChannelList) UnmarshalYAML(value *yaml.Node) error {
 }
 
 type Config struct {
-	// Logging
 	LogLevel *string `json:"logLevel" yaml:"logLevel" toml:"logLevel"`
 
-	// ConnectionType selects the radio backend. "kiss" today; extensible
-	// (e.g. "sx1262_hat") later. Empty defaults to "kiss".
+	// ConnectionType selects the radio backend; empty defaults to "kiss".
 	ConnectionType *string `json:"connectionType,omitempty" yaml:"connectionType,omitempty" toml:"connectionType,omitempty"`
 
 	// Connection Settings (KISS modem)
 	Connection *string `json:"connection" yaml:"connection" toml:"connection"` // serial://<path> or tcp://<host:port>
 	BaudRate   *int    `json:"baudRate" yaml:"baudRate" toml:"baudRate"`       // Default 115200 if using serial
 
-	// Radio Settings
 	Freq *float64 `json:"freq" yaml:"freq" toml:"freq"` // e.g. 917.375
 	Bw   *float64 `json:"bw" yaml:"bw" toml:"bw"`       // e.g. 62.50
 	SF   *uint8   `json:"sf" yaml:"sf" toml:"sf"`       // e.g. 7
 	CR   *uint8   `json:"cr" yaml:"cr" toml:"cr"`       // e.g. 8
 	TX   *uint8   `json:"tx" yaml:"tx" toml:"tx"`       // TX Power e.g. 22
 
-	// PathHashSize is the default per-hop path hash width in BYTES for the flood
-	// packets our nodes originate — a regional convention (the official radio
-	// presets carry it, e.g. NZ Narrow and Hungary run 2 bytes). Companions and
-	// the repeater inherit it unless they set their own. nil == 1 byte.
-	// The firmware's `path.hash.mode` is this minus one; convert at that
-	// boundary, never store the mode.
+	// Default per-hop path hash width in BYTES for floods we originate; nil == 1. The firmware's `path.hash.mode` is this minus one.
 	PathHashSize *int `json:"pathHashSize,omitempty" yaml:"pathHashSize,omitempty" toml:"pathHashSize,omitempty"`
 
 	// Web UI
@@ -107,35 +97,21 @@ type Config struct {
 	// https://carto.com/basemaps/apikey/
 	MapTileKey *string `json:"mapTileKey" yaml:"mapTileKey" toml:"mapTileKey"`
 
-	// DutyCycle caps how much of each hour we may spend transmitting,
-	// as a PERCENTAGE — the same unit the firmware's `set dutycycle` takes,
-	// and the same unit it reports back. The library wants an inverted
-	// "airtime factor" instead (factor = 100/pct - 1, so a SMALLER factor is a
-	// HIGHER duty cycle); that inversion is confusing enough that it is
-	// converted only at the edge, in AirtimeFactorOr. nil = the library
-	// default, which is factor 1.0 = 50%, matching every firmware role.
+	// PERCENTAGE, as the firmware's `set dutycycle` takes it; the library's inverted airtime factor is derived in AirtimeFactorOr. nil = 50%.
 	DutyCycle *float64 `json:"dutyCycle,omitempty" yaml:"dutyCycle,omitempty" toml:"dutyCycle,omitempty"`
 
-	// SetupComplete is nil/false until the first-run web wizard finishes. A
-	// fresh bootstrap leaves it false (so the UI shows the setup wizard);
-	// imported configs are marked complete. Lets us tell "never configured"
-	// apart from "deliberately observer-only" when there are no companions.
+	// nil/false until the first-run wizard finishes: tells "never configured" from "deliberately observer-only".
 	SetupComplete *bool `json:"setupComplete,omitempty" yaml:"setupComplete,omitempty" toml:"setupComplete,omitempty"`
 
 	// MQTT observer. Exactly one node feeds MQTT (Mqtt.Node selects it).
 	Mqtt *MqttConfig `json:"mqtt,omitempty" yaml:"mqtt,omitempty" toml:"mqtt,omitempty"`
 
-	// Companions
 	Companions []CompanionConfig `json:"companions" yaml:"companions" toml:"companion"`
 
-	// Repeater is the optional repeater node the bot runs on the mesh (relay +
-	// advert + admin surface). At most one: multiple repeaters sharing one
-	// radio would just relay each other's transmissions. nil == no repeater.
+	// At most one: two repeaters sharing one radio would just relay each other. nil == no repeater.
 	Repeater *RepeaterConfig `json:"repeater,omitempty" yaml:"repeater,omitempty" toml:"repeater,omitempty"`
 
-	// Legacy import aliases from the pre-relational "main" deployment format
-	// (nodeType / [[bot]] / [[observer]]). migrateLegacyFormat folds these into
-	// ConnectionType / Companions / Mqtt and clears them — see legacy.go.
+	// Legacy pre-relational aliases; migrateLegacyFormat folds and clears them (legacy.go).
 	NodeType  *string          `json:"nodeType,omitempty" yaml:"nodeType,omitempty" toml:"nodeType,omitempty"`
 	Bots      []BotConfig      `json:"bots,omitempty" yaml:"bots,omitempty" toml:"bot,omitempty"`
 	Observers []legacyObserver `json:"observers,omitempty" yaml:"observers,omitempty" toml:"observer,omitempty"`
@@ -164,19 +140,12 @@ func DefaultConfig() Config {
 // PublicChannelName is the well-known public channel every companion joins.
 const PublicChannelName = "Public"
 
-// ensureTriggerChannels guarantees every channel a trigger references also
-// exists in the companion's channel list. Channels are owned at the companion
-// level; triggers only reference them by name. This keeps the model consistent
-// and migrates older configs where a trigger named a channel the companion's
-// channel list didn't include. A referenced channel's private key (if any) is
-// carried over so encrypted channels keep working.
+// ensureTriggerChannels copies trigger-referenced channels (and their keys) into the companion's list, which owns them.
 func ensureTriggerChannels(comp *CompanionConfig) {
 	if comp.Triggers == nil {
 		return
 	}
-	// Channel names are case-sensitive: a hashtag channel's key is SHA256 of the
-	// exact "#name", so "#Foo" and "#foo" are different channels on the air
-	// (matches the firmware and meshcore-go, which never case-fold names).
+	// Channel names are case-sensitive: the key is SHA256 of the exact "#name".
 	have := map[string]bool{}
 	if comp.Channels != nil {
 		for _, ch := range *comp.Channels {
@@ -201,8 +170,6 @@ func ensureTriggerChannels(comp *CompanionConfig) {
 }
 
 // ensurePublicChannel guarantees a companion is a member of the public channel.
-// Every companion must be in Public; this normalises configs from the wizard,
-// the add-companion form, imports, and hand-crafted PUTs alike.
 func ensurePublicChannel(comp *CompanionConfig) {
 	if comp.Channels == nil {
 		comp.Channels = &ChannelList{{Name: PublicChannelName}}
@@ -217,14 +184,11 @@ func ensurePublicChannel(comp *CompanionConfig) {
 }
 
 func (c *Config) ApplyDefaults() {
-	// Fold pre-relational legacy keys (nodeType / [[bot]] / [[observer]]) into the
-	// current fields first, so the folded companions/mqtt go through the normal
-	// normalization below (Public channel, key generation, topicPrefix migration).
+	// Fold legacy keys first so the folded companions/mqtt go through the normalization below.
 	c.migrateLegacyFormat()
 
 	defaults := DefaultConfig()
-	// Normalise to a non-nil slice so JSON serialises companions as [] not
-	// null; the frontend (and its TS contract) treats companions as an array.
+	// Non-nil so JSON serialises companions as [] not null; the TS contract expects an array.
 	if c.Companions == nil {
 		c.Companions = []CompanionConfig{}
 	}
@@ -232,9 +196,7 @@ func (c *Config) ApplyDefaults() {
 		kiss := "kiss"
 		c.ConnectionType = &kiss
 	}
-	// nil and false both mean "setup not finished" (only true matters); pin it to
-	// false so the value is representable in the relational schema and consistent
-	// across GET/DB/runtime.
+	// Pin nil to false so the value is representable in the relational schema.
 	if c.SetupComplete == nil {
 		f := false
 		c.SetupComplete = &f
@@ -261,8 +223,7 @@ func (c *Config) ApplyDefaults() {
 		c.TX = defaults.TX
 	}
 
-	// Migrate legacy per-companion mqtt blocks to the single top-level block:
-	// the first one wins and its companion becomes the selected node.
+	// Hoist legacy per-companion mqtt: the first wins and its companion becomes the selected node.
 	for i := range c.Companions {
 		comp := &c.Companions[i]
 		ensureTriggerChannels(comp)
@@ -299,9 +260,7 @@ func UnmarshalConfigJson(data []byte) (*Config, error) { return unmarshalConfig(
 func UnmarshalConfigYaml(data []byte) (*Config, error) { return unmarshalConfig(data, yaml.Unmarshal) }
 func UnmarshalConfigToml(data []byte) (*Config, error) { return unmarshalConfig(data, toml.Unmarshal) }
 
-// AirtimeFactorOr converts the configured duty-cycle percentage into the
-// library's airtime factor. Mirrors the firmware's
-// `airtime_factor = (100/dc) - 1` (CommonCLI.cpp handleSetCmd "dutycycle").
+// AirtimeFactorOr mirrors the firmware's `airtime_factor = (100/dc) - 1` (CommonCLI.cpp handleSetCmd "dutycycle").
 func (c *Config) AirtimeFactorOr() float64 {
 	if c.DutyCycle == nil || *c.DutyCycle <= 0 {
 		return node.DefaultAirtimeFactor

@@ -13,27 +13,22 @@ type TriggerConfig struct {
 	Type     string `json:"type" yaml:"type" toml:"type"` // group, private, dm, cron, cap, etc
 	Template string `json:"template" yaml:"template" toml:"template"`
 
-	// Message Overflow behaviour
 	CharLimitBehaviour *string `json:"charLimitBehaviour" yaml:"charLimitBehaviour" toml:"charLimitBehaviour"` // e.g. truncate or split
 
-	// Messages/DMs
 	Match    *[]string    `json:"match" yaml:"match" toml:"match"`          // Patterns to match against (supports wildcards/regex)
 	Channels *ChannelList `json:"channels" yaml:"channels" toml:"channels"` // Channels to listen on (strings or {name, privateKey} objects)
 	Contacts *[]string    `json:"contacts" yaml:"contacts" toml:"contact"`  // What Contacts to listen in for DMs
 
-	// Retry Settings
 	RetryTimeout *int64 `json:"retryTimeout" yaml:"retryTimeout" toml:"retryTimeout"` // Stored as seconds
 	MaxRetries   *int   `json:"maxRetries" yaml:"maxRetries" toml:"maxRetries"`
 
 	// Path Hash Size: 1-4 = fixed size, 0 = mirror incoming packet's hash size, nil = default (1)
 	PathHashSize *uint8 `json:"pathHashSize,omitempty" yaml:"pathHashSize,omitempty" toml:"pathHashSize,omitempty"`
 
-	// Cron Trigger
 	Schedule string `json:"schedule,omitempty" yaml:"schedule,omitempty" toml:"schedule,omitempty"`
 }
 
-// Validate rejects trigger configs that would fail companion construction or
-// trigger startup (which, after a reload, exits the process).
+// Validate rejects trigger configs that would fail companion construction, which after a reload exits the process.
 func (t *TriggerConfig) Validate() error {
 	switch t.Type {
 	case "channel", "group":
@@ -54,8 +49,7 @@ func (t *TriggerConfig) Validate() error {
 	if t.Template == "" {
 		return fmt.Errorf("template is required")
 	}
-	// Parse-check with stubs for the trigger func map (templater.go) so valid
-	// templates pass and typo'd function names are caught.
+	// Stubs for the trigger func map (templater.go), so typo'd function names are caught here.
 	stubs := template.FuncMap{
 		"formatPathBytes": func(any) string { return "" },
 	}
@@ -95,8 +89,7 @@ func (cr *ChannelRef) Validate() error {
 		if err != nil {
 			return fmt.Errorf("channel %q: privateKey must be hex: %w", cr.Name, err)
 		}
-		// NewChannelFromPSK rejects any other length at companion construction,
-		// which exits the process — so it has to be caught here.
+		// NewChannelFromPSK rejects any other length at companion construction, which exits the process.
 		if len(psk) != 16 {
 			return fmt.Errorf("channel %q: privateKey must be 16 bytes (32 hex chars), got %d bytes", cr.Name, len(psk))
 		}

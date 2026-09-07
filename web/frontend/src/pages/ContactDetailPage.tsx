@@ -95,7 +95,7 @@ export function ContactDetailPage() {
   }, [contactPubkey]);
 
   const displayName = contact?.name || "unknown peer";
-  // Routing comes from the contact's own stored path now (per companion).
+  // Routing comes from the contact's own stored path, which is per companion.
   const route = useMemo(
     () => advertPathInfo(contact?.outPath, contact?.outPathHashSize),
     [contact?.outPath, contact?.outPathHashSize],
@@ -108,9 +108,7 @@ export function ContactDetailPage() {
   const isRepeater = contactType === "REPEATER";
   const isSensor = contactType === "SENSOR";
   const isRoom = contactType === "ROOM";
-  // Repeaters and sensors speak the admin protocol, not chat: their action is
-  // Manage. (Sensor firmware treats an inbound TXT_MSG as a CLI command.) A
-  // room is both — its chat is the dm: thread — so it gets Message and Manage.
+  // Repeaters and sensors speak the admin protocol, not chat; a room speaks both.
   const manageTo = isSensor
     ? `/companions/${encodeURIComponent(companion)}/sensors/${contactPubkey}`
     : isRoom
@@ -271,8 +269,7 @@ export function ContactDetailPage() {
             />
           </section>
 
-          {/* Chat nodes, sensors and rooms all answer the sessionless telemetry
-              request the companion collector sends. */}
+          {/* Chat nodes, sensors and rooms answer the sessionless telemetry request. */}
           {(contact.type?.toUpperCase() === "CHAT" || isSensor || isRoom) && (
             <MonitoringSettings
               companionName={companion}
@@ -287,9 +284,7 @@ export function ContactDetailPage() {
   );
 }
 
-// Location is the contact's own (refreshed from adverts that carry a position,
-// but hand-editable here for peers that don't broadcast GPS). lat/lon are
-// microdegrees, matching discovered_peers.
+// lat/lon are microdegrees, matching discovered_peers.
 function LocationPanel({
   apiBase,
   lat,

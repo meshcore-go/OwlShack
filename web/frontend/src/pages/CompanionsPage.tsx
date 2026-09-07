@@ -28,8 +28,7 @@ import { PATH_HASH_SIZE_OPTIONS, SelectField, TextField } from "@/components/Con
 import { PositionPicker, round6 } from "@/components/PositionPicker";
 import { truncateMid } from "@/lib/format";
 
-// Runtime roster (/api/companions) — keyed by the live identity, used only to
-// enrich the config list with peer/channel counts.
+// Runtime roster (/api/companions), keyed by the live identity, not the config id.
 interface RuntimeCompanion {
   name: string;
   pubkey: string;
@@ -82,8 +81,7 @@ export function CompanionsPage() {
       0,
     ) ?? 0;
 
-  // A write reloads the bot; refresh both the config list and the runtime
-  // roster (peer/channel counts) once the companions have restarted.
+  // A write reloads the bot, so the runtime roster is only correct once it has restarted.
   const refresh = () => {
     reload();
     window.setTimeout(reloadRuntime, 1200);
@@ -266,8 +264,7 @@ function CompanionEditor({
       await configApi.saveCompanion(
         {
           name: name.trim(),
-          // Only send a key on create (blank = generated). Edits keep the
-          // stored identity (omitted → inherited server-side).
+          // Key only on create (blank = generated); omitted on edit keeps the stored identity.
           ...(companion ? {} : { privateKey: privateKey.trim() || undefined }),
           latitude: latitude === "" ? null : parseFloat(latitude) || 0,
           longitude: longitude === "" ? null : parseFloat(longitude) || 0,

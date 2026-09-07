@@ -137,17 +137,14 @@ interface Message {
   status?: string | null;
 }
 
-// Context a #hashtag chip needs to resolve itself. `targets` maps a channel's
-// hash-stripped, lowercased name to its real configured name, so a "#weather"
-// reference matches a channel stored as "#weather", "weather" or "Weather".
+// `targets` maps a channel's hash-stripped, lowercased name to its real configured name.
 interface ChannelLinkCtx {
   targets: Map<string, string>;
   onOpen: (realName: string) => void;
   onAdd: (bareName: string) => void;
 }
 
-// GET /rooms/{pubkey}/session returns {loggedIn:false} or the bare session
-// struct — presence of pubkeyHex means logged in, same rule as repeaters.
+// GET /rooms/{pubkey}/session: presence of pubkeyHex means logged in, same rule as repeaters.
 interface RoomSession {
   loggedIn?: boolean;
   pubkeyHex?: string;
@@ -177,9 +174,7 @@ interface EchoEntry {
   rssi?: number | null;
 }
 
-// A single time we heard a packet — the original reception plus each
-// distinct-path repeat — unified so "View paths" can list every hearing in
-// first-heard order.
+// One time we heard a packet: the original reception, or one distinct-path repeat.
 interface Hearing {
   key: string;
   receivedAt: string;
@@ -189,18 +184,14 @@ interface Hearing {
   isOriginal: boolean;
 }
 
-// hearingVia labels who we last heard a packet from: the final repeater in the
-// path (closest to us), or "Direct" when there were no hops — heard straight off
-// the air by the companion (direct DM / room-server push).
+// The final repeater in the path is the one closest to us; no hops means we heard it off the air.
 function hearingVia(path: PathHop[]): string {
   if (path.length === 0) return "Direct";
   const last = path[path.length - 1];
   return last.peerNames?.[0] || `#${last.hash}`;
 }
 
-// buildHearings merges the original reception (from the message + its path) with
-// every echo into one list ordered first-heard first. The original is only added
-// when its path was loaded (the echoes-only modal omits it).
+// First-heard first; the original is only included when its path was loaded.
 function buildHearings(
   path: PathInfo | null,
   echoes: EchoEntry[] | null,
@@ -241,19 +232,7 @@ interface ModalState {
 
 const MENTION_RE = /@\[([^\]]+)\]/g;
 
-// Single-pass tokenizer for rich content in message text. Alternatives are
-// tried in order at each position, so tokens never overlap:
-//  - contact: a shared-contact embed  <64-hex-pubkey:type(1-4):name>
-//  - url:     http/https only (other schemes are never linkified)
-//  - coord:   lat,lon with decimals (range-validated at render time). The
-//             surrounding (?<![\d.]) / (?![\d.]) guards stop it matching the
-//             middle of a longer number.
-//  - mention: @[name]
-//  - channel: a #hashtag channel reference. The lookbehind keeps it from
-//             matching mid-word ("abc#def") or a URL fragment (URLs are
-//             tokenized first and swallow their own "#frag"). Sigil stripped at
-//             render; the token must start with a word char so "# heading" and
-//             a bare "#" don't match.
+// Alternatives are tried in order at each position, so tokens never overlap (a URL swallows its own "#frag").
 const TOKEN_RE = new RegExp(
   [
     "(?<contact><[0-9a-fA-F]{64}:[1-4]:[^>]*>)",
@@ -274,18 +253,12 @@ const CONTACT_TYPE_BY_INT: Record<string, ContactType> = {
 
 const COORD_RE = /^(-?\d{1,3}\.\d+)\s*,\s*(-?\d{1,3}\.\d+)$/;
 
-// Key for matching a typed #hashtag to a configured channel: drop a single
-// leading '#' and lowercase, so "#weather", "weather" and "Weather" all resolve
-// to the same chip target. This is an intentionally case-insensitive *UI*
-// heuristic — NOT the backend's identity: the firmware keys a channel's PSK off
-// the exact name (`#Weather` ≠ `#weather`), which is why AddChannelDialog's
-// duplicate guard stays case-sensitive.
+// UI matching only: the firmware keys a channel's PSK off the exact name, so `#Weather` ≠ `#weather`.
 function channelKey(name: string): string {
   return name.replace(/^#/, "").toLowerCase();
 }
 
-// Parse + range-validate a "lat,lon" token. Returns null if out of range so
-// the caller leaves it as plain text rather than a bogus map link.
+// null when out of range, so the caller leaves the token as plain text.
 function parseCoord(s: string): { lat: number; lon: number } | null {
   const m = COORD_RE.exec(s.trim());
   if (!m) return null;
@@ -296,8 +269,7 @@ function parseCoord(s: string): { lat: number; lon: number } | null {
   return { lat, lon };
 }
 
-// Trailing sentence punctuation usually isn't part of a URL ("see https://x.")
-// so peel it off and render it as plain text.
+// Trailing sentence punctuation usually isn't part of a URL ("see https://x.").
 const TRAILING_PUNCT_RE = /[.,;:!?'")\]}]+$/;
 function splitTrailingPunct(url: string): { url: string; trailing: string } {
   const m = TRAILING_PUNCT_RE.exec(url);
@@ -306,14 +278,10 @@ function splitTrailingPunct(url: string): { url: string; trailing: string } {
 }
 const SORT_KEY = "companion-sort";
 
-// Shared style for the page-header action chips (contacts/channels/repeaters
-// links + the advert trigger), so the one styling stays in a single place.
 const HEADER_ACTION_CLASS =
   "inline-flex items-center font-mono text-[10px] uppercase tracking-[0.12em] text-muted-foreground hover:text-primary px-2.5 py-1.5 sm:py-0.5 border border-border relative before:absolute before:inset-x-0 before:-inset-y-2 before:content-[''] sm:before:hidden";
 
-// The companion's management/nav targets — sub-pages reachable from the chat
-// header. Rendered as inline chips on desktop and as menu items in the mobile
-// overflow menu (see CompanionActions).
+// Rendered as inline chips on desktop and as menu items in the mobile overflow menu.
 const COMPANION_NAV = [
   { seg: "contacts", label: "contacts", Icon: Users },
   { seg: "channels", label: "channels", Icon: Hash },
@@ -322,9 +290,7 @@ const COMPANION_NAV = [
 
 type AdvertMode = "flood" | "zerohop";
 
-// Self-advert POST, shared by the desktop advert chip and the mobile overflow
-// menu. Flood = mesh-wide (repeaters rebroadcast); zero-hop = direct neighbours
-// only. Posts to /api/companions/{name}/advert with {mode}.
+// Flood = mesh-wide (repeaters rebroadcast); zero-hop = direct neighbours only.
 function useAdvert(companion: string) {
   const [busy, setBusy] = useState<AdvertMode | null>(null);
   const send = useCallback(
@@ -357,8 +323,6 @@ function useAdvert(companion: string) {
   return { busy, send };
 }
 
-// The two advert choices as dropdown items, reused by the desktop advert chip
-// and the mobile overflow menu.
 function AdvertItems({
   busy,
   onSend,
@@ -398,10 +362,7 @@ function AdvertItems({
   );
 }
 
-// Companion header actions. Desktop: inline chips (contacts/channels/repeaters
-// + an Advert dropdown). Mobile: a single "⋯" button collapsing all of them
-// into one menu, so the header stays one tidy row above the threads list
-// instead of wrapping or clipping.
+// Desktop shows inline chips; mobile collapses them into one "⋯" menu so the header stays one row.
 function CompanionActions({ companion }: { companion: string }) {
   const { busy, send } = useAdvert(companion);
   const path = (seg: string) =>
@@ -536,8 +497,7 @@ export function CompanionDetailPage() {
   const wasConnectedRef = useRef(false);
   // Channels whose full history has been paged back to the start — stop fetching.
   const reachedStartRef = useRef<Set<string>>(new Set());
-  // Set when a scroll-up prepend is in flight, so the auto-scroll-to-bottom
-  // effect skips and the layout effect can restore the prior scroll position.
+  // Set while a scroll-up prepend is in flight, so auto-scroll-to-bottom skips.
   const pendingPrependRef = useRef<{ prevHeight: number; prevTop: number } | null>(
     null,
   );
@@ -548,10 +508,7 @@ export function CompanionDetailPage() {
     [conversations, activeChannel],
   );
 
-  // Channels that already have a conversation row. The WS handler reads this
-  // to decide between an in-place row update and a full roster reload — the
-  // decision must stay outside the setConversations updater (updaters must be
-  // pure; StrictMode invokes them twice).
+  // The WS handler's row-update-vs-reload decision must stay out of the setConversations updater — StrictMode invokes updaters twice.
   const knownChannelsRef = useRef<Set<string>>(new Set());
   knownChannelsRef.current = useMemo(
     () => new Set(conversations.map((c) => c.channel)),
@@ -592,10 +549,7 @@ export function CompanionDetailPage() {
     };
   }, [decodedName, roomPubkey]);
 
-  // Mention autocomplete (channels + rooms only — a 1:1 DM has nobody else to
-  // mention). The /participants endpoint gives the full historical rx-sender
-  // list for the conversation; we merge in senders from currently-loaded
-  // messages too so anyone who posts mid-session shows up without a refetch.
+  // /participants is the historical rx-sender list; loaded messages add anyone posting mid-session.
   const mentionEnabled = !!activeConversation && (!isContact || isRoom);
   const convoId = activeConversation?.id ?? null;
   const [fetchedParticipants, setFetchedParticipants] = useState<string[]>([]);
@@ -630,8 +584,7 @@ export function CompanionDetailPage() {
   const roomLoggedIn =
     !!roomSession && roomSession.loggedIn !== false && !!roomSession.pubkeyHex;
   const roomReadOnly = roomLoggedIn && roomSession?.role === "read-only";
-  // A sensor's thread only ever carries its alerts to us; anything we typed
-  // back would be run as a CLI command (admin) or dropped. Manage it instead.
+  // Sensor firmware would run anything typed back as a CLI command, so the composer locks.
   const isSensorThread = activeConversation?.peerType === "SENSOR";
   const composerLocked = roomReadOnly || isSensorThread;
   const lockedHint = isSensorThread
@@ -670,8 +623,7 @@ export function CompanionDetailPage() {
     loadConversations();
   }, [loadConversations]);
 
-  // This companion's own public key, used to flag self-add attempts on
-  // shared-contact cards in chat.
+  // Own public key, to flag self-add attempts on shared-contact cards.
   useEffect(() => {
     if (!decodedName) return;
     let cancelled = false;
@@ -700,8 +652,6 @@ export function CompanionDetailPage() {
     setAddContactOpen(true);
   }, []);
 
-  // POST a new channel subscription (driven by the Add Channel dialog from a
-  // #hashtag chip), then refresh the roster so the channel becomes navigable.
   const addChannel = useCallback(
     async (channelName: string, privateKey?: string) => {
       try {
@@ -714,10 +664,7 @@ export function CompanionDetailPage() {
       }
       toast.success(`Channel "${channelName}" added`);
       setAddChannelOpen(false);
-      // The firmware normalizes a public channel name (e.g. "ham" → "#ham"), so
-      // the stored channel may differ from what we submitted. Reload, then open
-      // the channel that actually landed — matched by hash-stripped key — rather
-      // than the raw submitted name, which would resolve to no thread.
+      // The firmware normalizes a public channel name ("ham" → "#ham"), so open what actually landed.
       const updated = await loadConversations();
       const target = updated.find(
         (c) =>
@@ -729,10 +676,7 @@ export function CompanionDetailPage() {
     [decodedName, loadConversations, setSearchParams],
   );
 
-  // The companion's configured channels as { name }. The conversation roster
-  // already includes every configured channel (seeded server-side), so this
-  // doubles as the Add Channel dialog's duplicate-name guard and the source for
-  // the #hashtag chip target map below.
+  // The roster already includes every configured channel, seeded server-side.
   const configuredChannels = useMemo(
     () =>
       conversations
@@ -741,8 +685,7 @@ export function CompanionDetailPage() {
     [conversations],
   );
 
-  // Resolves a #hashtag to a real configured channel, navigates to known ones,
-  // and routes unknown ones through the (pre-filled) Add Channel dialog.
+  // Unknown hashtags route through the pre-filled Add Channel dialog.
   const channelCtx = useMemo<ChannelLinkCtx>(() => {
     const targets = new Map<string, string>();
     for (const c of configuredChannels) targets.set(channelKey(c.name), c.name);
@@ -756,8 +699,7 @@ export function CompanionDetailPage() {
     };
   }, [configuredChannels, setSearchParams]);
 
-  // Pre-fill the composer from a ?compose= param (e.g. "Share in a message"
-  // from the Peers screen), then strip the param so it isn't re-applied.
+  // The ?compose= param is stripped after use so it isn't re-applied.
   useEffect(() => {
     const text = searchParams.get("compose");
     if (!text) return;
@@ -824,8 +766,7 @@ export function CompanionDetailPage() {
     [decodedName, lastIdOf, initialLoadMessages, activeChannel],
   );
 
-  // Scroll-up history paging: fetch the 100 messages older than the oldest one
-  // currently held, prepend them, and preserve the viewport via pendingPrependRef.
+  // Scroll-up paging; pendingPrependRef carries the metrics that preserve the viewport.
   const loadOlderMessages = useCallback(
     async (channel: string) => {
       if (!decodedName) return;
@@ -840,9 +781,7 @@ export function CompanionDetailPage() {
         }
       }
       if (oldest <= 0) return;
-      // Capture scroll metrics now, before the spinner toggles container height —
-      // both this measurement and the post-prepend one exclude the spinner, so
-      // the restore delta is purely the height of the newly prepended messages.
+      // Measured before the spinner toggles container height, as the post-prepend measurement also excludes it.
       const el = scrollContainerRef.current;
       const prevHeight = el?.scrollHeight ?? 0;
       const prevTop = el?.scrollTop ?? 0;
@@ -1027,9 +966,7 @@ export function CompanionDetailPage() {
 
   useEffect(() => {
     if (connected && !wasConnectedRef.current) {
-      // first connect or reconnect — backfill any messages we may have missed.
-      // only the active channel needs immediate refresh; others are refreshed
-      // on re-open.
+      // Backfill what we missed; other channels refresh on re-open.
       if (activeChannel) backfillMessages(activeChannel);
     }
     wasConnectedRef.current = connected;
@@ -1042,8 +979,7 @@ export function CompanionDetailPage() {
     setMsgSearchOpen(false);
   }, [activeChannel]);
 
-  // After older messages are prepended, restore scroll so the viewport stays
-  // anchored on the message the user was looking at (runs before paint → no jump).
+  // Restores scroll after a prepend, before paint, so the viewport doesn't jump.
   useLayoutEffect(() => {
     const pending = pendingPrependRef.current;
     if (!pending) return;
@@ -1094,9 +1030,7 @@ export function CompanionDetailPage() {
     };
   }, [contextMsg]);
 
-  // Repeater threads are managed on the Repeaters page, so they count as
-  // neither listed nor "threads" here; the search filter must not change the
-  // header total.
+  // Repeater threads live on the Repeaters page, and the search filter must not change this total.
   const threadCount = useMemo(
     () => conversations.filter((c) => !c.isRepeater).length,
     [conversations],
@@ -1216,8 +1150,7 @@ export function CompanionDetailPage() {
     [mentionAC.handleKeyDown, emojiAC.handleKeyDown, send],
   );
 
-  // focus=false keeps the caret without summoning the mobile keyboard (used by
-  // the mobile emoji panel, which would otherwise be covered by the keyboard).
+  // focus=false keeps the caret without summoning the mobile keyboard over the emoji panel.
   const insertAtCursor = useCallback((text: string, focus = true) => {
     const el = composerRef.current;
     if (!el) {
@@ -1386,8 +1319,7 @@ export function CompanionDetailPage() {
     setModalEchoes(null);
   }, []);
 
-  // Unified first-heard-first list for the path/echoes modals. rxPaths loads both
-  // the original path and the echoes; the TX echoes modal loads echoes only.
+  // rxPaths loads the original path and the echoes; the TX echoes modal loads echoes only.
   const hearings = useMemo(
     () => buildHearings(modalPath, modalEchoes, modal?.message),
     [modalPath, modalEchoes, modal?.message],
@@ -1851,9 +1783,7 @@ export function CompanionDetailPage() {
   );
 }
 
-// Thread recency: the newest message's row id when both threads have one — a
-// remote node (a room stamps posts with its own RTC) can report a wrong time,
-// which would otherwise sink a just-active thread to the bottom.
+// Row id over timestamp: a room stamps posts with its own RTC, which can be years out.
 function convRecency(a: Conversation, b: Conversation): number {
   if (a.lastMessageId && b.lastMessageId) return b.lastMessageId - a.lastMessageId;
   return tsValue(b.lastActive) - tsValue(a.lastActive);
@@ -1892,10 +1822,7 @@ function mergeMessages(existing: Message[], incoming: Message[]): Message[] {
     else byKey.set(k, out.length - 1);
   }
   if (appended) {
-    // Order by row id (the order we learned of a message), not by timestamp: a
-    // room stamps each post with its own RTC, so a node with a wrong clock would
-    // otherwise drop its posts into the middle of the thread. Messages with no
-    // id yet sort last — they are the newest.
+    // Messages with no id yet sort last: they are the newest.
     out.sort((a, b) => {
       const ia = typeof a.id === "number" && a.id > 0 ? a.id : Number.MAX_SAFE_INTEGER;
       const ib = typeof b.id === "number" && b.id > 0 ? b.id : Number.MAX_SAFE_INTEGER;
@@ -1948,8 +1875,7 @@ function ConversationRow({
       type="button"
       onClick={onClick}
       className={cn(
-        // content-visibility lets the browser skip layout/paint for threads
-        // scrolled off-screen in a long roster.
+        // content-visibility lets the browser skip layout/paint offscreen.
         "w-full px-3 py-2.5 flex items-start gap-3 text-left transition-colors group [content-visibility:auto] [contain-intrinsic-size:auto_64px]",
         active
           ? "bg-primary/10 border-l-2 border-primary"
@@ -2307,9 +2233,7 @@ function MessageBubble({
               </span>
             )}
             {msg.repeatCount != null && msg.repeatCount > 0 && (
-              // For received messages the total times we heard the packet is the
-              // first reception plus each distinct-path repeat; for our own sends
-              // it's just the repeats we heard echoed back.
+              // On RX this counts the first reception plus each repeat; on TX only the echoes.
               <span
                 className="text-success/80 inline-flex items-center gap-1"
                 title={
@@ -2404,8 +2328,7 @@ function MessageText({
     const token = match[0];
     const g = match.groups ?? {};
 
-    // A coordinate-looking token that fails range validation is left as plain
-    // text; skip it without consuming so it falls into the next text slice.
+    // Skipped without consuming, so an out-of-range coordinate falls into the next text slice.
     const coord = g.coord ? parseCoord(token) : null;
     if (g.coord && !coord) continue;
 
@@ -2462,9 +2385,7 @@ function MessageText({
   return <>{parts}</>;
 }
 
-// "#hashtag" channel reference. Clicking an already-subscribed channel opens it;
-// an unknown one opens the Add Channel dialog pre-filled (the user reviews the
-// name and picks public/private before committing — a hashtag carries no key).
+// A hashtag carries no key, so an unknown channel goes through the Add Channel dialog.
 function ChannelChip({
   raw,
   channels,
@@ -2473,8 +2394,7 @@ function ChannelChip({
   channels: ChannelLinkCtx;
 }) {
   const bare = raw.slice(1); // strip the '#' sigil (for display + prefill)
-  // Look up via channelKey so this derivation can't drift from how the target
-  // map was keyed (CompanionDetailPage builds it with channelKey too).
+  // channelKey, so this can't drift from how the target map was keyed.
   const target = channels.targets.get(channelKey(raw));
   const isAdded = target !== undefined;
   return (
@@ -2500,9 +2420,7 @@ function ChannelChip({
   );
 }
 
-// A shared-contact embed rendered as a tappable card. Adding routes through the
-// manual Add Contact modal (pre-filled) so the user reviews before committing;
-// the user's own key is shown but cannot be added.
+// Adding routes through the pre-filled Add Contact modal so the user reviews first.
 function ContactCard({
   pubkey,
   type,
@@ -2552,9 +2470,7 @@ function ContactCard({
   );
 }
 
-// An http/https URL. Clicking shows a confirmation with the full destination
-// before opening, since message text is untrusted. Only http/https reach here
-// (enforced by the tokenizer), so no javascript:/data: schemes are possible.
+// Message text is untrusted, so opening is confirmed; the tokenizer admits only http/https.
 function UrlLink({ url }: { url: string }) {
   const [open, setOpen] = useState(false);
   return (
@@ -2761,9 +2677,7 @@ function HearingList({ hearings }: { hearings: Hearing[] }) {
   );
 }
 
-// A single hearing: a tappable summary (who we heard it from, hops, signal,
-// time) that expands to the full hop-by-hop path. Direct (0-hop) hearings have
-// nothing to expand.
+// Expands to the full hop-by-hop path; a direct (0-hop) hearing has nothing to expand.
 function HearingRow({ hearing, first }: { hearing: Hearing; first: boolean }) {
   const [open, setOpen] = useState(false);
   const direct = hearing.path.length === 0;

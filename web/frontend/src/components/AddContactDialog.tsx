@@ -35,11 +35,7 @@ export interface ContactPrefill {
   type?: ContactType;
 }
 
-/**
- * Manual-only add-contact modal. Reused by the Contacts page and by the
- * shared-contact card in chat (which opens it pre-filled). It POSTs to the
- * companion's contacts endpoint itself and calls `onAdded` on success.
- */
+/** POSTs to the companion's contacts endpoint itself, then calls `onAdded`. */
 export function AddContactDialog({
   companion,
   open,
@@ -66,7 +62,6 @@ export function AddContactDialog({
   const initialName = initial?.name ?? "";
   const initialType = initial?.type ?? "CHAT";
 
-  // Reset/prefill the form each time the dialog opens.
   useEffect(() => {
     if (open) {
       setType(initialType);

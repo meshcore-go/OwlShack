@@ -1,6 +1,3 @@
-// Registers the PWA service worker (public/sw.js). Safe to call once at startup;
-// no-ops where unsupported. When a newer SW installs behind the current one (an
-// update, not a first install), shows a "reload to update" toast that takes it.
 import { toast } from "sonner";
 
 export function registerServiceWorker(): void {
@@ -8,8 +5,7 @@ export function registerServiceWorker(): void {
 
   let updating = false;
   navigator.serviceWorker.addEventListener("controllerchange", () => {
-    // Only reload when WE triggered the takeover via the toast. The new SW's
-    // clients.claim() on a first install also fires this and must not reload.
+    // A first install's clients.claim() fires this too and must not reload.
     if (updating) window.location.reload();
   });
 
@@ -34,13 +30,11 @@ export function registerServiceWorker(): void {
           const sw = reg.installing;
           if (!sw) return;
           sw.addEventListener("statechange", () => {
-            // installed + an existing controller => an update is waiting.
             if (sw.state === "installed" && navigator.serviceWorker.controller) offer(sw);
           });
         });
       })
       .catch((err) => {
-        // Non-fatal: the app works fine without the SW (just not installable).
         console.warn("service worker registration failed", err);
       });
   });

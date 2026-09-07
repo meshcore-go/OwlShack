@@ -132,10 +132,7 @@ export function SwitchRow({
   );
 }
 
-// PATH_HASH_SIZE_OPTIONS is the per-hop path hash width in bytes. The firmware's
-// `set path.hash.mode` takes this minus one and accepts 0-2, so 1-3 bytes. It's
-// a regional convention — the official radio presets carry it (NZ Narrow and
-// Hungary run 2 bytes).
+// Per-hop hash width in bytes; the firmware's `set path.hash.mode` takes this minus one and accepts 0-2.
 export const PATH_HASH_SIZE_OPTIONS = [1, 2, 3].map((n) => ({
   value: String(n),
   label: `${n} byte${n > 1 ? "s" : ""}`,

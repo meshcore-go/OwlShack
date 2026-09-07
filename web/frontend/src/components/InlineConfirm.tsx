@@ -1,8 +1,7 @@
 import { Check, Trash2, X } from "lucide-react";
 import { Button } from "@/components/ui/button";
 
-// Inline confirm-to-remove: a trash trigger that swaps to "Remove? yes/no" in
-// place. The parent owns `confirming` so only one row confirms at a time.
+// The parent owns `confirming` so only one row confirms at a time.
 export function InlineConfirm({
   confirming,
   onAskRemove,

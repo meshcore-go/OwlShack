@@ -8,8 +8,7 @@ import {
 import { ensureEmojiInit } from "@/lib/emoji";
 import { cn } from "@/lib/utils";
 
-// Standalone trigger button (used for the mobile inline panel, which is toggled
-// by the composer rather than anchored to a popover).
+// For the mobile inline panel, which the composer toggles instead of anchoring a popover.
 export function EmojiButton({
   onClick,
   active = false,
@@ -61,10 +60,7 @@ export function EmojiPicker({ onSelect }: { onSelect: (emoji: string) => void })
   );
 }
 
-// Mounts the vanilla emoji-mart web component (full search / categories /
-// recently-used). Loaded lazily so the dataset stays out of the main bundle.
-// fullWidth fills the viewport with bigger cells (the mobile inline panel);
-// otherwise it uses default-size cells capped at 9 columns (desktop popover).
+// Loaded lazily so the emoji-mart dataset stays out of the main bundle.
 export function EmojiMartPanel({
   onSelect,
   fullWidth = false,

@@ -69,8 +69,7 @@ const RepeaterNodePage = lazy(() =>
     default: m.RepeaterNodePage,
   })),
 );
-// Lazy so Leaflet (pulled in by the position picker) stays out of the main
-// bundle — the wizard only renders on first run.
+// Lazy so Leaflet, pulled in by the position picker, stays out of the main bundle.
 const SetupWizard = lazy(() =>
   import("@/components/SetupWizard").then((m) => ({ default: m.SetupWizard })),
 );
@@ -92,10 +91,7 @@ export function App() {
   const { items: companions, reload: reloadCompanions } =
     useApiList<ConfigCompanion>("/api/config/companions", "Failed to load companions");
 
-  // Fresh install: never configured (flag unset) and no companions yet. Wait
-  // for both fetches so an existing install (>=1 companion) never flashes the
-  // wizard, and an observer-only setup that finished (setupComplete=true) keeps
-  // it hidden.
+  // Both fetches must land first, or an existing install flashes the wizard.
   const needsSetup =
     settings != null &&
     companions != null &&

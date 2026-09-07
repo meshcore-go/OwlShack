@@ -21,12 +21,7 @@ const HEX32 = /^[0-9a-fA-F]{32}$/;
 
 type ChannelMode = "public" | "private";
 
-/**
- * Subscribe a companion to a public or private channel. Presentational: the
- * caller supplies `onAdd` (the POST) and the existing channels for the
- * duplicate-name guard. `prefillName` seeds the name field when the dialog
- * opens (used by the #hashtag chip in chat, which can only know the name).
- */
+/** Presentational: the caller supplies `onAdd` (the POST) and `existing` for the duplicate-name guard. */
 export function AddChannelDialog({
   open,
   onOpenChange,
@@ -56,8 +51,7 @@ export function AddChannelDialog({
 
   const trimmedName = channelName.trim();
   const trimmedKey = privateKey.trim();
-  // Channel names are case-sensitive (the key derives from the exact name), so
-  // "#Foo" and "#foo" are distinct channels — match exactly, like the backend.
+  // The key derives from the exact name, so "#Foo" and "#foo" are distinct channels.
   const nameTaken = existing.some((c) => c.name === trimmedName);
   const nameValid = trimmedName.length > 0 && !nameTaken;
   const keyValid = mode === "public" || HEX32.test(trimmedKey);

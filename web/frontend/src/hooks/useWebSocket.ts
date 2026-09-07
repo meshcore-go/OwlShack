@@ -2,8 +2,7 @@ import { useEffect, useRef, useState } from "react";
 
 type MessageHandler = (topic: string, data: unknown) => void;
 
-// How long after an app-level ping to wait for any inbound message before
-// declaring the socket half-open and forcing a reconnect.
+// Wait for any inbound message after an app-level ping before declaring the socket half-open.
 const PROBE_TIMEOUT_MS = 5000;
 
 export function useWebSocket(topics: string[], onMessage?: MessageHandler) {
@@ -75,12 +74,7 @@ export function useWebSocket(topics: string[], onMessage?: MessageHandler) {
       };
     };
 
-    // Mobile browsers suspend background tabs: the socket gets killed outright,
-    // or survives half-open after a network switch (still reads OPEN but
-    // receives nothing). On any "we're back" signal, reconnect immediately —
-    // skipping whatever backoff is pending — and probe a socket that still
-    // claims to be open with an app-level ping. Any inbound message (the
-    // server's "pong" or a regular broadcast) counts as proof of life.
+    // A mobile socket can survive a suspend half-open: still readyState OPEN, receiving nothing.
     const resume = () => {
       if (!mounted || document.visibilityState === "hidden") return;
       const ws = wsRef.current;
@@ -104,8 +98,7 @@ export function useWebSocket(topics: string[], onMessage?: MessageHandler) {
         probeRef.current = window.setTimeout(() => {
           probeRef.current = null;
           if (wsRef.current === ws && lastMsgRef.current < sentAt) {
-            // Nothing heard since the probe — half-open. Force the reconnect
-            // path (onclose schedules it on the freshly reset backoff).
+            // Half-open: close so onclose reconnects on the freshly reset backoff.
             backoffRef.current = 1000;
             ws.close();
           }

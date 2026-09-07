@@ -7,13 +7,9 @@ import (
 	"net/http"
 )
 
-// Repeater NODE routes — the single repeater the bot RUNS (relay + advert),
-// distinct from the /api/companions/{name}/repeaters/* routes that drive REMOTE
-// repeaters. Config is a singleton resource (like settings/mqtt); runtime state
-// (relay counters, neighbours) comes from the live node via the backend.
+// Routes for the repeater we run, distinct from /api/companions/{name}/repeaters/* which drive remote ones.
 
-// repeaterDTO is the secret-redacted read shape. privateKey and passwords are
-// never sent — only *Set booleans, matching the companion/broker pattern.
+// repeaterDTO is the secret-redacted read shape: privateKey and passwords become *Set booleans.
 type repeaterDTO struct {
 	Configured          bool                `json:"configured"`
 	Running             bool                `json:"running"`
@@ -95,9 +91,7 @@ func (s *Server) handleGetRepeater(w http.ResponseWriter, r *http.Request) {
 	})
 }
 
-// repeaterSection reads a JSON section body and applies it through fn (a
-// Backend method expression), writing 204 on success, 400 on bad JSON, or 422
-// on validation / not-configured failure. Shared by the create + section PUTs.
+// repeaterSection writes 204 on success, 400 on bad JSON, 422 on validation or not-configured failure.
 func repeaterSection[T any](s *Server, w http.ResponseWriter, r *http.Request, fn func(Backend, context.Context, T) error) {
 	b, ok := s.configBackend(w)
 	if !ok {
@@ -135,8 +129,7 @@ func (s *Server) handleAddRepeaterRegion(w http.ResponseWriter, r *http.Request)
 	repeaterSection(s, w, r, Backend.AddRepeaterRegion)
 }
 
-// handlePatchRepeaterRegion toggles a region's deny-flood flag. The region name
-// is the (percent-decoded) path segment, so "*" arrives as %2A.
+// handlePatchRepeaterRegion takes the region name percent-decoded from the path, so "*" arrives as %2A.
 func (s *Server) handlePatchRepeaterRegion(w http.ResponseWriter, r *http.Request) {
 	b, ok := s.configBackend(w)
 	if !ok {
@@ -180,8 +173,7 @@ func (s *Server) handleDeleteRepeater(w http.ResponseWriter, r *http.Request) {
 	w.WriteHeader(http.StatusNoContent)
 }
 
-// repeaterNodeOps returns the running repeater's ops, or writes 404 when no
-// repeater is running (503 when the backend isn't wired yet).
+// repeaterNodeOps writes 404 when no repeater is running, 503 when the backend isn't wired yet.
 func (s *Server) repeaterNodeOps(w http.ResponseWriter) (*RepeaterNodeOps, bool) {
 	b := s.backendRef()
 	if b == nil {
@@ -220,8 +212,7 @@ func (s *Server) handleRepeaterNodeACL(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, ops.ACL())
 }
 
-// handleRepeaterNodeRevoke drops a client from the repeater's ACL. The pubkey is
-// the (percent-decoded) path segment.
+// handleRepeaterNodeRevoke drops a client from the repeater's ACL.
 func (s *Server) handleRepeaterNodeRevoke(w http.ResponseWriter, r *http.Request) {
 	ops, ok := s.repeaterNodeOps(w)
 	if !ok {
@@ -239,8 +230,7 @@ func (s *Server) handleRepeaterNodeAdvert(w http.ResponseWriter, r *http.Request
 	if !ok {
 		return
 	}
-	// Body is optional; default to a flood advert. A malformed/empty body just
-	// falls back to the default rather than erroring.
+	// The body is optional; a malformed or empty one falls back to a flood advert.
 	var body struct {
 		Flood *bool `json:"flood"`
 	}

@@ -2,9 +2,7 @@ package modem
 
 import "testing"
 
-// EstAirtimeMs and PacketScore are pure arithmetic over the stored radio
-// params, so they need no modem. Zero radio params must give 0 rather than a
-// fabricated number: the caller omits the field when it can't be derived.
+// Zero radio params must give 0 rather than a fabricated number the caller would publish.
 func TestKissStatsProvider_DerivedValues(t *testing.T) {
 	p := &kissStatsProvider{radio: RadioInfo{FreqHz: 917_375_000, BwHz: 62_500, SF: 7, CR: 5}}
 

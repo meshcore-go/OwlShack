@@ -1,7 +1,4 @@
-// Package modem owns connecting to the KISS radio hardware, exposing it as a
-// node.Modem plus a device-stats provider, and building the standard RadioMux
-// options. The supervisor loop that drives reconnects lives in the app
-// package and consumes this one.
+// Package modem connects to the KISS radio hardware and exposes it as a node.Modem, a stats provider and the standard mux options.
 package modem
 
 import (
@@ -18,13 +15,10 @@ import (
 	"github.com/meshcore-go/meshcore-go/node"
 )
 
-// handlerWatchdog is the per-dispatch latency alarm. Not configurable: DATA
-// dispatch is sub-millisecond by design, so any value an operator might pick
-// would only mask a stall.
+// handlerWatchdog is deliberately not configurable: DATA dispatch is sub-millisecond, so an operator's value could only mask a stall.
 const handlerWatchdog = 500 * time.Millisecond
 
-// State holds a live modem connection together with the resources that must be
-// torn down when it is replaced (on reconnect) or shut down.
+// State holds a live modem connection with the resources torn down when it is replaced or shut down.
 type State struct {
 	Modem      node.Modem
 	Stats      StatsProvider
@@ -36,8 +30,7 @@ type State struct {
 	watcherDone   chan struct{}
 }
 
-// Close stops the dead-watcher goroutine and closes the modem's resources in
-// reverse order of acquisition.
+// Close stops the dead-watcher and closes the modem's resources in reverse order of acquisition.
 func (m *State) Close() {
 	if m.watcherDone != nil {
 		select {
@@ -51,9 +44,7 @@ func (m *State) Close() {
 	}
 }
 
-// StartDeadWatcher spawns a goroutine that signals reconnectCh once when the
-// underlying modem's read loop exits. No-op for modems that don't expose
-// Dead().
+// StartDeadWatcher signals reconnectCh once when the read loop exits; a no-op for modems without Dead().
 func (m *State) StartDeadWatcher(reconnectCh chan<- struct{}) {
 	d, ok := m.Modem.(interface{ Dead() <-chan struct{} })
 	if !ok {
@@ -74,8 +65,7 @@ func (m *State) StartDeadWatcher(reconnectCh chan<- struct{}) {
 	}()
 }
 
-// MuxOptions builds the standard mux options for the given modem state.
-// Centralized so the same options are used at startup and after reconnect.
+// MuxOptions builds the standard mux options, shared by startup and reconnect.
 func MuxOptions(ms *State) []node.MuxOption {
 	opts := []node.MuxOption{
 		node.WithMuxLogger(slog.Default()),
@@ -123,22 +113,13 @@ func Setup(ctx context.Context, cfg *config.Config) (*State, error) {
 		CR:     *cfg.CR,
 	}
 
-	// TX flow control paces sends to the radio: the firmware holds ONE pending
-	// TX slot and drops any data frame that arrives while it's busy
-	// (HW_ERR_TX_BUSY), so without waiting for TX_DONE a burst is silently lost
-	// — the airtime budget alone permits back-to-back writes. The estimator
-	// sizes that wait from the radio's own time-on-air, since the fixed default
-	// is too short for a max-length frame at a high spreading factor.
+	// The firmware holds ONE pending TX slot and drops frames arriving while busy (HW_ERR_TX_BUSY), so sends wait for TX_DONE.
 	kissModem := hardware.NewKissModem(
 		t,
 		hardware.WithSignalReport(true),
 		hardware.WithLogger(slog.Default()),
 		hardware.WithTxFlowControl(hardware.DefaultTxTimeout),
 		hardware.WithTxAirtimeEstimator(hardware.LoRaAirtimeEstimator(radioConfig)),
-		// DATA frames dispatch serially on one goroutine, and our single mux
-		// fans out to the companion, the repeater and the observer inside that
-		// one call — so a slow handler stalls RX for all of them. Dispatch
-		// should be sub-millisecond; 500ms only fires on a real stall.
 		hardware.WithHandlerWatchdog(handlerWatchdog),
 	)
 	kissModem.SetErrorHandler(func(err error) {
@@ -155,9 +136,7 @@ func Setup(ctx context.Context, cfg *config.Config) (*State, error) {
 
 	ms.radioConfig = radioConfig
 	ms.airtimeFactor = cfg.AirtimeFactorOr()
-	// The library takes an inverted factor, so log the percentage an operator
-	// actually cares about — deriving it from the factor is the exact mistake
-	// this line exists to prevent.
+	// The library takes an inverted factor; log the percentage an operator actually reads.
 	slog.Info("airtime budget",
 		"duty_cycle_pct", cfg.DutyCyclePercentOr(), "airtime_factor", ms.airtimeFactor)
 

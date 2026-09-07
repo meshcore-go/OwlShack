@@ -203,10 +203,7 @@ interface NeighborEntry {
 
 export type AdminNodeKind = "repeater" | "sensor" | "room";
 
-// One page drives every node that speaks the admin protocol (ANON_REQ login →
-// REQ/CLI). kind only gates what the firmware for that role actually answers:
-// sensors have no GET_STATUS, GET_NEIGHBOURS or owner-info request, no routing
-// settings, and no guest password.
+// kind only gates what that role's firmware answers: a sensor has no GET_STATUS, GET_NEIGHBOURS, owner info, routing settings or guest password.
 export function RepeaterDetailPage({ kind = "repeater" }: { kind?: AdminNodeKind }) {
   const { name, pubkey } = useParams<{ name: string; pubkey: string }>();
   const decodedName = name ? decodeURIComponent(name) : "";
@@ -215,13 +212,10 @@ export function RepeaterDetailPage({ kind = "repeater" }: { kind?: AdminNodeKind
   const isSensor = kind === "sensor";
   const isRoom = kind === "room";
 
-  // The API is type-agnostic (rooms already share it); the path segment is
-  // historical. Rooms have their own login (it carries sync_since), status
-  // (different stats trailer) and keep-alive under /rooms/.
+  // The /repeaters/ path is type-agnostic; rooms have their own login, status and keep-alive under /rooms/.
   const apiBase = `/api/companions/${encodeURIComponent(decodedName)}/repeaters/${encodeURIComponent(decodedPubkey)}`;
   const roomApiBase = `/api/companions/${encodeURIComponent(decodedName)}/rooms/${encodeURIComponent(decodedPubkey)}`;
-  // Saved credentials live under the key the chat's RoomJoinBar already uses
-  // for rooms, so a password saved here joins the room in chat too.
+  // Shares the key chat's RoomJoinBar uses, so a password saved here joins the room in chat too.
   const passwordKey = isRoom ? "roomPassword" : "repeaterPassword";
   const savedPassword = (m?: MonitorMetadata) =>
     (m as Record<string, unknown> | undefined)?.[passwordKey] as string | undefined;
@@ -530,8 +524,7 @@ export function RepeaterDetailPage({ kind = "repeater" }: { kind?: AdminNodeKind
             )}
             <DropdownMenu>
               <DropdownMenuTrigger asChild>
-                {/* icon-xs matches the 24px chips beside it; its before: hit
-                    area still gives the 40px touch target. */}
+                {/* icon-xs matches the chips beside it; its before: hit area keeps the 40px touch target. */}
                 <Button
                   variant="outline"
                   size="icon-xs"
@@ -832,9 +825,7 @@ export function RepeaterDetailPage({ kind = "repeater" }: { kind?: AdminNodeKind
   );
 }
 
-// HeaderNavChip is a back-link in the header's actions row. The label shortens
-// below sm so the row's four chips plus the overflow menu stay on one line on a
-// phone.
+// The label shortens below sm so the chips plus the overflow menu stay on one line on a phone.
 function HeaderNavChip({
   to,
   label,
@@ -1141,9 +1132,7 @@ function StatusTab({
   );
 }
 
-// ErrEventsTile renders the status `errEvents` value (firmware _err_flags) as
-// decoded warning chips rather than a raw number — a nonzero value is a bitmask
-// of fatal events, not a count. "none" (success) when no bits are set.
+// Status `errEvents` (firmware _err_flags) is a bitmask of fatal events, not a count.
 function ErrEventsTile({ mask }: { mask: number }) {
   const hasErrors = mask !== 0;
   return (
@@ -1168,8 +1157,7 @@ function ErrEventsTile({ mask }: { mask: number }) {
   );
 }
 
-// Curated MeshCore CLI catalogue, mirrored from
-// MeshCore/src/helpers/CommonCLI.cpp. Used for terminal autocomplete.
+// Curated CLI catalogue, mirrored from MeshCore/src/helpers/CommonCLI.cpp.
 interface Suggestion {
   text: string;
   hint?: string;
@@ -1509,7 +1497,6 @@ function NeighborsTab({
         return {
           pubkeyPrefix: n.pubkeyPrefix,
           secsAgo: n.secsAgo,
-          // Firmware reports SNR scaled x4
           snr: n.snr,
           name: lookup?.name,
           type: lookup?.type,
@@ -2264,9 +2251,7 @@ function RadioSection({ sendCli }: { sendCli: (cmd: string) => Promise<string> }
   const [vals, setVals] = useState({ freq: "", bw: "", sf: "", cr: "", tx: "" });
   const [busy, setBusy] = useState<SectionBusy>(null);
 
-  // CLI gets are awaited one at a time on purpose: the radio is half-duplex,
-  // so concurrent mesh requests compete for airtime (correlation itself would
-  // be safe — the Go client matches responses by a random command prefix).
+  // Awaited one at a time on purpose: the radio is half-duplex, so concurrent requests compete for airtime.
   const load = useCallback(async () => {
     setBusy("load");
     try {
@@ -2593,9 +2578,7 @@ function NetworkSection({
   );
 }
 
-// SensorVarsSection edits the board's custom variables (firmware `sensor
-// list` / `sensor set key value`). The list reply is "N vars\nkey=value…" and
-// pages with "... next:i" past 134 bytes.
+// The `sensor list` reply is "N vars\nkey=value…", paged with "... next:i" past 134 bytes.
 function SensorVarsSection({ sendCli }: { sendCli: (cmd: string) => Promise<string> }) {
   const [vars, setVars] = useState<{ key: string; value: string }[]>([]);
   const [dirty, setDirty] = useState<Record<string, string>>({});
@@ -2971,8 +2954,7 @@ function SelectField({
   onChange: (v: string) => void;
   placeholder?: string;
 }) {
-  // If the loaded value isn't in the option list, append it so the user
-  // sees what's actually on the device rather than a blank.
+  // A loaded value missing from the options is appended, so the device's value shows rather than a blank.
   const includesValue = value === "" || options.some((o) => o.value === value);
   const finalOptions = includesValue
     ? options

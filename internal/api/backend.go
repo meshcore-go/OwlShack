@@ -2,77 +2,49 @@ package api
 
 import "context"
 
-// Backend is the single seam between the HTTP/WS layer and the companion
-// runtime. The app package implements it; the api package never imports the
-// domain, which keeps the dependency arrow pointing inward (app -> api -> store).
-//
-// A nil method receiver is never expected: the server holds the backend behind
-// a lock and swaps it atomically on config reload / modem reconnect. Handlers
-// guard against a not-yet-wired (nil) backend via the accessors in server.go.
+// Backend is the seam between the HTTP/WS layer and the domain; api never imports the domain.
 type Backend interface {
-	// Companions returns a snapshot of all configured companions.
 	Companions() []CompanionInfo
 
-	// ChannelByHash resolves a channel hash byte to its info (name + PSK),
-	// across every companion. Returns nil for an unknown hash.
+	// ChannelByHash resolves a channel hash byte across every companion; nil when unknown.
 	ChannelByHash(hash byte) *ChannelInfo
 
-	// AddPeer registers a peer with every companion's in-memory peer table, so a
-	// manually added contact is reachable without waiting for its advert.
+	// AddPeer registers a peer in every companion's in-memory table, so it is reachable before its advert.
 	AddPeer(pubkey []byte, name, peerType string)
 
-	// RemovePeers drops the given peers from every companion's in-memory peer
-	// table, so a deleted discovered peer doesn't linger in routing/counts until
-	// the next restart. The DB row is deleted separately by the handler.
+	// RemovePeers drops peers from every companion's in-memory table; the DB row is deleted separately.
 	RemovePeers(pubkeys [][]byte)
 
 	// Companion returns the channel/DM senders for a named companion.
 	Companion(name string) (MessageSender, DMSender, bool)
 
-	// ChannelMutator returns add/remove operations for a companion's channels.
 	ChannelMutator(name string) (adder ChannelAdder, remover ChannelRemover, ok bool)
 
-	// RenameChannel renames a channel on the named companion.
 	RenameChannel(companionName, oldName, newName string) error
 
-	// TraceSender returns the trace sender for a named companion.
 	TraceSender(name string) (TraceSender, bool)
 
-	// AdvertSender returns the self-advert sender for a named companion.
 	AdvertSender(name string) (AdvertSender, bool)
 
-	// Repeater returns the repeater operations for a named companion.
 	Repeater(name string) (*RepeaterOps, bool)
 
-	// MqttStatus reports the live connection state of every configured broker,
-	// or ok=false when no MQTT observer is running (disabled, or no companion
-	// feeds it).
+	// MqttStatus reports each broker's live state; ok=false when no MQTT observer is running.
 	MqttStatus() ([]MqttBrokerStatus, bool)
 
 	// ExportBackup builds a downloadable backup honouring opts.
 	ExportBackup(ctx context.Context, opts BackupOptions) (*BackupFile, error)
 	// EstimateBackup reports what opts would capture, without building the file.
 	EstimateBackup(ctx context.Context, opts BackupOptions) (*BackupEstimate, error)
-	// ImportBackup restores an uploaded backup database, or applies an uploaded
-	// config file. filename only picks the config parser.
+	// ImportBackup restores a backup database or applies a config file; filename only picks the config parser.
 	ImportBackup(ctx context.Context, data []byte, filename string) (*ImportResult, error)
 
-	// RepeaterNode returns runtime operations for the single repeater node the
-	// bot runs (relay stats, neighbours, advertise-now), or ok=false when none
-	// is running. This is the local repeater we ARE, not a remote one we drive.
+	// RepeaterNode returns ops for the repeater we run, not a remote one we drive; ok=false when none runs.
 	RepeaterNode() (*RepeaterNodeOps, bool)
 
-	// PersistChannels writes the companions' current channels back to the
-	// config file.
+	// PersistChannels writes the companions' current channels back to the config file.
 	PersistChannels(ctx context.Context) error
 
-	// Per-resource config writes. Each applies the change by surrogate id,
-	// re-validates the whole assembled config, and reloads — so an invalid edit
-	// is rejected before it persists. Save* with id==0 creates (returning the
-	// new id); id>0 updates. Secret fields typed *string mean "keep existing"
-	// when nil, set when non-nil, cleared when empty. The ctx is the request
-	// context, valid through the blocking write (the subsequent reload runs on
-	// the app lifecycle, not this ctx).
+	// Config writes by surrogate id: id==0 creates and returns it, id>0 updates; *string secrets are nil=keep, ""=clear.
 	SaveSettings(ctx context.Context, in SettingsInput) error
 	SaveMqtt(ctx context.Context, in MqttInput) error
 	SaveBroker(ctx context.Context, in BrokerInput) (int64, error)
@@ -84,12 +56,7 @@ type Backend interface {
 	SaveTrigger(ctx context.Context, in TriggerInput) (int64, error)
 	DeleteTrigger(ctx context.Context, id int64) error
 
-	// Repeater node config is edited per-section so a save touches only its own
-	// slice (no whole-config bulk update). CreateRepeater sets up the singleton
-	// (PrivateKey nil generates one, seeds the "*" region); the Update* methods
-	// patch one section of an existing repeater; the region ops are item-level.
-	// Each validates the whole assembled config and reloads. DeleteRepeater
-	// removes it entirely.
+	// Repeater config is per-section; CreateRepeater generates a key when PrivateKey is nil and seeds the "*" region.
 	CreateRepeater(ctx context.Context, in RepeaterCreateInput) error
 	UpdateRepeaterNode(ctx context.Context, in RepeaterNodeInput) error
 	UpdateRepeaterRelay(ctx context.Context, in RepeaterRelayInput) error
@@ -100,8 +67,7 @@ type Backend interface {
 	DeleteRepeater(ctx context.Context) error
 }
 
-// RepeaterNodeOps are runtime operations on the running repeater node, wired to
-// the domain by the app package (the api package never imports the domain).
+// RepeaterNodeOps are runtime operations on the running repeater node.
 type RepeaterNodeOps struct {
 	Name       string
 	Stats      func() any // live relay counters + uptime + neighbour count
@@ -114,8 +80,7 @@ type RepeaterNodeOps struct {
 	ClearStats func()                               // reset relay counters (clear stats)
 }
 
-// MqttBrokerStatus is one broker's live connection state. Mirrors
-// mqtt.BrokerStatus; duplicated here because api must not import the domain.
+// MqttBrokerStatus mirrors mqtt.BrokerStatus; duplicated because api must not import the domain.
 type MqttBrokerStatus struct {
 	Name        string `json:"name"`
 	Host        string `json:"host"`
@@ -148,9 +113,7 @@ type SettingsInput struct {
 	ListenAddr     *string  `json:"listenAddr"`
 	MapTileKey     *string  `json:"mapTileKey"` // omit = keep, "" = clear
 	PathHashSize   *int     `json:"pathHashSize"`
-	// DutyCycle is the TX airtime cap as a percentage, 0 < pct <= 100
-	// (fractions allowed). Like PathHashSize and unlike the secret fields,
-	// null is written through and means "the default", not "keep".
+	// DutyCycle is a TX airtime cap percentage (0 < pct <= 100); null means the default, not "keep".
 	DutyCycle     *float64 `json:"dutyCycle"`
 	SetupComplete *bool    `json:"setupComplete"`
 }
@@ -202,15 +165,13 @@ type ChannelInput struct {
 	PrivateKey  *string `json:"privateKey"` // nil = keep existing
 }
 
-// RepeaterCreateInput sets up the singleton. Only identity is needed on create;
-// everything else is edited afterward through the section endpoints.
+// RepeaterCreateInput sets up the singleton; everything else is edited through the section endpoints.
 type RepeaterCreateInput struct {
 	Name       string  `json:"name"`
 	PrivateKey *string `json:"privateKey"` // nil/empty = generate
 }
 
-// RepeaterNodeInput is the Node section: identity + position. PrivateKey nil =
-// keep the current identity; a value rotates it.
+// RepeaterNodeInput is the Node section; PrivateKey nil keeps the identity, a value rotates it.
 type RepeaterNodeInput struct {
 	Name       string   `json:"name"`
 	PrivateKey *string  `json:"privateKey"`
@@ -235,8 +196,7 @@ type RepeaterRelayInput struct {
 	FloodAdvertInterval *int     `json:"floodAdvertInterval"`
 }
 
-// RepeaterAdminInput is the Owner & access section. Passwords are nil = keep,
-// "" = clear.
+// RepeaterAdminInput is the Owner & access section; passwords are nil=keep, ""=clear.
 type RepeaterAdminInput struct {
 	OwnerInfo     string  `json:"ownerInfo"`
 	AdminPassword *string `json:"adminPassword"`
@@ -271,13 +231,9 @@ type BackupFile struct {
 	Data        []byte
 }
 
-// BackupOptions is the wizard's selection. Day fields are -1 for everything,
-// 0 for none, or a positive number of days back.
+// BackupOptions day fields are -1 for everything, 0 for none, or a positive number of days back.
 type BackupOptions struct {
-	// CompanionIDs is exactly which companions to include: [] is none, every
-	// id is all. Required — a pointer only so an omitted field is rejected
-	// rather than silently meaning something. Excluding a companion also
-	// excludes its channels, contacts and messages.
+	// CompanionIDs is required: [] is none, and a pointer only so an omitted field is rejected.
 	CompanionIDs *[]int64 `json:"companionIds"`
 	Contacts     bool     `json:"contacts"`
 	Triggers     bool     `json:"triggers"`
@@ -287,13 +243,11 @@ type BackupOptions struct {
 	MessageDays  int      `json:"messageDays"`
 	PacketDays   int      `json:"packetDays"`
 	MetricDays   int      `json:"metricDays"`
-	// IdentityKeys keeps the node private keys, so a restore is the same node
-	// on the mesh. Off by default; startup then mints new identities.
+	// IdentityKeys keeps the node private keys, so a restore is the same node on the mesh.
 	IdentityKeys bool `json:"identityKeys"`
 }
 
-// BackupEstimate is the row count a selection captures, plus the current
-// database size as an upper bound on the file.
+// BackupEstimate is the row count a selection captures, plus the DB size as an upper bound.
 type BackupEstimate struct {
 	Companions int64 `json:"companions"`
 	Contacts   int64 `json:"contacts"`
@@ -304,8 +258,7 @@ type BackupEstimate struct {
 	Bytes      int64 `json:"bytes"`
 }
 
-// ImportResult describes what a restore did, so the UI can be specific about
-// consequences instead of just saying "done".
+// ImportResult describes what a restore did.
 type ImportResult struct {
 	// Kind is "database" (a backup, staged for restart) or "config".
 	Kind            string `json:"kind"`

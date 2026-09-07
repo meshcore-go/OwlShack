@@ -7,9 +7,7 @@ import (
 	"fmt"
 )
 
-// LinkMonitorRepo persists monitored paths under a synthetic 32-byte key (see
-// internal/app's link collector), reusing node_metrics/node_state/history.
-// Writes must be wrapped by the caller in store.WriteAsync/WriteSync.
+// LinkMonitorRepo persists monitored paths under a synthetic 32-byte key; writes must be wrapped in store.WriteAsync/WriteSync.
 type LinkMonitorRepo struct {
 	db *sql.DB
 }
@@ -26,8 +24,7 @@ type LinkMonitor struct {
 	// Display-only UI toggles; the collector keeps recording both readings.
 	IgnoreFirstHop bool
 	HideLastSnr    bool
-	// 0 = use the poller's built-in default, same convention as
-	// ContactMetadata.MonitorRetrySecs/MonitorMaxRetries.
+	// 0 = the poller's built-in default, as with ContactMetadata.MonitorRetrySecs.
 	RetrySecs  int
 	MaxRetries int
 }
@@ -42,9 +39,7 @@ func scanLinkMonitor(s interface{ Scan(...any) error }) (*LinkMonitor, error) {
 
 const linkMonitorCols = `id, key, companion_id, label, path, path_hash_size, interval_secs, enabled, ignore_first_hop, retry_secs, max_retries, hide_last_snr`
 
-// Create inserts a new link monitor and sets l.ID to the new surrogate key.
-// Call inside WriteSync. Returns an error (constraint violation) if the key
-// (i.e. the exact same path already monitored) is a duplicate.
+// Create inserts a link monitor and sets l.ID; a duplicate key (the same path already monitored) errors. Call inside WriteSync.
 func (r *LinkMonitorRepo) Create(ctx context.Context, l *LinkMonitor) error {
 	res, err := r.db.ExecContext(ctx, `
 		INSERT INTO link_monitors (key, companion_id, label, path, path_hash_size, interval_secs, enabled, ignore_first_hop, retry_secs, max_retries, hide_last_snr)
@@ -83,8 +78,7 @@ func (r *LinkMonitorRepo) List(ctx context.Context) ([]LinkMonitor, error) {
 	return out, nil
 }
 
-// ListEnabled returns only the enabled link monitors — used by the monitor
-// Lister each scheduling cycle.
+// ListEnabled returns only the enabled link monitors, for the monitor Lister each cycle.
 func (r *LinkMonitorRepo) ListEnabled(ctx context.Context) ([]LinkMonitor, error) {
 	rows, err := r.db.QueryContext(ctx, `SELECT `+linkMonitorCols+` FROM link_monitors WHERE enabled = 1`)
 	if err != nil {
@@ -130,10 +124,7 @@ func (r *LinkMonitorRepo) GetByKey(ctx context.Context, key []byte) (*LinkMonito
 	return l, nil
 }
 
-// Update patches label/intervalSecs/enabled/ignoreFirstHop/retrySecs/
-// maxRetries/hideLastSnr (nil = leave unchanged) in one statement — a nil
-// pointer arg converts to SQL NULL, so COALESCE falls back to the current
-// column value. Call inside WriteSync.
+// Update patches only non-nil fields: a nil arg becomes SQL NULL, so COALESCE keeps the current column. Call inside WriteSync.
 func (r *LinkMonitorRepo) Update(ctx context.Context, id int64, label *string, intervalSecs *int, enabled *bool, ignoreFirstHop *bool, retrySecs *int, maxRetries *int, hideLastSnr *bool) error {
 	_, err := r.db.ExecContext(ctx, `
 		UPDATE link_monitors SET
@@ -152,9 +143,7 @@ func (r *LinkMonitorRepo) Update(ctx context.Context, id int64, label *string, i
 	return nil
 }
 
-// Delete removes a link monitor. Callers should also clean up its
-// node_state/node_metrics rows (keyed by the same synthetic key) so the
-// Monitoring page doesn't ghost a deleted link. Call inside WriteSync.
+// Delete removes a link monitor; callers must also drop its node_state/node_metrics rows. Call inside WriteSync.
 func (r *LinkMonitorRepo) Delete(ctx context.Context, id int64) error {
 	if _, err := r.db.ExecContext(ctx, `DELETE FROM link_monitors WHERE id = ?`, id); err != nil {
 		return fmt.Errorf("deleting link monitor: %w", err)
@@ -162,9 +151,7 @@ func (r *LinkMonitorRepo) Delete(ctx context.Context, id int64) error {
 	return nil
 }
 
-// DeleteNodeStateAndMetrics removes the node_state row and node_metrics rows
-// for a synthetic link key, so a deleted link doesn't leave a stale card or
-// ghost history. Call inside the same WriteSync as Delete.
+// DeleteNodeStateAndMetrics clears a synthetic link key's node_state and node_metrics rows. Call inside the same WriteSync as Delete.
 func (r *LinkMonitorRepo) DeleteNodeStateAndMetrics(ctx context.Context, key []byte) error {
 	if _, err := r.db.ExecContext(ctx, `DELETE FROM node_state WHERE pubkey = ?`, key); err != nil {
 		return fmt.Errorf("deleting link node state: %w", err)

@@ -13,9 +13,7 @@ import (
 	meshcore "github.com/meshcore-go/meshcore-go"
 )
 
-// A broker that never connected still sits in o.brokers with a nil paho
-// client, so every path that reaches it must tolerate one. Stop must also
-// survive a second call: it closes bc.stop.
+// A broker that never connected sits in o.brokers with a nil paho client, and Stop must survive a second call.
 func TestObserver_StopWithUnconnectedBroker(t *testing.T) {
 	o := &Observer{
 		log:        slog.New(slog.DiscardHandler),
@@ -49,9 +47,7 @@ func TestObserver_StopWithUnconnectedBroker(t *testing.T) {
 	}
 }
 
-// A relayed flood is the same packet hash we already published as rx, so a
-// single dedup cache would drop every transmission this node makes. The caches
-// must be per-direction, and each must still dedup within its own direction.
+// A relayed flood has the same hash as the rx we published, so the dedup caches must be per-direction.
 func TestDedup_IsPerDirection(t *testing.T) {
 	bc := &brokerClient{dedup: &meshcore.DedupCache{}, dedupTx: &meshcore.DedupCache{}}
 	pkt := &meshcore.Packet{
@@ -73,8 +69,7 @@ func TestDedup_IsPerDirection(t *testing.T) {
 	}
 }
 
-// NoteTx tallies what the process transmitted. The route split comes from the
-// packet, so it needs no repeater counters.
+// NoteTx tallies what the process transmitted; the route split comes from the packet.
 func TestNoteTx_CountsAirtimeAndRouteSplit(t *testing.T) {
 	o := testObserver(t)
 	o.stats = fakeStats{airMs: 150}
@@ -104,10 +99,7 @@ func TestNoteTx_CountsAirtimeAndRouteSplit(t *testing.T) {
 	}
 }
 
-// The first "online" status is published inside Start, so anything the status
-// carries must be set before Start runs. This pins the ordering requirement at
-// the observer level: a zero-value observer reports repeat:false, so a caller
-// that sets it late publishes a wrong first status for a relaying node.
+// The first "online" status is published inside Start, so repeat must be set before Start runs.
 func TestSetRelaying_IsVisibleToTheFirstStatus(t *testing.T) {
 	o := testObserver(t)
 	if o.observerCounts().Relaying {
@@ -131,8 +123,7 @@ func TestSetRelaying_IsVisibleToTheFirstStatus(t *testing.T) {
 	}
 }
 
-// A relay-state change must not wait for the heartbeat, and must not publish
-// when nothing changed (a reload re-applies the same value on every SIGHUP).
+// A relay-state change must not wait for the heartbeat, nor publish when a reload re-applies the same value.
 func TestSetRelaying_PublishesOnChangeOnly(t *testing.T) {
 	o := testObserver(t)
 	bc := testBrokerClient("b", "127.0.0.1", 1, "basic")
@@ -158,8 +149,7 @@ func TestSetRelaying_PublishesOnChangeOnly(t *testing.T) {
 	}
 }
 
-// Before Start there is no context and no broker: setting the flag must record
-// it without publishing, because Start's own first status carries it.
+// Before Start there is no context and no broker: record the flag without publishing.
 func TestSetRelaying_BeforeStartDoesNotPublish(t *testing.T) {
 	o := testObserver(t)
 	o.SetRelaying(true)
@@ -168,11 +158,7 @@ func TestSetRelaying_BeforeStartDoesNotPublish(t *testing.T) {
 	}
 }
 
-// The per-direction caches are only useful if publishPacket SELECTS by the
-// direction it was called with. Testing dedupFor alone leaves that untested:
-// hardcoding the argument at the call site is the same bug and passes a
-// cache-level test. This exercises the real path — the same packet must publish
-// once per direction, and still dedup within each.
+// publishPacket must SELECT the cache by the direction it was called with; a hardcoded argument passes a cache-level test.
 func TestPublishPacket_SelectsDedupCacheByDirection(t *testing.T) {
 	o := testObserver(t)
 	bc := testBrokerClient("b", "127.0.0.1", 1, "basic")
@@ -194,8 +180,7 @@ func TestPublishPacket_SelectsDedupCacheByDirection(t *testing.T) {
 	if got := len(bc.publishCh); got != 1 {
 		t.Fatalf("after rx: %d queued, want 1", got)
 	}
-	// Relaying that same flood: identical hash, other direction. This is the
-	// row a shared cache — or a hardcoded direction — silently swallows.
+	// Relaying the same flood: identical hash, other direction.
 	o.publishPacket(pkt, raw, "tx")
 	if got := len(bc.publishCh); got != 2 {
 		t.Errorf("after relaying it as tx: %d queued, want 2", got)

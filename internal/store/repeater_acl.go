@@ -7,15 +7,7 @@ import (
 	"time"
 )
 
-// RepeaterACLEntry is one client of the repeater node's admin surface: a peer
-// that logged in over the mesh (ANON_REQ) and was granted a permission level.
-// It mirrors the firmware's on-flash client list, but lives in the DB so it
-// survives restarts (blank-password reauth keeps working after a reboot).
-//
-// The ECDH shared secret is NOT stored — it's deterministic (our identity +
-// the client pubkey) and re-derived (and cached) by the node on demand, so the
-// DB holds no secret material. Nor is the return path stored: it's relearned
-// from each flood login, with a flooded reply as the fallback.
+// RepeaterACLEntry is one admin-over-mesh client; the firmware keeps this list on flash, we keep it in the DB so reauth survives a restart.
 type RepeaterACLEntry struct {
 	PubKey        string // 64-hex client public key
 	Permissions   int    // firmware PERM_ACL_* (0=guest,1=read-only,2=read-write,3=admin)
@@ -23,8 +15,6 @@ type RepeaterACLEntry struct {
 	LastSeen      time.Time
 }
 
-// RepeaterACLRepo accesses the repeater_acl table (created in migrateV3, since
-// the whole repeater feature is squashed into one migration pre-release).
 type RepeaterACLRepo struct{ db *sql.DB }
 
 // Get returns the ACL entry for a client pubkey, or sql.ErrNoRows if absent.
@@ -62,7 +52,6 @@ func (r *RepeaterACLRepo) List(ctx context.Context) ([]RepeaterACLEntry, error) 
 	return out, rows.Err()
 }
 
-// Upsert inserts or updates a client's ACL entry.
 func (r *RepeaterACLRepo) Upsert(ctx context.Context, e *RepeaterACLEntry) error {
 	_, err := r.db.ExecContext(ctx, `
 		INSERT INTO repeater_acl (pubkey, permissions, last_timestamp, last_seen)
@@ -78,7 +67,6 @@ func (r *RepeaterACLRepo) Upsert(ctx context.Context, e *RepeaterACLEntry) error
 	return nil
 }
 
-// Delete removes a client from the ACL.
 func (r *RepeaterACLRepo) Delete(ctx context.Context, pubkey string) error {
 	if _, err := r.db.ExecContext(ctx, `DELETE FROM repeater_acl WHERE pubkey = ?`, pubkey); err != nil {
 		return fmt.Errorf("deleting repeater ACL entry: %w", err)

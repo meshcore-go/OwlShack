@@ -8,12 +8,7 @@ import {
   PopoverTrigger,
 } from "@/components/ui/popover";
 
-// Token-style channel picker. The list is limited to channels already known to
-// the selected companion (its standalone channels + any channel its triggers
-// use + Public). Creating a brand-new channel inline is deliberately not
-// offered here: a free-typed name would silently become a public hashtag
-// channel (key derived from the name), which is confusing without explaining
-// it on screen. Define new channels on the companion's Channels page instead.
+// No inline create: a free-typed name would silently become a public hashtag channel.
 export function ChannelMultiSelect({
   label,
   hint,
@@ -29,9 +24,7 @@ export function ChannelMultiSelect({
 }) {
   const [open, setOpen] = useState(false);
 
-  // Channel names are case-sensitive (a hashtag channel's key is derived from
-  // the exact name), so compare exactly — "#Foo" and "#foo" are different
-  // channels and must not be merged.
+  // A hashtag channel's key derives from the exact name, so "#Foo" and "#foo" are different channels.
   const has = (name: string) => selected.some((c) => c === name);
 
   const add = (name: string) => {

@@ -10,9 +10,7 @@ import (
 	"github.com/meshcore-go/meshcore-go/node"
 )
 
-// Node discovery (firmware CTL_TYPE_NODE_DISCOVER_REQ/RESP): `discover.neighbors`
-// broadcasts a zero-hop control request asking repeater neighbours to announce
-// themselves; matching responses are recorded in the neighbour list.
+// Node discovery (firmware CTL_TYPE_NODE_DISCOVER_REQ/RESP): a zero-hop request whose matching responses become neighbours.
 
 const (
 	advTypeRepeater    = 2                                             // firmware ADV_TYPE_REPEATER
@@ -21,10 +19,7 @@ const (
 	discoverTypeFilter = byte(1 << advTypeRepeater)                    // discover repeaters
 )
 
-// sendDiscover broadcasts a zero-hop NODE_DISCOVER_REQ (firmware
-// sendNodeDiscoverReq): control data [filter:1][tag:4][since:4], sent direct to
-// neighbours only. Responses arriving within discoverWindow with a matching tag
-// are added as neighbours by handleControl.
+// sendDiscover broadcasts a zero-hop NODE_DISCOVER_REQ; control data is [filter:1][tag:4][since:4].
 func (r *Repeater) sendDiscover() error {
 	var tagB [4]byte
 	_, _ = crand.Read(tagB[:])
@@ -54,8 +49,7 @@ func (r *Repeater) sendDiscover() error {
 
 func (r *Repeater) SendDiscover() error { return r.sendDiscover() }
 
-// handleControl answers NODE_DISCOVER_REQs and records discover RESPONSES that
-// match our in-flight tag as neighbours (firmware onControlDataRecv).
+// handleControl ports firmware onControlDataRecv: answer discover requests, record responses matching our in-flight tag.
 func (r *Repeater) handleControl(pkt *meshcore.Packet) {
 	ctl, err := meshcore.ControlFromBytes(pkt.Payload)
 	if err != nil || !pkt.IsRouteDirect() {
@@ -69,11 +63,7 @@ func (r *Repeater) handleControl(pkt *meshcore.Packet) {
 	}
 }
 
-// answerDiscover responds to a NODE_DISCOVER_REQ asking for repeaters (firmware
-// REQ branch of onControlDataRecv): gated on relaying being enabled, rate-
-// limited 4/2min; the response is zero-hop control data
-// [flags=0x90|type][snr x4][tag:4][pubkey] sent after a randomized delay so
-// simultaneous responders don't collide.
+// answerDiscover replies [flags=0x90|type][snr x4][tag:4][pubkey], gated on relaying being enabled and rate-limited 4/2min.
 func (r *Repeater) answerDiscover(pkt *meshcore.Packet, ctl *meshcore.Control) {
 	req, err := ctl.DiscoverRequest()
 	if err != nil || req.TypeFilter&(1<<advTypeRepeater) == 0 {
@@ -102,8 +92,7 @@ func (r *Repeater) answerDiscover(pkt *meshcore.Packet, ctl *meshcore.Control) {
 		return
 	}
 
-	// Random retransmit delay, widened ×4 as multiple nodes answer the same
-	// request (firmware getRetransmitDelay*4, tx_delay_factor 0.5).
+	// Widened ×4 because multiple nodes answer the same request (firmware getRetransmitDelay*4, tx_delay_factor 0.5).
 	est := uint32(100) // ms fallback when no ToA estimator is available
 	if r.airtime != nil {
 		est = r.airtime(len(payload))
@@ -117,9 +106,7 @@ func (r *Repeater) answerDiscover(pkt *meshcore.Packet, ctl *meshcore.Control) {
 	}
 }
 
-// recordDiscoverResp records a repeater's discover RESPONSE as a neighbour when
-// it matches our in-flight discover tag (firmware onControlDataRecv →
-// putNeighbour with the SNR *we* heard it at, not the byte it reports).
+// recordDiscoverResp stores the neighbour at the SNR *we* heard it at, not the byte it reports (firmware putNeighbour).
 func (r *Repeater) recordDiscoverResp(pkt *meshcore.Packet, ctl *meshcore.Control) {
 	resp, err := ctl.DiscoverResponse()
 	if err != nil || resp.NodeType != advTypeRepeater || len(resp.PubKey) < 32 {

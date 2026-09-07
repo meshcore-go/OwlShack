@@ -7,17 +7,13 @@ import (
 	"fmt"
 )
 
-// RepeaterRegion is a transport scope the repeater relays. Stored as JSON in the
-// repeater.regions column (the repeater is a singleton, so no child table).
+// RepeaterRegion is a transport scope the repeater relays, stored as JSON in repeater.regions.
 type RepeaterRegion struct {
 	Name      string `json:"name"`
 	DenyFlood bool   `json:"denyFlood,omitempty"`
 }
 
-// Repeater is the single repeater node the bot runs (at most one — a radio can
-// host only one relay identity). Stored as a singleton row (id=1); a missing
-// row means no repeater is configured. Unlike Companion it has no child history
-// tables (no messages/contacts), so it needs no surrogate-id indirection.
+// Repeater is the singleton repeater row (id=1); a missing row means none is configured, since a radio hosts one relay identity.
 type Repeater struct {
 	Name                string
 	PrivateKey          string

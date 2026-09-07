@@ -8,7 +8,6 @@ import {
 } from "@/components/ui/dropdown-menu";
 import { cn } from "@/lib/utils";
 
-// A lat,lon link that opens a map-target menu (MeshCore map / Google / Apple).
 // `raw` is the visible label; `className` merges onto the trigger.
 export function CoordLink({
   lat,

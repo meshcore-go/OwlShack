@@ -1,11 +1,4 @@
-// Package telemetry decodes MeshCore CayenneLPP telemetry payloads into named
-// readings and firmware-independent time-series metric keys. It is transport-
-// agnostic: any node type (repeater, companion, sensor, …) that obtains a raw
-// telemetry payload — via a logged-in request or a sessionless contact request —
-// feeds the bytes here, so the LPP decode + naming + metric-keying live in one
-// place rather than inside one client.
-//
-// The dependency arrow points inward: telemetry -> meshcore-go only.
+// Package telemetry decodes MeshCore CayenneLPP payloads into named readings and firmware-independent metric keys.
 package telemetry
 
 import (
@@ -17,14 +10,10 @@ import (
 	meshcore "github.com/meshcore-go/meshcore-go"
 )
 
-// ChannelSelf is the LPP channel a node uses for its own readings (battery, MCU
-// temperature, GPS); external sensors land on channels >= 2 on firmware 1.16+.
-// TELEM_CHANNEL_SELF in firmware.
+// ChannelSelf is the firmware's TELEM_CHANNEL_SELF; external sensors land on channels >= 2 on firmware 1.16+.
 const ChannelSelf = 1
 
-// Reading is one decoded LPP reading with a human label. Self marks a reading
-// the node reports about itself (MCU temp, battery, location) rather than an
-// attached sensor — decided in Parse so downstream keying is firmware-independent.
+// Reading is one decoded LPP reading; Self marks one the node reports about itself rather than an attached sensor.
 type Reading struct {
 	Channel int    `json:"channel"`
 	Type    int    `json:"type"`
@@ -40,8 +29,7 @@ type Telemetry struct {
 	Raw      string    `json:"raw"`
 }
 
-// Parse decodes a raw CayenneLPP telemetry payload into named readings. An empty
-// payload yields an empty (non-nil) Telemetry.
+// Parse decodes a raw CayenneLPP payload into named readings; an empty payload yields an empty (non-nil) Telemetry.
 func Parse(data []byte) (*Telemetry, error) {
 	out := &Telemetry{
 		Raw:      hex.EncodeToString(data),
@@ -54,16 +42,7 @@ func Parse(data []byte) (*Telemetry, error) {
 	if err != nil {
 		return out, fmt.Errorf("decoding telemetry: %w", err)
 	}
-	// Classify the node's own (MCU/battery/GPS) readings vs external sensors.
-	// Both firmwares put self-telemetry on the self channel; the distinction is
-	// what else shares it. Firmware 1.16+ gives each external sensor its own
-	// channel (>= 2), so the self channel carries only self readings. Firmware
-	// <= 1.15 lumps everything on the self channel, so an external temperature
-	// arrives as a SECOND LPPTemperature there. We therefore treat only the
-	// FIRST reading of each self-type on the self channel as "self" (the MCU
-	// emits its own telemetry first); any repeat — or anything on another
-	// channel — is an external sensor. This keeps metric names firmware-
-	// independent instead of mislabeling 1.15's external temp as the MCU's.
+	// Firmware <=1.15 lumps external sensors onto the self channel, so only the first reading of each self-type there is the node's own.
 	selfClaimed := map[byte]bool{}
 	for _, r := range readings {
 		self := r.Channel == ChannelSelf && isSelfType(r.Type) && !selfClaimed[r.Type]
@@ -87,25 +66,14 @@ func Parse(data []byte) (*Telemetry, error) {
 	return out, nil
 }
 
-// Metric is one flattened scalar time-series value: its firmware-independent
-// metric key, the LPP channel it came from, and the value.
+// Metric is one flattened scalar time-series value.
 type Metric struct {
 	Key     string
 	Channel int
 	Value   float64
 }
 
-// Metrics flattens the readings into scalar time-series values, keyed so the
-// firmware's sensor identity is preserved. A node's OWN readings (Self) keep
-// their clean name (mcu_temperature, battery, location) since there's only one
-// of each. An EXTERNAL sensor carries its channel ("temperature_ch2"), because
-// on firmware 1.16+ each sensor gets its own channel — that channel is the
-// stable per-sensor handle, so a multi-sensor / custom board yields distinct,
-// stable series rather than fighting over one name. (Firmware <=1.15 lumps
-// externals onto the self channel, so the same board changes channel keys across
-// that upgrade — an accepted one-off discontinuity for legacy hardware.) A
-// numeric suffix guards the rare same-channel/type duplicate. Composite values
-// (GPS, accel, gyro) split into per-axis series.
+// Metrics flattens readings into scalar series; an external sensor's channel is its stable handle, so it is keyed "temperature_ch2".
 func (t *Telemetry) Metrics() []Metric {
 	var out []Metric
 	used := make(map[string]bool, len(t.Readings))
@@ -127,9 +95,7 @@ func (t *Telemetry) Metrics() []Metric {
 	return out
 }
 
-// disambiguate appends a numeric suffix if key is already taken — only needed
-// for the rare case of two readings sharing both type and channel (the channel
-// already separates distinct external sensors).
+// disambiguate guards the rare case of two readings sharing both type and channel.
 func disambiguate(used map[string]bool, key string) string {
 	if !used[key] {
 		return key
@@ -178,8 +144,7 @@ func normalizeMetric(s string) string {
 	return strings.Trim(b.String(), "_")
 }
 
-// isSelfType reports whether an LPP type is one a node reports about itself
-// (MCU temperature, battery voltage, GPS) — as opposed to an attached sensor.
+// isSelfType reports whether an LPP type is one a node reports about itself (MCU temperature, battery voltage, GPS).
 func isSelfType(typ byte) bool {
 	switch typ {
 	case meshcore.LPPTemperature, meshcore.LPPVoltage, meshcore.LPPGPS:
@@ -188,10 +153,7 @@ func isSelfType(typ byte) bool {
 	return false
 }
 
-// lppTypeMeta maps an LPP type to a display name + unit. When self is true the
-// reading is the node's own (MCU temp / battery / location); otherwise it's an
-// external sensor and gets the generic type name. Parse decides self-ness so the
-// rule is firmware-independent.
+// lppTypeMeta maps an LPP type to a display name + unit, naming self readings for the node's own hardware.
 func lppTypeMeta(self bool, typ byte) (name, unit string) {
 	if self {
 		switch typ {

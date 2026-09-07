@@ -31,9 +31,7 @@ type contactJSON struct {
 	Metadata        store.ContactMetadata `json:"metadata"`
 }
 
-// contactToJSON serializes a contact from its own cached record (identity/
-// location/path/last-seen, kept fresh by adverts + path learning) —
-// independent of discovered_peers.
+// contactToJSON serializes a contact's own cached record, independent of discovered_peers.
 func (s *Server) contactToJSON(c *store.Contact) contactJSON {
 	lastSeen := ""
 	if !c.LastSeen.IsZero() {
@@ -56,8 +54,7 @@ func (s *Server) contactToJSON(c *store.Contact) contactJSON {
 	}
 }
 
-// validPeerType reports whether t is one of the recognised MeshCore peer
-// types. Mirrors meshcore-go's advert type-string mapping.
+// validPeerType mirrors meshcore-go's advert type-string mapping.
 func validPeerType(t string) bool {
 	switch t {
 	case "CHAT", "REPEATER", "ROOM", "SENSOR":
@@ -136,9 +133,7 @@ func (s *Server) handleAddContact(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// A node can't be its own peer: our own companion identities show up as
-	// discovered peers (e.g. on the map), so reject adding any of them as a
-	// contact rather than creating a nonsensical self-contact row.
+	// Our own companion identities show up as discovered peers, so reject a self-contact.
 	if comps, lerr := s.store.Companions.List(r.Context()); lerr == nil {
 		selfHex := hex.EncodeToString(pubkey)
 		for _, c := range comps {
@@ -157,11 +152,7 @@ func (s *Server) handleAddContact(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// A peer we've already heard, used to (a) backfill the contact's cached
-	// name/type when the request didn't carry them, and (b) seed discovered_peers
-	// so the peer shows up in the Peers list. Known peers are only relabelled
-	// when nameless, so a crafted shared-contact message can't rename a trusted
-	// peer.
+	// A known peer is only relabelled when nameless, so a crafted shared-contact can't rename a trusted peer.
 	existing, _ := s.store.Peers.GetByPubKey(r.Context(), pubkey)
 
 	// The contact owns its identity now; backfill from a known peer when blank.
@@ -191,17 +182,14 @@ func (s *Server) handleAddContact(w http.ResponseWriter, r *http.Request) {
 
 	var addErr error
 	s.store.WriteSync(func() {
-		// Seed the peer so it appears in the Peers list. No longer required for
-		// referential integrity — contacts are decoupled from discovered_peers.
+		// Seed the peer so it appears in the Peers list.
 		if seedPeer != nil {
 			_ = s.store.Peers.Upsert(r.Context(), seedPeer)
 		}
 		if addErr = s.store.Contacts.Add(r.Context(), cid, pubkey, storeName, storeType); addErr != nil {
 			return
 		}
-		// Backfill the full record from what we already know about the peer, so a
-		// contact added from a heard peer has location/path/feat immediately
-		// rather than waiting for the next advert.
+		// Backfill from the heard peer so location/path/feat don't wait for the next advert.
 		if existing != nil {
 			hasLoc := existing.HasLocation()
 			_ = s.store.Contacts.RefreshFromAdvert(
@@ -223,9 +211,7 @@ func (s *Server) handleAddContact(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// Register the peer with the running nodes: without this a contact added by
-	// pubkey alone (never heard an advert) fails every radio op with "peer not
-	// found in peer table" until the next restart re-hydrates from the DB.
+	// Without this, a contact added by pubkey alone fails every radio op until a restart re-hydrates it.
 	if add := s.peerAdder(); add != nil {
 		add(pubkey, storeName, storeType)
 	}
@@ -293,9 +279,7 @@ func (s *Server) handleUpdateContactMetadata(w http.ResponseWriter, r *http.Requ
 	w.WriteHeader(http.StatusNoContent)
 }
 
-// handleSetContactLocation hand-sets a contact's location (lat/lon in
-// microdegrees, matching discovered_peers). A later advert carrying a position
-// overwrites it ("advert wins").
+// handleSetContactLocation takes lat/lon in microdegrees; a later advert with a position overwrites it.
 func (s *Server) handleSetContactLocation(w http.ResponseWriter, r *http.Request) {
 	cid, ok := s.companionID(r.Context(), w, r.PathValue("name"))
 	if !ok {
@@ -325,9 +309,7 @@ func (s *Server) handleSetContactLocation(w http.ResponseWriter, r *http.Request
 	w.WriteHeader(http.StatusNoContent)
 }
 
-// companionID resolves a companion's surrogate id from its current name (the
-// API keeps name in URLs; per-companion history is keyed by id so a rename
-// keeps it). Writes a 404 and returns ok=false when no companion has that name.
+// companionID maps the name in the URL to the surrogate id, writing a 404 when there is no such companion.
 func (s *Server) companionID(ctx context.Context, w http.ResponseWriter, name string) (int64, bool) {
 	id, err := s.store.Companions.IDByName(ctx, name)
 	if err != nil {

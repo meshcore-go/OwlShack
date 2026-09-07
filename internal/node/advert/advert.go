@@ -1,7 +1,4 @@
-// Package advert builds and sends MeshCore self-adverts, shared by the node
-// personalities (companion, repeater) that each announce themselves on the mesh.
-// The only per-node differences are the advert type and the flood path-hash
-// width, so they're parameters here rather than duplicated build logic.
+// Package advert builds and sends MeshCore self-adverts for the node personalities that announce themselves.
 package advert
 
 import (
@@ -13,18 +10,7 @@ import (
 	"github.com/meshcore-go/meshcore-go/node"
 )
 
-// SendSelf builds, signs, and transmits a self-advert of the given type.
-//
-// flood=true is a mesh-wide advert repeaters rebuild as it propagates;
-// flood=false is a zero-hop advert only direct neighbours receive (never
-// relayed). pathHashSize is the flood path-hash width in BYTES (1-4); the wire
-// carries size-1 in the top 2 bits of PathLength. Ignored for zero-hop. lat/lon
-// are included only when set and not both zero.
-//
-// scope (the firmware default_scope) optionally wraps a flood advert in a
-// transport region; nil sends a plain unscoped flood.
-// floodPathLength encodes PathLength: top 2 bits (pathHashSize - 1), low 6 the
-// hop count (0 when we originate). Clamped — a 0 would underflow to 0xC0.
+// floodPathLength encodes the path-hash width in BYTES as (size-1) in PathLength's top 2 bits; clamped, a 0 would underflow to 0xC0.
 func floodPathLength(pathHashSize int) byte {
 	if pathHashSize < 1 || pathHashSize > 3 {
 		pathHashSize = 1
@@ -32,6 +18,7 @@ func floodPathLength(pathHashSize int) byte {
 	return byte((pathHashSize - 1) << 6)
 }
 
+// SendSelf transmits a self-advert: flood is mesh-wide, otherwise zero-hop to direct neighbours only; scope wraps a flood in a transport region.
 func SendSelf(n *node.Node, log *slog.Logger, advType, name string, lat, lon *float64, flood bool, pathHashSize int, scope *meshcore.Region) error {
 	appData := meshcore.AdvertAppData{Type: advType, Name: name}
 	if lat != nil && lon != nil && (*lat != 0 || *lon != 0) {
@@ -48,8 +35,7 @@ func SendSelf(n *node.Node, log *slog.Logger, advType, name string, lat, lon *fl
 		Timestamp:  uint32(time.Now().Unix()),
 		RawAppData: rawAppData,
 	}
-	// SignWith (not Sign(PrivateKey())) so an imported expanded-key identity
-	// signs correctly — its PrivateKey() has no usable seed.
+	// SignWith, not Sign(PrivateKey()): an imported expanded-key identity has no usable seed.
 	adv.SignWith(n.Identity())
 
 	payload, err := adv.ToBytes()
@@ -57,9 +43,7 @@ func SendSelf(n *node.Node, log *slog.Logger, advType, name string, lat, lon *fl
 		return err
 	}
 
-	// Flood: ROUTE_TYPE_FLOOD, path-hash width in the top 2 bits, hop count 0.
-	// Zero-hop: ROUTE_TYPE_DIRECT with PathLength 0 (firmware reads path_len==0
-	// as "zero hop"), so neighbours accept but never relay it.
+	// The firmware reads a direct packet with path_len==0 as zero-hop: accepted by neighbours, never relayed.
 	routeType := meshcore.RouteTypeFlood
 	pathLength := floodPathLength(pathHashSize)
 	if !flood {

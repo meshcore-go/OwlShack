@@ -12,12 +12,7 @@ import (
 	"github.com/meshcore-go/OwlShack/internal/trigger"
 )
 
-// ReloadTriggers swaps the companion's trigger set in place, without tearing
-// down the node, identity, MQTT observer, advert loop, or repeater/room
-// sessions. Use it when only a companion's triggers changed: the result is the
-// same as a restart for trigger purposes, but with no re-advert and no session
-// loss. The new set is built and validated first, so an invalid trigger aborts
-// the reload with the old set still running.
+// ReloadTriggers swaps the trigger set without touching the node, adverts or sessions; the new set is validated before the old one is stopped.
 func (c *Companion) ReloadTriggers(newCfg config.CompanionConfig) error {
 	c.mu.Lock()
 	defer c.mu.Unlock()
@@ -27,18 +22,12 @@ func (c *Companion) ReloadTriggers(newCfg config.CompanionConfig) error {
 		return fmt.Errorf("companion %q not started", c.cfg.Name)
 	}
 
-	// Build + validate the new trigger set up front; bail before touching the
-	// live triggers if anything is invalid. Channels are companion-owned and
-	// unchanged here (a config change that also alters channels is not a
-	// triggers-only change, so it takes the full-restart path instead).
+	// Channels are unchanged here: a config change that alters them takes the full-restart path.
 	newEntries, err := c.buildTriggers(newCfg)
 	if err != nil {
 		return err
 	}
 
-	// Stop the old triggers (cron loops exit; channel triggers go no-op), then
-	// swap in and start the new set. The persistent group-text handler picks up
-	// the new set; node channels are untouched.
 	for _, e := range c.triggers {
 		e.trigger.Stop()
 	}
@@ -65,10 +54,7 @@ func applyTriggerDefaults(t *config.TriggerConfig) {
 	}
 }
 
-// triggerChannelFilters builds the channel entries a channel trigger reacts to
-// (used only as a name filter). It does NOT register them on the node — message
-// decryption uses the companion's channels, which ApplyDefaults guarantees
-// include every channel a trigger references.
+// triggerChannelFilters builds a trigger's name filter only; it registers nothing on the node, where decryption uses the companion's own channels.
 func triggerChannelFilters(cfg config.TriggerConfig) ([]*meshcore.ChannelEntry, error) {
 	if cfg.Channels == nil {
 		return nil, nil
@@ -84,9 +70,6 @@ func triggerChannelFilters(cfg config.TriggerConfig) ([]*meshcore.ChannelEntry, 
 	return channels, nil
 }
 
-// buildTriggers constructs the trigger entries for a companion config block.
-// Channel triggers get a name filter only; channels are not registered on the
-// node (they are companion-owned). Shared by NewCompanion and ReloadTriggers.
 func (c *Companion) buildTriggers(cfg config.CompanionConfig) ([]triggerEntry, error) {
 	if cfg.Triggers == nil {
 		return nil, nil

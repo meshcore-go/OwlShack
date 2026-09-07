@@ -4,16 +4,13 @@ import type { Dispatch, SetStateAction } from "react";
 interface ApiList<T> {
   /** null until the first successful load, then always an array. */
   items: T[] | null;
-  /** Exposed so pages can merge live WS updates into the loaded list. */
   setItems: Dispatch<SetStateAction<T[] | null>>;
   loading: boolean;
   error: string | null;
   reload: () => void;
 }
 
-// Shared fetch scaffold for list endpoints: loading/error/retry state plus
-// auto-fetch on mount and whenever the URL changes. Pass url=null to defer
-// (e.g. a missing route param).
+// Refetches whenever the URL changes; pass url=null to defer (e.g. a missing route param).
 export function useApiList<T>(
   url: string | null,
   errorMessage: string,

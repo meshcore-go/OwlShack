@@ -66,11 +66,7 @@ func (c *Companion) RenameChannel(oldName, newName string) error {
 	return fmt.Errorf("channel %q not found", oldName)
 }
 
-// channelTriggerUsage returns a human description of the first trigger that
-// references the named channel, or "" if none do. Channels are companion-owned;
-// a channel a trigger uses can't be edited/renamed/removed until that trigger
-// usage is gone. Matching is case-sensitive — channel names map to distinct
-// keys per case (see channelFromRef), matching the rest of the channel code.
+// channelTriggerUsage describes the first trigger referencing the named channel, or "" if none do; matching is case-sensitive, as elsewhere in the channel code.
 func (c *Companion) channelTriggerUsage(name string) string {
 	c.mu.Lock()
 	defer c.mu.Unlock()
@@ -96,10 +92,7 @@ func (c *Companion) nextFreeChannelIndex() int {
 	return -1
 }
 
-// StandaloneChannels returns all of the companion's channels for config
-// persistence. Channels are companion-owned (triggers only reference them by
-// name), so this is simply every channel registered on the node. Hashtag/Public
-// channels omit their derived key.
+// StandaloneChannels returns every channel registered on the node for config persistence; hashtag/Public channels omit their derived key.
 func (c *Companion) StandaloneChannels() []config.ChannelRef {
 	allChs := c.node.Channels()
 	var refs []config.ChannelRef

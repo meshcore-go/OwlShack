@@ -33,8 +33,7 @@ import {
   type MqttSettings,
 } from "@/lib/configApi";
 
-// Live connection state from GET /api/mqtt/status. Keyed by broker NAME, which
-// is what the observer knows — it never sees the config table's surrogate id.
+// GET /api/mqtt/status, keyed by broker name — the observer never sees the config surrogate id.
 interface BrokerStatus {
   name: string;
   connected: boolean;
@@ -51,8 +50,7 @@ interface MqttStatus {
   brokers: BrokerStatus[];
 }
 
-// A broker draft is the editable form state: every broker field except the
-// secret, which is entered separately (blank = keep the stored one).
+// Every broker field but the secret, which is entered separately (blank = keep the stored one).
 type BrokerDraft = Omit<BrokerInput, "password">;
 
 const EMPTY_BROKER: BrokerDraft = {
@@ -74,9 +72,7 @@ const EMPTY_BROKER: BrokerDraft = {
   audience: "",
 };
 
-// Mirrors meshcoretomqtt's broker presets (github.com/Cisien/meshcoretomqtt
-// presets/): websockets on 443, verified TLS, signed-token auth with the
-// audience pinned to the broker host, explicit meshcoretomqtt topic paths.
+// Mirrors meshcoretomqtt's broker presets: github.com/Cisien/meshcoretomqtt presets/
 function tokenBrokerPreset(name: string, host: string): BrokerDraft {
   return {
     ...EMPTY_BROKER,
@@ -189,8 +185,7 @@ export function MqttPage() {
   const loading = mqttLoading || brokersLoading;
   const error = mqttError || brokersError;
 
-  // Connection state is runtime, not config, so it polls rather than riding
-  // the config reload. 5s matches the repeater page's live tab.
+  // Connection state is runtime, not config, so it polls rather than riding the config reload.
   const [status, setStatus] = useState<MqttStatus | null>(null);
   useEffect(() => {
     let live = true;
@@ -697,11 +692,9 @@ function BrokerEditor({
   );
 }
 
-// FeedState separates "no answer yet" and "the observer isn't running" from a
-// real connection failure — only the last of those is red.
+// "No answer yet" and "observer not running" are not connection failures; only the last is red.
 type FeedState = "unknown" | "stopped" | "live";
 
-// BrokerStatusPill answers "are we connected" at a glance.
 function BrokerStatusPill({ st, feed }: { st?: BrokerStatus; feed: FeedState }) {
   if (feed === "unknown") return null;
   if (feed === "stopped") {
@@ -734,9 +727,7 @@ function BrokerStatusPill({ st, feed }: { st?: BrokerStatus; feed: FeedState }) 
   );
 }
 
-// BrokerStatusLine carries the detail behind the pill: why it is offline, and
-// what it has published. The error shows even while connected, so a broker that
-// is flapping or dropping publishes is still visible.
+// The error shows even while connected, so a flapping broker stays visible.
 function BrokerStatusLine({
   st,
   enabled,
@@ -753,8 +744,7 @@ function BrokerStatusLine({
       parts.push(`up ${timeAgo(new Date(st.connectedTs * 1000).toISOString())}`);
     }
   } else {
-    // The observer retries a failed broker indefinitely with backoff, so an
-    // offline broker recovers on its own — say so rather than looking dead.
+    // The observer retries a failed broker indefinitely, so it recovers on its own.
     parts.push("retrying");
   }
   if (st.published) parts.push(`${st.published} published`);

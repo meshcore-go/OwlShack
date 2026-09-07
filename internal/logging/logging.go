@@ -1,5 +1,4 @@
-// Package logging defines shared logging primitives used across the bot's
-// packages, including the custom verbose trace level and handler setup.
+// Package logging sets up the shared slog handler and the custom trace level.
 package logging
 
 import (
@@ -8,13 +7,10 @@ import (
 	"strings"
 )
 
-// LevelTrace is a custom slog level below Debug, used for very verbose tracing
-// (enabled with -vv). It is rendered as "TRACE" by the configured handler.
+// LevelTrace is a custom slog level below Debug (enabled with -vv), rendered as "TRACE" by the configured handler.
 const LevelTrace = slog.Level(-8)
 
-// Configure installs the process-wide slog default logger. The -v count takes
-// precedence (1=debug, >=2=trace); otherwise the config's log level is used.
-// With neither set, slog's built-in default logger is left in place.
+// Configure installs the default logger; the -v count (1=debug, >=2=trace) wins over logLevel, and neither set leaves slog's own default.
 func Configure(verbosity int, logLevel string) {
 	if verbosity == 0 && logLevel == "" {
 		return

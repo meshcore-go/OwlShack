@@ -23,12 +23,7 @@ func (rm *Client) SendStatusReq(pubkeyHex string, timeout time.Duration) (*Statu
 	return parseRepeaterStatus(data)
 }
 
-// SendRoomKeepAlive sends REQ_TYPE_KEEP_ALIVE to a room server so it resumes
-// pushing posts (newer than since; 0 keeps its stored cursor). The firmware
-// only honours a DIRECT keep-alive and answers with a direct ACK carrying its
-// unsynced-post count, then streams the posts through the normal DM path — so
-// this is fire-and-forget: success means "sent along a known route". A flood
-// login learns the route.
+// SendRoomKeepAlive is fire-and-forget: the firmware honours only a direct keep-alive and streams posts over the DM path.
 func (rm *Client) SendRoomKeepAlive(pubkeyHex string, since uint32) error {
 	pubkeyBytes, err := hex.DecodeString(pubkeyHex)
 	if err != nil {
@@ -83,8 +78,7 @@ func (rm *Client) SendRoomKeepAlive(pubkeyHex string, since uint32) error {
 	})
 }
 
-// SendRoomStatusReq is SendStatusReq for a room server, whose ServerStats
-// trailer differs (see parseRoomStatus).
+// SendRoomStatusReq is SendStatusReq for a room server, whose ServerStats trailer differs.
 func (rm *Client) SendRoomStatusReq(pubkeyHex string, timeout time.Duration) (*Status, error) {
 	body := make([]byte, 5)
 	body[0] = reqTypeGetStatus
@@ -138,9 +132,7 @@ func (rm *Client) SendAccessListReq(pubkeyHex string, timeout time.Duration) (*A
 	return parseRepeaterAccessList(data), nil
 }
 
-// SetAccessPerm changes the ACL permission byte for a pubkey on the repeater.
-// Sets perms=0 to remove. Requires admin session. The pubkey is the full
-// A prefix is enough to revoke (perms 0); granting a role needs the full key.
+// SetAccessPerm needs an admin session; perms 0 revokes and accepts a prefix, granting needs the full key.
 func (rm *Client) SetAccessPerm(pubkeyHex, targetPubkeyHex string, perms uint8, timeout time.Duration) error {
 	cmd := fmt.Sprintf("setperm %s %d", targetPubkeyHex, perms)
 	resp, err := rm.SendCLI(pubkeyHex, cmd, timeout)
@@ -155,9 +147,7 @@ func (rm *Client) SetAccessPerm(pubkeyHex, targetPubkeyHex string, perms uint8, 
 	return nil
 }
 
-// SendSeriesReq asks a sensor for min/max/avg per channel over a window
-// (REQ_TYPE_GET_AVG_MIN_MAX 0x04; read-only role or above). Bounds are seconds
-// before the sensor's now: start is the older edge.
+// SendSeriesReq bounds are seconds before the sensor's now, start being the older edge; needs read-only or above.
 func (rm *Client) SendSeriesReq(pubkeyHex string, startSecsAgo, endSecsAgo uint32, timeout time.Duration) (*telemetry.Series, error) {
 	// payload: type(1) start(4) end(4) reserved(2)
 	body := make([]byte, 11)
@@ -171,8 +161,7 @@ func (rm *Client) SendSeriesReq(pubkeyHex string, startSecsAgo, endSecsAgo uint3
 	return telemetry.ParseSeries(data)
 }
 
-// telemetryReqBody builds the GET_TELEMETRY_DATA payload: type(1) mask(1)
-// reserved(3) random(4). Mask 0x00 asks for all; the firmware filters by ACL.
+// telemetryReqBody: type(1) mask(1) reserved(3) random(4); mask 0x00 asks for all and the firmware filters by ACL.
 func telemetryReqBody() ([]byte, error) {
 	body := make([]byte, 9)
 	body[0] = reqTypeGetTelemetryData
@@ -194,8 +183,7 @@ func (rm *Client) SendTelemetryReq(pubkeyHex string, timeout time.Duration) (*te
 	return telemetry.Parse(data)
 }
 
-// SendContactTelemetryReq requests telemetry from any contact without a login,
-// encrypting with the ECDH secret between this companion and the contact.
+// SendContactTelemetryReq needs no login: it encrypts with the ECDH secret shared with the contact.
 func (rm *Client) SendContactTelemetryReq(pubkeyHex string, timeout time.Duration) (*telemetry.Telemetry, error) {
 	pubkeyBytes, err := hex.DecodeString(pubkeyHex)
 	if err != nil {
@@ -257,8 +245,7 @@ func (rm *Client) SendCLI(pubkeyHex, command string, timeout time.Duration) (str
 	resultCh := make(chan string, 1)
 	var prefix string
 	rm.cliMu.Lock()
-	// The prefix is one hex byte, so a full map has no free slot and the
-	// random search below would spin forever holding cliMu.
+	// The prefix is one hex byte, so a full map would spin the random search below forever holding cliMu.
 	if len(rm.cliPending) >= 256 {
 		rm.cliMu.Unlock()
 		return "", fmt.Errorf("too many CLI commands in flight")

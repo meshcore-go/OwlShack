@@ -20,8 +20,7 @@ func (rm *Client) SendLogin(pubkeyHex, password string, timeout time.Duration) (
 	return rm.sendLogin(pubkeyHex, password, nil, timeout)
 }
 
-// SendRoomLogin logs in to a room server — same flow as SendLogin, but the
-// plaintext carries a sync_since cursor (the server pushes posts newer than it).
+// SendRoomLogin is SendLogin plus a sync_since cursor; the server pushes posts newer than it.
 func (rm *Client) SendRoomLogin(pubkeyHex, password string, syncSince uint32, timeout time.Duration) (*LoginResult, error) {
 	return rm.sendLogin(pubkeyHex, password, &syncSince, timeout)
 }
@@ -42,11 +41,7 @@ func (rm *Client) sendLogin(pubkeyHex, password string, roomSyncSince *uint32, t
 		return nil, fmt.Errorf("peer not found in peer table")
 	}
 
-	// Use the companion's static identity rather than a throwaway ephemeral key
-	// so the repeater registers us in its ACL under our real pubkey. This lets
-	// the firmware accept blank-password reauth on subsequent logins (its
-	// `getClient(sender.pub_key)` lookup) and avoids accumulating orphan
-	// contact entries on the repeater.
+	// The static identity (not an ephemeral key) puts us in the repeater's ACL, so its getClient() lookup accepts blank-password reauth.
 	selfIdentity := rm.node.Identity()
 	selfSeed := selfIdentity.Seed()
 

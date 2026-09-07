@@ -11,8 +11,6 @@ import (
 )
 
 // The database is the source of truth for config; files are one-time imports.
-// Config is stored relationally (the internal/store config_* tables);
-// the assemble/disassemble seam lives in config_tables.go.
 
 func saveConfig(ctx context.Context, db *store.Store, cfg *config.Config) error {
 	return persistToTables(ctx, db, cfg)
@@ -22,10 +20,7 @@ func loadConfigFromDB(ctx context.Context, db *store.Store) (*config.Config, err
 	return readConfigFromTables(ctx, db)
 }
 
-// resolveConfig determines the active config at startup: an explicit -config
-// flag imports (and overwrites) into the database; otherwise the database wins.
-// initConfigTables handles first-run population (migrate the legacy JSON blob,
-// import a default-named file, or bootstrap a quiet default).
+// resolveConfig imports and overwrites from an explicit -config flag; otherwise the database wins.
 func resolveConfig(ctx context.Context, db *store.Store, importPath string) (*config.Config, error) {
 	if importPath != "" {
 		return importConfigFile(ctx, db, importPath)
@@ -34,9 +29,7 @@ func resolveConfig(ctx context.Context, db *store.Store, importPath string) (*co
 	if err != nil {
 		return nil, err
 	}
-	// A restored database can arrive with identity keys stripped (the operator
-	// chose not to export them). Mint them before Validate, which would
-	// otherwise see two blank keys as duplicates and stop startup.
+	// A restored database can arrive with keys stripped; mint before Validate, which reads two blank keys as duplicates.
 	if err := mintMissingKeys(ctx, db, cfg); err != nil {
 		return nil, err
 	}
@@ -46,8 +39,7 @@ func resolveConfig(ctx context.Context, db *store.Store, importPath string) (*co
 	return cfg, nil
 }
 
-// mintMissingKeys generates and persists identities for stored nodes that have
-// none, so they survive the next restart rather than being regenerated.
+// mintMissingKeys persists identities for stored nodes that have none, so they survive a restart.
 func mintMissingKeys(ctx context.Context, db *store.Store, cfg *config.Config) error {
 	missing := 0
 	for _, c := range cfg.Companions {
@@ -92,7 +84,6 @@ func importConfigFile(ctx context.Context, db *store.Store, path string) (*confi
 		return nil, err
 	}
 	slog.Info("imported config file into database; the file is no longer read at runtime", "path", resolved)
-	// Re-read from the tables so the returned config carries the surrogate
-	// companion ids the runtime keys history on (the parsed file has none).
+	// Re-read from the tables for the surrogate companion ids the runtime keys history on; the parsed file has none.
 	return readConfigFromTables(ctx, db)
 }

@@ -11,17 +11,7 @@ import (
 	"github.com/meshcore-go/OwlShack/internal/store"
 )
 
-// This file is the seam between the relational config tables and the
-// in-memory *config.Config the runtime consumes. The rest of the app is
-// unchanged: it still gets a *config.Config snapshot (readConfigFromTables) and
-// persists one (writeConfigToTables). Reads assemble; writes disassemble.
-//
-// Transitional note: the full-document PUT carries no surrogate ids, so
-// writeConfigToTables upserts companions BY NAME to keep their ids stable (the
-// message/contact history FKs key on companion name today and are migrated to
-// ids in a later Tier-2 phase). Channels/triggers/brokers are owned/internal,
-// so they are replaced wholesale. Per-resource REST writes (Phase B) will match
-// by id and retire the name-matching here.
+// The full-document PUT carries no surrogate ids, so companions are upserted BY NAME to keep theirs stable; children are replaced wholesale.
 
 // --- small pointer/type adapters between config (*uint8, string) and store (*int, *string) ---
 
@@ -69,8 +59,7 @@ func sliceToPtr(s []string) *[]string {
 	return &s
 }
 
-// configRows is an in-memory snapshot of every config table — the editable unit
-// the REST write path mutates, assembles for validation, then persists.
+// configRows is the snapshot of every config table that the REST write path mutates, validates, then persists.
 type configRows struct {
 	settings   *store.Settings
 	mqtt       *store.MqttSettings
@@ -116,8 +105,7 @@ func loadConfigRows(ctx context.Context, st *store.Store) (*configRows, error) {
 	return &configRows{settings: s, mqtt: mq, brokers: brokers, companions: comps, channels: chans, triggers: trigs, repeater: rep}, nil
 }
 
-// assembleFromRows builds the in-memory *config.Config the runtime consumes from
-// a row snapshot. Pure (no I/O), so the write path can validate a proposed edit.
+// assembleFromRows is pure, so the write path can validate a proposed edit before persisting it.
 func assembleFromRows(rows *configRows) *config.Config {
 	s := rows.settings
 	cfg := &config.Config{
@@ -275,8 +263,7 @@ func readConfigFromTables(ctx context.Context, st *store.Store) (*config.Config,
 	return assembleFromRows(rows), nil
 }
 
-// hasMqttConfig reports whether any MQTT config was set (so we don't fabricate
-// an empty Mqtt block that ApplyDefaults / the runtime would treat as present).
+// hasMqttConfig keeps an empty Mqtt block from being fabricated, which the runtime would treat as present.
 func hasMqttConfig(mq *store.MqttSettings, brokers []store.Broker) bool {
 	if len(brokers) > 0 {
 		return true
@@ -285,9 +272,7 @@ func hasMqttConfig(mq *store.MqttSettings, brokers []store.Broker) bool {
 		mq.StatusInterval != nil || mq.Owner != nil || mq.Email != nil
 }
 
-// writeConfigToTables disassembles a *config.Config into the relational schema.
-// MUST be called inside store.WriteSync (it issues many writes). Companions are
-// upserted by name to keep surrogate ids stable; everything else is replaced.
+// writeConfigToTables MUST be called inside store.WriteSync — it issues many writes.
 func writeConfigToTables(ctx context.Context, st *store.Store, cfg *config.Config) error {
 	connType := "kiss"
 	if cfg.ConnectionType != nil && *cfg.ConnectionType != "" {
@@ -364,8 +349,7 @@ func writeConfigToTables(ctx context.Context, st *store.Store, cfg *config.Confi
 	return writeMqtt(ctx, st, cfg, nameToID)
 }
 
-// writeRepeater persists the single repeater node (or clears it when none is
-// configured). The pubkey column is derived from the seed, mirroring companions.
+// writeRepeater clears the row when no repeater is configured; the pubkey column is derived from the seed.
 func writeRepeater(ctx context.Context, st *store.Store, cfg *config.Config) error {
 	if cfg.Repeater == nil {
 		return st.Repeater.Clear(ctx)
@@ -403,9 +387,7 @@ func writeRepeater(ctx context.Context, st *store.Store, cfg *config.Config) err
 	})
 }
 
-// replaceCompanionChildren rewrites a companion's channels and triggers from
-// scratch. Channels first, so triggers can resolve their channel references to
-// the freshly-created channel ids.
+// replaceCompanionChildren writes channels first, so triggers can resolve their references to the fresh channel ids.
 func replaceCompanionChildren(ctx context.Context, st *store.Store, companionID int64, cc config.CompanionConfig) error {
 	oldChans, err := st.Channels.ListByCompanion(ctx, companionID)
 	if err != nil {
@@ -446,9 +428,7 @@ func replaceCompanionChildren(ctx context.Context, st *store.Store, companionID 
 			for _, ref := range *tg.Channels {
 				id, ok := chanID[ref.Name]
 				if !ok {
-					// Defensive: a trigger channel not in the companion's channel
-					// list (shouldn't happen post-ApplyDefaults) — create it so a
-					// private channel's key is never dropped.
+					// A trigger channel outside the companion's list shouldn't happen; create it so a private key is never dropped.
 					cr := store.CompanionChannel{CompanionID: companionID, Name: ref.Name, PrivateKey: ref.PrivateKey}
 					if err := st.Channels.Create(ctx, &cr); err != nil {
 						return err
@@ -534,11 +514,7 @@ func writeMqtt(ctx context.Context, st *store.Store, cfg *config.Config, nameToI
 	return nil
 }
 
-// initConfigTables ensures the relational config is populated and returns it.
-// On first run after the migration it imports the legacy app_config blob (run
-// through the normal normalization path so legacy migrations apply), or imports
-// a default-named config file, or bootstraps a quiet default. Idempotent: once
-// the settings row exists it simply reads back.
+// initConfigTables is idempotent: it populates the relational config on first run, else just reads it back.
 func initConfigTables(ctx context.Context, st *store.Store) (*config.Config, error) {
 	if _, err := st.Settings.Get(ctx); err == nil {
 		return readConfigFromTables(ctx, st)

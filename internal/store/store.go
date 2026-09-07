@@ -11,9 +11,7 @@ import (
 	_ "modernc.org/sqlite"
 )
 
-// writerQueueDepth bounds how many pending write closures the store will
-// buffer. Reached only when sqlite is contended for a sustained period; the
-// RX goroutine drops on full instead of stalling.
+// writerQueueDepth bounds pending write closures; the RX goroutine drops on a full queue rather than stalling.
 const writerQueueDepth = 1024
 
 type Store struct {
@@ -46,13 +44,7 @@ type Store struct {
 }
 
 func Open(ctx context.Context, path string) (*Store, error) {
-	// modernc.org/sqlite (NOT mattn/go-sqlite3) configures pragmas via "_pragma="
-	// query params applied to every pooled connection. The old mattn-style
-	// "_journal_mode=WAL&_busy_timeout=..." form was silently ignored, leaving the
-	// DB in rollback-journal mode (writer takes an exclusive lock) with no busy
-	// timeout — so concurrent reads raced the writer goroutine and failed with
-	// SQLITE_BUSY. WAL lets readers run alongside the single writer; busy_timeout
-	// makes the rest wait instead of erroring.
+	// modernc.org/sqlite only honours the "_pragma=" form; the mattn-style "_journal_mode=WAL" is silently ignored.
 	dsn := "file:" + path + "?_pragma=busy_timeout(5000)&_pragma=journal_mode(WAL)&_pragma=foreign_keys(on)"
 	db, err := sql.Open("sqlite", dsn)
 	if err != nil {
@@ -100,13 +92,7 @@ func Open(ctx context.Context, path string) (*Store, error) {
 	return s, nil
 }
 
-// WriteAsync runs fn on the dedicated writer goroutine, decoupling callers
-// from sqlite latency. Returns true if the closure was queued, false if the
-// queue was full (closure dropped). Safe to call from any goroutine,
-// including the modem RX dispatch thread — never blocks.
-//
-// fn typically performs an Insert/Update plus any follow-up work (WS
-// broadcast, dependent inserts) that needs to run after the write commits.
+// WriteAsync queues fn on the writer goroutine and never blocks; false means the queue was full and fn was dropped.
 func (s *Store) WriteAsync(fn func()) bool {
 	if s.closed() {
 		return false
@@ -123,11 +109,7 @@ func (s *Store) WriteAsync(fn func()) bool {
 	}
 }
 
-// WriteSync runs fn on the writer goroutine and blocks until it returns.
-// Use when the caller needs side effects (e.g. an Insert's auto-generated ID)
-// before continuing. Do NOT call from the modem RX dispatch thread or from
-// within another writer-loop closure — both will deadlock. After Close fn is
-// not run.
+// WriteSync runs fn on the writer goroutine and blocks; calling it from the RX dispatch thread or inside another writer closure deadlocks.
 func (s *Store) WriteSync(fn func()) {
 	if s.closed() {
 		return
@@ -157,12 +139,10 @@ func (s *Store) closed() bool {
 	}
 }
 
-// QueueLen returns the current depth of the writer queue, for stats/diagnostics.
 func (s *Store) QueueLen() int {
 	return len(s.writerCh)
 }
 
-// Dropped returns the running count of writes dropped due to a full queue.
 func (s *Store) Dropped() uint64 {
 	return s.dropped.Load()
 }
@@ -201,21 +181,7 @@ func (s *Store) migrate(ctx context.Context) error {
 		return fmt.Errorf("reading schema version: %w", err)
 	}
 
-	// migrateV1 squashed the original v1–v3 incremental migrations into one
-	// baseline. Fresh DBs created since the squash sit at user_version 1, but
-	// DBs that predate it are already at 2 or 3 with the identical schema. A new
-	// migration must therefore be appended past that gap (version > 3) so it
-	// runs exactly once on both old and fresh DBs; migrateNoop fills the
-	// squashed-away slots that pre-squash DBs already counted.
-	//
-	// Squashing is only ever safe for migrations that have NOT shipped: a
-	// released DB has already stamped its version and would skip the squashed
-	// slot. migrateV6 collapses five development-only migrations for that
-	// reason (the release before it stops at 7). Once a version has shipped,
-	// append — never merge, never renumber, and never edit it in place.
-	//
-	// A dev DB left at the pre-squash numbering (8-12) is skipped by the loop,
-	// not upgraded: recreate it rather than trying to migrate it.
+	// A shipped slot is frozen — a released DB has stamped its version and will skip it — so append, never merge, renumber or edit.
 	for i := version; i < len(migrations); i++ {
 		if err := s.runMigration(ctx, i+1, migrations[i]); err != nil {
 			return err
@@ -263,13 +229,7 @@ func (s *Store) runMigration(ctx context.Context, version int, fn func(context.C
 	return nil
 }
 
-// migrateV1 creates the full baseline schema (the prior incremental migrations
-// were squashed into it). Append future changes as migrateV2+ to the migrations
-// slice above — never edit this function. Statements are CREATE ... IF NOT
-// EXISTS and tables precede their foreign-key referrers. snr columns hold real
-// decibels (REAL); rssi is whole dBm (INTEGER). companion_contacts is a
-// self-contained address-book record (its own name/type/location/path/feat/
-// last-seen, no discovered_peers FK), so deleting a peer never touches a contact.
+// migrateV1 is the shipped baseline schema: never edit it, append later slots instead.
 func migrateV1(ctx context.Context, db dbExecer) error {
 	_, err := db.ExecContext(ctx, `
 		CREATE TABLE IF NOT EXISTS discovered_peers (
@@ -493,14 +453,10 @@ func migrateV1(ctx context.Context, db dbExecer) error {
 	return err
 }
 
-// migrateNoop is a placeholder for a migration slot that migrateV1 already
-// covers (see the squash note in migrate). It keeps later migrations at the
-// version index pre-squash DBs expect.
+// migrateNoop holds a slot migrateV1 already covers, keeping later slots at the version index pre-squash DBs expect.
 func migrateNoop(context.Context, dbExecer) error { return nil }
 
-// migrateV2 adds the indexed packet_hash and path columns so the Packets page
-// can filter/search across all stored history server-side, and backfills them
-// for rows inserted before the columns existed.
+// migrateV2 adds the indexed packet_hash/path columns and backfills rows inserted before they existed.
 func migrateV2(ctx context.Context, tx dbExecer) error {
 	if _, err := tx.ExecContext(ctx, `
 		ALTER TABLE packets ADD COLUMN packet_hash TEXT NOT NULL DEFAULT '';
@@ -552,8 +508,7 @@ func migrateV2(ctx context.Context, tx dbExecer) error {
 	return nil
 }
 
-// migrateV3 adds storage for the signal-test runner and for link monitors (a
-// monitored path polled under a synthetic pubkey — see LinkMonitorRepo).
+// migrateV3 adds the signal-test runner and link-monitor tables.
 func migrateV3(ctx context.Context, db dbExecer) error {
 	_, err := db.ExecContext(ctx, `
 		CREATE TABLE IF NOT EXISTS signal_tests (
@@ -605,22 +560,7 @@ func migrateV3(ctx context.Context, db dbExecer) error {
 	return nil
 }
 
-// migrateV4 creates the repeater-node tables (all feature-branch work, squashed
-// into one migration since none of it has shipped). Two tables:
-//   - repeater: the singleton repeater config (CHECK id=1; 0 rows = none). No
-//     child tables — a repeater has no messages/contacts — so nothing FKs it.
-//     path_hash_mode = flood-advert path-hash width (0=1B,1=2B,3=4B); regions =
-//     JSON array of {name, denyFlood} transport scopes.
-//   - repeater_acl: admin-over-mesh client list (see repeater_acl.go). Kept in
-//     the DB (not on flash like the firmware) so blank-password reauth survives
-//     restarts.
-//
-// Also backfills the "*" wildcard scope into an existing repeater whose regions
-// are empty: "*" is now an explicit, editable entry (config.WildcardRegion), and
-// its absence means unscoped flood is NOT relayed. A repeater created before
-// that change stored no regions but was relaying unscoped flood, so seed "*" to
-// preserve behaviour. Idempotent and a no-op on a fresh DB (no repeater row yet;
-// new repeaters get "*" seeded on create).
+// migrateV4 creates the repeater tables; an absent "*" region means unscoped flood is not relayed, so it is seeded to preserve prior behaviour.
 func migrateV4(ctx context.Context, db dbExecer) error {
 	_, err := db.ExecContext(ctx, `
 		CREATE TABLE IF NOT EXISTS repeater (
@@ -654,10 +594,7 @@ func migrateV4(ctx context.Context, db dbExecer) error {
 	return err
 }
 
-// migrateV5 adds the two relay-policy columns that postdate the migrateV4
-// repeater table: flood_max_unscoped (the extra hop cap for plain/unscoped
-// floods, firmware NodePrefs) and default_region (the region our own flood
-// adverts are scoped to, ” = unscoped).
+// migrateV5 adds flood_max_unscoped (firmware NodePrefs hop cap) and default_region ("" = unscoped adverts).
 func migrateV5(ctx context.Context, db dbExecer) error {
 	_, err := db.ExecContext(ctx, `
 		ALTER TABLE repeater ADD COLUMN flood_max_unscoped INTEGER;
@@ -666,16 +603,7 @@ func migrateV5(ctx context.Context, db dbExecer) error {
 	return err
 }
 
-// migrateV6 adds the CARTO basemap API key (https://carto.com/basemaps/apikey/).
-// migrateV6 is the v1.1.0 -> next release step, squashed from what were five
-// separate migrations during development. Safe to squash because none of them
-// ever shipped: the released tag stops at user_version 7. The statements keep
-// their original order — the path_hash_size conversion has to read
-// path_hash_mode before dropping it — and all of them commit as one
-// transaction via runMigration, so a failure part-way leaves the DB at 7.
-// migrateV7 adds the TX duty-cycle cap. Stored as a PERCENTAGE, the unit the
-// firmware's `set dutycycle` uses; the library's inverted airtime factor is
-// derived at the edge. NULL = library default (50%).
+// migrateV7 stores the TX duty cycle as a PERCENTAGE (the firmware `set dutycycle` unit); NULL = library default 50%.
 func migrateV7(ctx context.Context, db dbExecer) error {
 	_, err := db.ExecContext(ctx, `ALTER TABLE settings ADD COLUMN duty_cycle_pct REAL`)
 	return err
@@ -689,10 +617,7 @@ func migrateV6(ctx context.Context, db dbExecer) error {
 		// Repeater home region (stored and reported, never routed on).
 		`ALTER TABLE repeater ADD COLUMN home_region TEXT NOT NULL DEFAULT ''`,
 
-		// Clamp advert intervals into the firmware's legal ranges. Anything
-		// below the minimum becomes 0 (off), matching savePrefs. Lossy on
-		// purpose: an out-of-range row would now fail Config.Validate() and
-		// stop startup.
+		// Clamp advert intervals to the firmware's legal ranges; below the minimum becomes 0 (off), matching savePrefs.
 		`UPDATE repeater SET
 			advert_interval = CASE
 				WHEN advert_interval > 0 AND advert_interval < 3600 THEN 0
@@ -703,10 +628,7 @@ func migrateV6(ctx context.Context, db dbExecer) error {
 				WHEN flood_advert_interval > 604800 THEN 604800
 				ELSE flood_advert_interval END`,
 
-		// Path hash width in BYTES everywhere internally. The repeater column
-		// was the firmware's mode (bytes-1), so it converts and the old column
-		// goes; migrateV4 created path_hash_mode and has shipped, so it cannot
-		// be edited to create path_hash_size directly.
+		// Path hash width is BYTES internally; the shipped path_hash_mode column (bytes-1) must be read here before it is dropped.
 		`ALTER TABLE settings ADD COLUMN path_hash_size INTEGER`,
 		`ALTER TABLE companions ADD COLUMN path_hash_size INTEGER`,
 		`ALTER TABLE repeater ADD COLUMN path_hash_size INTEGER`,

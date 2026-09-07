@@ -8,8 +8,7 @@ import (
 	meshcore "github.com/meshcore-go/meshcore-go"
 )
 
-// putFloat mirrors the firmware encoder so the test exercises a genuine
-// round trip rather than restating the decoder.
+// putFloat mirrors the firmware encoder so the test is a genuine round trip, not a restatement of the decoder.
 func putFloat(v float64, size int, mult uint32, signed bool) []byte {
 	neg := v < 0
 	if neg {
@@ -34,17 +33,14 @@ func TestParseSeries(t *testing.T) {
 	binary.LittleEndian.PutUint32(now, 1_700_000_000)
 	b = append(b, now...)
 
-	// ch2 temperature: -3.5 / 21.7 / 12.25 (signed, 2 bytes, x10)
 	b = append(b, 2, meshcore.LPPTemperature)
 	b = append(b, putFloat(-3.5, 2, 10, true)...)
 	b = append(b, putFloat(21.7, 2, 10, true)...)
 	b = append(b, putFloat(12.2, 2, 10, true)...)
-	// ch1 voltage: 3.71 / 4.16 / 3.98 (unsigned, 2 bytes, x100)
 	b = append(b, 1, meshcore.LPPVoltage)
 	b = append(b, putFloat(3.71, 2, 100, false)...)
 	b = append(b, putFloat(4.16, 2, 100, false)...)
 	b = append(b, putFloat(3.98, 2, 100, false)...)
-	// ch3 humidity (unsigned x10) then a 4-byte generic sensor to check sizing
 	b = append(b, 3, meshcore.LPPRelativeHumidity)
 	b = append(b, putFloat(40.5, 2, 10, false)...)
 	b = append(b, putFloat(90.0, 2, 10, false)...)
@@ -86,7 +82,6 @@ func TestParseSeries(t *testing.T) {
 		t.Errorf("generic = %+v", e)
 	}
 
-	// Truncated trailing entry is an error, not a silent partial.
 	if _, err := ParseSeries(b[:len(b)-1]); err == nil {
 		t.Error("truncated series parsed without error")
 	}
@@ -97,9 +92,7 @@ func TestParseSeries(t *testing.T) {
 	}
 }
 
-// The reply is AES-ECB padded to a 16-byte block, so two 2-byte channels
-// (temperature + humidity — the canonical BME/SHT pair) arrive with 8 zero
-// bytes of padding that must not parse as entries.
+// Two 2-byte channels leave 8 bytes of AES-ECB block padding that must not parse as entries.
 func TestParseSeries_BlockPadding(t *testing.T) {
 	body := []byte{0x00, 0x00, 0x00, 0x00} // now = 0
 	body = append(body,

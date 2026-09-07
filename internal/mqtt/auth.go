@@ -13,7 +13,6 @@ import (
 
 const tokenLifetime = 10 * time.Minute
 
-// derefStr returns the pointed-to string, or "" when p is nil.
 func derefStr(p *string) string {
 	if p == nil {
 		return ""
@@ -21,7 +20,6 @@ func derefStr(p *string) string {
 	return *p
 }
 
-// publicKeyHex returns the uppercase hex encoding of an identity's public key.
 func publicKeyHex(id meshcore.LocalIdentity) string {
 	pk := id.PublicKey()
 	return strings.ToUpper(hex.EncodeToString(pk[:]))
@@ -66,8 +64,7 @@ func generateToken(id meshcore.LocalIdentity, audience, email, owner string) (st
 	payloadEnc := base64URLEncode(payload)
 	signingInput := headerEnc + "." + payloadEnc
 
-	// id.Sign handles both seed-based and expanded-key (imported prv.key)
-	// identities; ed25519.Sign(id.PrivateKey()) would break the latter.
+	// id.Sign handles expanded-key (imported prv.key) identities too; ed25519.Sign(id.PrivateKey()) would break those.
 	sig := id.Sign([]byte(signingInput))
 	sigHex := strings.ToUpper(hex.EncodeToString(sig))
 

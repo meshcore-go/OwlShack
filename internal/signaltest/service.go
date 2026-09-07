@@ -1,11 +1,4 @@
-// Package signaltest runs repeatable trace-route tests: a fixed number of
-// traces at a fixed interval over a saved path, so a node/antenna setup can
-// be measured over a statistically significant packet count, then compared
-// against another run after a config change.
-//
-// Mirrors internal/monitor's shape: this package only imports store; the
-// companion runtime is reached through the Tracer seam, implemented in
-// internal/app, keeping the dependency arrow pointing inward.
+// Package signaltest runs repeatable trace-route tests: a fixed number of traces at a fixed interval over a saved path.
 package signaltest
 
 import (
@@ -20,12 +13,10 @@ import (
 	"github.com/meshcore-go/OwlShack/internal/store"
 )
 
-// ErrAlreadyRunning is returned by Begin when a test is already active (only
-// one runs at a time — the radio is half-duplex). The API layer maps this to 409.
+// ErrAlreadyRunning is returned by Begin when a test is already active; the API layer maps it to 409.
 var ErrAlreadyRunning = errors.New("a signal test is already running")
 
-// ValidationError marks a Begin failure as a bad request rather than an
-// internal fault, so the API layer can map it to 400 without string-matching.
+// ValidationError marks a Begin failure as a bad request, so the API layer can map it to 400 without string-matching.
 type ValidationError struct{ msg string }
 
 func (e *ValidationError) Error() string { return e.msg }
@@ -37,26 +28,20 @@ func validationErrorf(format string, args ...any) error {
 // WSTopic is the WebSocket topic live run/status events are broadcast on.
 const WSTopic = "signaltest"
 
-// Bounds enforced by Begin (and mirrored in the API handler so a bad request
-// is rejected before it reaches the runner).
+// Bounds enforced by Begin and mirrored in the API handler.
 const (
 	MinIntervalSecs = 5
 	MaxIntervalSecs = 3600
 	MaxCount        = 1000
 )
 
-// traceTimeout bounds a single tracer round-trip. RunTrace has its own
-// silence-window timeout well under this; it's a backstop against a hung
-// companion lookup, not the primary timeout mechanism.
+// traceTimeout backstops a hung companion lookup; RunTrace's own silence window is the primary timeout.
 const traceTimeout = 30 * time.Second
 
-// maxConsecutiveTracerErrors aborts a test as "interrupted" if the companion
-// is unreachable (e.g. mid-reload) for this many consecutive attempts, rather
-// than silently recording an hour of failed runs.
+// maxConsecutiveTracerErrors aborts a test as "interrupted" rather than recording an hour of failed runs against an unreachable companion.
 const maxConsecutiveTracerErrors = 5
 
-// TraceResult is one trace attempt's outcome, adapted from
-// companion.TraceOutcome by the app-layer Tracer implementation.
+// TraceResult is one trace attempt's outcome, adapted from companion.TraceOutcome by the Tracer implementation.
 type TraceResult struct {
 	HopSNRs   []float64
 	SNR       *float64
@@ -64,9 +49,7 @@ type TraceResult struct {
 	Complete  bool
 }
 
-// Tracer runs one blocking trace on a named companion. Implemented in
-// internal/app over the companion registry, so this package never imports
-// node/companion.
+// Tracer runs one blocking trace on a named companion; implemented in internal/app over the companion registry.
 type Tracer func(ctx context.Context, companionName string, path []byte, pathHashSize uint8) (*TraceResult, error)
 
 // Broadcaster is the subset of *api.Hub the runner needs.
@@ -85,9 +68,7 @@ type Params struct {
 	IntervalSecs  int
 }
 
-// Service is the test runner: one test active at a time (the radio is
-// half-duplex, and interleaved tests would pollute each other's airtime and
-// each other's stats).
+// Service is the test runner; one test is active at a time, since interleaved tests would pollute each other's stats.
 type Service struct {
 	st      *store.Store
 	bc      Broadcaster
@@ -114,9 +95,7 @@ func New(st *store.Store, bc Broadcaster, tracer Tracer, airtime *sync.Mutex, lo
 	}
 }
 
-// Start records the base context test-run goroutines derive from and marks
-// any test left "running" from a previous process as "interrupted". Call
-// once at app startup before serving requests.
+// Start records the base context for run goroutines and marks tests left "running" by a previous process as "interrupted".
 func (s *Service) Start(ctx context.Context) {
 	s.mu.Lock()
 	s.baseCtx = ctx
@@ -137,8 +116,7 @@ func (s *Service) Active() int64 {
 	return s.activeID
 }
 
-// Begin validates params, creates the signal_tests row, and launches the run
-// loop. Returns an error if a test is already running or params are invalid.
+// Begin validates params, creates the signal_tests row, and launches the run loop.
 func (s *Service) Begin(ctx context.Context, p Params) (int64, error) {
 	if len(p.Path) == 0 {
 		return 0, validationErrorf("path is required")
@@ -195,8 +173,7 @@ func (s *Service) Begin(ctx context.Context, p Params) (int64, error) {
 	return test.ID, nil
 }
 
-// Cancel stops the active test if its id matches. Returns an error if no
-// test is running or a different test is active.
+// Cancel stops the active test if its id matches.
 func (s *Service) Cancel(id int64) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
@@ -297,8 +274,7 @@ func (s *Service) run(ctx context.Context, testID int64, p Params) {
 }
 
 func (s *Service) persistRun(run *store.SignalTestRun) {
-	// Copy by value into the closure — run is stack-local to the loop
-	// iteration in the caller.
+	// Copy by value into the closure — run is stack-local to the caller's loop iteration.
 	r := *run
 	s.st.WriteAsync(func() {
 		if err := s.st.SignalTests.InsertRun(context.Background(), &r); err != nil {
@@ -329,8 +305,7 @@ func (s *Service) broadcastRun(testID int64, count int, run *store.SignalTestRun
 	})
 }
 
-// sleepUntil blocks until deadline or ctx cancellation, returning false on
-// cancellation.
+// sleepUntil blocks until deadline or ctx cancellation, returning false on cancellation.
 func sleepUntil(ctx context.Context, deadline time.Time) bool {
 	d := time.Until(deadline)
 	if d <= 0 {

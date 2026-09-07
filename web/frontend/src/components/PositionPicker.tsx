@@ -4,9 +4,7 @@ import { Label } from "@/components/ui/label";
 import { themeTileLayer, useThemeTiles } from "@/lib/leaflet";
 import { cn } from "@/lib/utils";
 
-// PositionPicker is the one map used wherever a lat/lon is entered: click to
-// set, drag the pin, and typing into the paired inputs re-centres it. lat/lon
-// may be NaN (blank inputs) — the map then shows the world with no pin.
+// lat/lon may be NaN (blank inputs) — the map then shows the world with no pin.
 export function PositionPicker({
   lat,
   lon,
@@ -78,8 +76,7 @@ export function PositionPicker({
   );
 }
 
-// round6 trims a picked coordinate to the 6 decimals the inputs display
-// (~11 cm), so a pick and a typed value round-trip identically.
+// 6 decimals (~11 cm) is what the inputs display, so a pick and a typed value round-trip identically.
 export function round6(v: number): string {
   return (Math.round(v * 1e6) / 1e6).toString();
 }

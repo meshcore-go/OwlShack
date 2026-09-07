@@ -5,8 +5,7 @@ import (
 	"testing"
 )
 
-// TestParseRoomStatus pins the ServerStats trailer: bytes 48–52 are n_posted and
-// n_post_push (u16 each), not rx_air_time_secs as on a repeater.
+// Pins the ServerStats trailer: bytes 48-52 are n_posted and n_post_push, not rx_air_time_secs.
 func TestParseRoomStatus(t *testing.T) {
 	b := make([]byte, 52)
 	binary.LittleEndian.PutUint16(b[0:2], 4100)   // batt mV

@@ -97,8 +97,7 @@ type HashSize = 1 | 2 | 4;
 type BuilderMode = "select" | "manual";
 type PeerSort = "name" | "recent" | "signal" | "distance";
 
-// The trigger renders these instead of <SelectValue>: "Alphabetical" is wider
-// than the phone-sized trigger and was clipping to "ALPHABETICA".
+// "Alphabetical" is wider than the phone-sized trigger and clips, hence a short form.
 const SORT_LABEL: Record<PeerSort, string> = {
   name: "Alphabetical",
   recent: "Last seen",
@@ -112,10 +111,7 @@ const SORT_LABEL_SHORT: Record<PeerSort, string> = {
   distance: "Dist",
 };
 
-// Silence window: the final packet (last repeater in the path) must arrive
-// within this long after the trace was sent OR after the most recent echo.
-// Each progressive echo we hear resets the window; if it elapses with no
-// further progress we declare a timeout.
+// Silence window: every progressive echo resets it; elapsing with no progress is a timeout.
 const TRACE_TIMEOUT_MS = 5000;
 
 const HEX_RE = /^[0-9a-f]+$/i;
@@ -194,13 +190,9 @@ export function TracesPage() {
 
   const [compareIds, setCompareIds] = useState<Set<number>>(new Set());
   const [compareOpen, setCompareOpen] = useState(false);
-  // Updated each render to the number of hops in the path we sent, so the WS
-  // handler can tell a partial echo from the final packet without re-creating
-  // the callback whenever the path changes.
+  // Render-mirrored so the WS callback can tell a partial echo from the final packet without re-creating.
   const plannedHopCountRef = useRef(0);
-  // Same render-mirror trick for the trace-in-flight state: the WS callback
-  // reads these so it stays referentially stable during an active trace
-  // instead of resubscribing on every tag/timer change.
+  // Same mirror for the in-flight state, so the WS callback doesn't resubscribe on every tag/timer change.
   const activeTagRef = useRef<number | null>(null);
   activeTagRef.current = activeTag;
   const waitStartedAtRef = useRef<number | null>(null);
@@ -276,9 +268,7 @@ export function TracesPage() {
         return;
       }
 
-      // Each echo we hear carries the SNRs accumulated so far; the path is
-      // complete once we have one SNR per planned hop (the last repeater
-      // replied). msg.hops is the full path length from the firmware.
+      // Each echo carries the SNRs so far; msg.hops is the full path length from the firmware.
       const snrs = Array.isArray(msg.hopSNRs) ? msg.hopSNRs : [];
       const totalHops =
         msg.hops && msg.hops > 0 ? msg.hops : plannedHopCountRef.current;
@@ -304,8 +294,7 @@ export function TracesPage() {
           timeoutRef.current = null;
         }
       } else {
-        // Partial echo: a repeater along the path repeated the packet but the
-        // final hop hasn't replied yet. Show the progress and reset the timer.
+        // Partial echo: a repeater relayed but the final hop hasn't replied yet.
         setLiveSNRs((prev) => (snrs.length > prev.length ? snrs : prev));
         armTimeout();
       }
@@ -318,9 +307,7 @@ export function TracesPage() {
     onWsMessage,
   );
 
-  // A running test is server-side; clear the local view when switching
-  // companions and resume tracking it (if one is running) once the saved
-  // list for the new companion has loaded.
+  // A running test is server-side, so switching companions clears the view and re-picks it up from the list.
   useEffect(() => {
     setActiveTest(null);
   }, [companionName]);
@@ -382,8 +369,7 @@ export function TracesPage() {
 
   const filteredPeers = useMemo(() => {
     const f = filter.trim().toLowerCase();
-    // Note: already-selected repeaters intentionally stay in the list so the
-    // same repeater can be added to the path more than once (e.g. b8, e6, b8).
+    // Selected repeaters stay listed so one can be added to the path twice (b8, e6, b8).
     const matched = f
       ? peers.filter(
           (p) =>
@@ -413,8 +399,7 @@ export function TracesPage() {
         // RFC3339 strings sort chronologically; most-recent first.
         return (b.lastSeen || "").localeCompare(a.lastSeen || "");
       }
-      // Alphabetical (default); unnamed repeaters sink to the bottom, then
-      // pubkey as a stable tiebreaker.
+      // Alphabetical; unnamed repeaters sink to the bottom, pubkey as a tiebreaker.
       const an = a.name.trim().toLowerCase();
       const bn = b.name.trim().toLowerCase();
       if (!an !== !bn) return an ? -1 : 1;
@@ -444,8 +429,7 @@ export function TracesPage() {
     return hops.length <= 1 ? base : base + hops.slice(0, -1).reverse().join("");
   }, [mode, manualHex, selectedPath, hashSize, mirrorReturn]);
 
-  // Read-only preview of the auto-added return leg (mirror of selectedPath,
-  // minus the turnaround hop) shown after the editable chips.
+  // Read-only preview of the auto-added return leg, minus the turnaround hop.
   const mirrorPeers = useMemo(() => {
     if (!mirrorReturn || selectedPath.length <= 1) return [];
     return selectedPath.slice(0, -1).reverse();
@@ -461,9 +445,7 @@ export function TracesPage() {
   const pathByteLen = computedPathHex.length / 2;
   const pathHopCount = hashSize > 0 ? pathByteLen / hashSize : 0;
 
-  // Per-hop hashes of the path we're about to send / are waiting on. Works for
-  // both builder modes since it's derived from the computed hex. Drives the
-  // live timeline and tells the WS handler how many hops to expect.
+  // Per-hop hashes of the path in flight; tells the WS handler how many hops to expect.
   const routeHashes = useMemo(() => {
     const step = hashSize * 2;
     if (step <= 0) return [];
@@ -927,11 +909,7 @@ export function TracesPage() {
                             onValueChange={(v) => setSort(v as PeerSort)}
                           >
                             <SelectTrigger className="h-7 w-24 sm:w-36 shrink-0 rounded-none font-mono text-[11px] uppercase tracking-[0.06em]">
-                              {/* The labels ride inside SelectValue, not in
-                                  place of it: SelectContent is item-aligned,
-                                  which measures this node to position the list
-                                  over the trigger. Without it the list renders
-                                  off the bottom of the viewport. */}
+                              {/* Item-aligned SelectContent measures this node, so the labels must ride inside SelectValue. */}
                               <SelectValue>
                                 <span className="sm:hidden">
                                   {SORT_LABEL_SHORT[sort]}
@@ -1358,16 +1336,14 @@ function TraceTimeline({
   const steps = useMemo<TimelineStep[]>(() => {
     const out: TimelineStep[] = [];
 
-    // Prefer the hashes the firmware echoed back once we have the final
-    // packet; otherwise show the path we're sending / waiting on.
+    // Prefer the hashes the firmware echoed back over the path we sent.
     const hashes =
       result && result.path.length
         ? result.path.map((h) => h.toLowerCase())
         : routeHashes;
     const snrs = result ? result.hopSNRs : liveSNRs;
 
-    // 1. Us — the trace originator. The ↓SNR here is the strength at which we
-    // received the FINAL packet back from the last repeater in the path.
+    // 1. Us — this ↓SNR is how strongly we received the final packet back.
     out.push({
       badge: "TX",
       label: "Started the trace",
@@ -1377,8 +1353,7 @@ function TraceTimeline({
       state: "done",
     });
 
-    // 2. One node per hop. SNRs fill in progressively as each repeater repeats
-    // the packet; the next-expected hop pulses while we wait.
+    // 2. One node per hop; the next-expected hop pulses while we wait.
     hashes.forEach((hash, i) => {
       const snr = snrs[i];
       const hasSnr = typeof snr === "number";

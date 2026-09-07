@@ -4,9 +4,7 @@ import markerIcon from "leaflet/dist/images/marker-icon.png";
 import markerIcon2x from "leaflet/dist/images/marker-icon-2x.png";
 import markerShadow from "leaflet/dist/images/marker-shadow.png";
 
-// Leaflet's default marker icon URLs are broken under bundlers; rebind them to
-// the imported assets once, here, so every map that imports this module gets
-// working pins.
+// Leaflet's default marker icon URLs break under bundlers; rebind them once here.
 type MarkerProto = L.Icon.Default & { _getIconUrl?: () => string };
 delete (L.Icon.Default.prototype as MarkerProto)._getIconUrl;
 L.Icon.Default.mergeOptions({

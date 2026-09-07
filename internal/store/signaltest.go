@@ -7,16 +7,12 @@ import (
 	"fmt"
 )
 
-// SignalTestRepo persists repeatable trace-route runs: a signal_tests row
-// describes one test; signal_test_runs holds one row per trace attempt.
-// Stats are computed on read (see internal/signaltest.ComputeStats), not
-// stored. Writes must be wrapped by the caller in store.WriteAsync/WriteSync.
+// SignalTestRepo persists trace-route tests and their runs; stats are computed on read, and writes must be wrapped in store.WriteAsync/WriteSync.
 type SignalTestRepo struct {
 	db *sql.DB
 }
 
-// SignalTestStatus values. "running" tests are marked "interrupted" at
-// startup if the process restarted mid-test (see MarkInterrupted).
+// SignalTestStatus values; a "running" test becomes "interrupted" at startup (MarkInterrupted).
 const (
 	SignalTestStatusRunning     = "running"
 	SignalTestStatusDone        = "done"
@@ -36,8 +32,7 @@ type SignalTest struct {
 	Status       string
 	StartedAt    int64
 	FinishedAt   int64
-	// RunsDone/OKCount are aggregated in List for the summary view; zero
-	// unless populated by the query.
+	// RunsDone/OKCount are populated only by List; zero elsewhere.
 	RunsDone int
 	OKCount  int
 }
@@ -53,9 +48,7 @@ type SignalTestRun struct {
 	ElapsedMs int64
 }
 
-// Create inserts a new test row (status defaults to "running", started_at
-// should be set by the caller) and sets t.ID to the new surrogate key. Call
-// inside WriteSync (the caller needs the id before continuing).
+// Create inserts a test row (status defaults to "running") and sets t.ID. Call inside WriteSync.
 func (r *SignalTestRepo) Create(ctx context.Context, t *SignalTest) error {
 	res, err := r.db.ExecContext(ctx, `
 		INSERT INTO signal_tests (companion_id, label, notes, path, path_hash_size, count, interval_secs, status, started_at)
@@ -96,8 +89,7 @@ func (r *SignalTestRepo) Get(ctx context.Context, id int64) (*SignalTest, error)
 	return t, nil
 }
 
-// List returns every test (most recent first) with its run count and
-// success count aggregated, for the saved-tests list view.
+// List returns every test, most recent first, with run and success counts aggregated.
 func (r *SignalTestRepo) List(ctx context.Context, companionID int64) ([]SignalTest, error) {
 	rows, err := r.db.QueryContext(ctx, `
 		SELECT t.id, t.companion_id, t.label, t.notes, t.path, t.path_hash_size, t.count, t.interval_secs,
@@ -168,8 +160,7 @@ func (r *SignalTestRepo) InsertRun(ctx context.Context, run *SignalTestRun) erro
 	return nil
 }
 
-// SetStatus updates a test's status (and finished_at, when non-zero). Call
-// inside WriteAsync/WriteSync.
+// SetStatus updates a test's status, and finished_at when non-zero. Call inside WriteAsync/WriteSync.
 func (r *SignalTestRepo) SetStatus(ctx context.Context, id int64, status string, finishedAt int64) error {
 	if _, err := r.db.ExecContext(ctx, `
 		UPDATE signal_tests SET status = ?, finished_at = ? WHERE id = ?`,
@@ -202,9 +193,7 @@ func (r *SignalTestRepo) Delete(ctx context.Context, id int64) error {
 	return nil
 }
 
-// MarkInterrupted marks any test left in "running" state as "interrupted" —
-// called once at startup, since a running test implies the previous process
-// exited mid-test. Call inside WriteSync.
+// MarkInterrupted flips tests left "running" by a previous process to "interrupted". Call inside WriteSync.
 func (r *SignalTestRepo) MarkInterrupted(ctx context.Context, now int64) error {
 	if _, err := r.db.ExecContext(ctx, `
 		UPDATE signal_tests SET status = ?, finished_at = ? WHERE status = ?`,

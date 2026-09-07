@@ -5,9 +5,7 @@ import (
 	"net/http"
 )
 
-// AdvertSender broadcasts a self-advert for a companion: flood (mesh-wide,
-// rebroadcast by repeaters) when true, zero-hop (direct neighbours only) when
-// false.
+// AdvertSender broadcasts a self-advert: flood when true, zero-hop (direct neighbours only) when false.
 type AdvertSender func(flood bool) error
 type AdvertSenderLookup func(name string) (AdvertSender, bool)
 

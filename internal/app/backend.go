@@ -19,9 +19,7 @@ import (
 // repeaterReqTimeout bounds every repeater round-trip initiated from the API.
 const repeaterReqTimeout = 10 * time.Second
 
-// backend implements api.Backend for a generation of running companions. A new
-// instance is built and installed on the server at startup and after each
-// reload/reconnect, so it never has to mutate its companion set.
+// backend implements api.Backend for one generation of companions; a reload installs a new instance rather than mutating this one.
 type backend struct {
 	companions []*companion.Companion
 	repeater   *repeater.Repeater // the single running repeater node, or nil
@@ -65,8 +63,7 @@ func (b *backend) Companions() []api.CompanionInfo {
 	return infos
 }
 
-// ChannelByHash resolves a channel hash against the companions' live channels,
-// so newly added channels are visible without rebuilding the backend.
+// ChannelByHash resolves against live channels, so a new channel is visible without rebuilding the backend.
 func (b *backend) ChannelByHash(hash byte) *api.ChannelInfo {
 	for _, c := range b.companions {
 		for _, ch := range c.Node().Channels() {
@@ -78,8 +75,7 @@ func (b *backend) ChannelByHash(hash byte) *api.ChannelInfo {
 	return nil
 }
 
-// AddPeer registers a manually added contact with every companion's in-memory
-// peer table, so it is reachable without waiting for an advert.
+// AddPeer registers a contact with every companion's peer table, so it is reachable without waiting for an advert.
 func (b *backend) AddPeer(pubkey []byte, name, peerType string) {
 	id, err := meshcore.NewIdentityFromBytes(pubkey)
 	if err != nil {
@@ -93,9 +89,7 @@ func (b *backend) AddPeer(pubkey []byte, name, peerType string) {
 	}
 }
 
-// RemovePeers evicts the given peers from every companion's in-memory peer
-// table so a deleted discovered peer is gone from routing/counts immediately,
-// not just from the DB.
+// RemovePeers evicts peers from every companion's in-memory table, not just from the DB.
 func (b *backend) RemovePeers(pubkeys [][]byte) {
 	for _, pk := range pubkeys {
 		if len(pk) != 32 {
@@ -216,8 +210,7 @@ func (b *backend) Repeater(name string) (*api.RepeaterOps, bool) {
 	}, true
 }
 
-// MqttStatus finds the companion running the MQTT observer (only one does) and
-// converts its broker states to the api DTO.
+// MqttStatus finds the one companion running the MQTT observer.
 func (b *backend) MqttStatus() ([]api.MqttBrokerStatus, bool) {
 	for _, c := range b.companions {
 		sts, ok := c.MqttStatus()
@@ -253,8 +246,7 @@ func (b *backend) MqttStatus() ([]api.MqttBrokerStatus, bool) {
 	return nil, false
 }
 
-// RepeaterNode exposes the single running repeater node's runtime operations,
-// or ok=false when no repeater is configured/running.
+// RepeaterNode returns ok=false when no repeater is configured or running.
 func (b *backend) RepeaterNode() (*api.RepeaterNodeOps, bool) {
 	if b.repeater == nil {
 		return nil, false
@@ -273,8 +265,7 @@ func (b *backend) RepeaterNode() (*api.RepeaterNodeOps, bool) {
 	}, true
 }
 
-// PersistChannels writes each companion's current standalone channels back to
-// the config file, leaving the rest of the file intact.
+// PersistChannels writes each companion's standalone channels back, leaving the rest of the config intact.
 func (b *backend) PersistChannels(ctx context.Context) error {
 	cfg, err := loadConfigFromDB(ctx, b.db)
 	if err != nil {
@@ -307,5 +298,4 @@ func (b *backend) PersistChannels(ctx context.Context) error {
 	return nil
 }
 
-// Ensure backend satisfies the api seam.
 var _ api.Backend = (*backend)(nil)

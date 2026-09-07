@@ -7,8 +7,7 @@ import (
 	"github.com/meshcore-go/OwlShack/internal/store"
 )
 
-// ValueStats summarizes a set of samples (a hop's SNR across runs, the final
-// receive SNR across runs, or elapsed time across runs).
+// ValueStats summarizes a set of samples across a test's runs.
 type ValueStats struct {
 	N      int     `json:"n"`
 	Min    float64 `json:"min"`
@@ -23,8 +22,7 @@ type HopStats struct {
 	ValueStats
 }
 
-// Stats is computed on read from the stored runs — never persisted, so there
-// is no derived data to keep in sync with the raw rows.
+// Stats is computed on read from the stored runs, never persisted.
 type Stats struct {
 	Total       int         `json:"total"`
 	OKCount     int         `json:"okCount"`
@@ -35,10 +33,7 @@ type Stats struct {
 	ElapsedMs   *ValueStats `json:"elapsedMs,omitempty"`
 }
 
-// ComputeStats aggregates a test's runs into summary statistics. Timed-out
-// runs still contribute whatever hops they heard to PerHop — that's the
-// diagnostic signal that shows where a marginal link starts dropping
-// packets, not just whether the full round-trip completed.
+// ComputeStats aggregates a test's runs; timed-out runs still contribute the hops they heard to PerHop, showing where a link drops.
 func ComputeStats(runs []store.SignalTestRun) Stats {
 	var s Stats
 	s.Total = len(runs)

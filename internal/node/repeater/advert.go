@@ -10,28 +10,18 @@ import (
 	"github.com/meshcore-go/OwlShack/internal/node/advert"
 )
 
-// bootAdvertDelay matches the firmware's sendSelfAdvertisement(16000, false) in
-// setup(): the boot advert is held ~16s to let the radio/system settle.
+// Firmware setup() holds the boot advert ~16s to let the radio settle.
 const bootAdvertDelay = 16 * time.Second
 
-// advertLoop runs the two independent advert schedules (firmware
-// updateAdvertTimer / updateFloodAdvertTimer): a zero-hop (local, direct-only)
-// advert on AdvertInterval and a mesh-wide flood advert on FloodAdvertInterval.
-// Either interval of 0 disables that schedule. On boot it sends ONE zero-hop
-// advert after bootAdvertDelay (firmware setup() — announce to direct
-// neighbours, deliberately NOT flooding the whole mesh on every restart).
-// Effective values (incl. defaults — zero-hop off, flood 47h) come from the
-// config *Or accessors.
+// advertLoop runs the firmware's two schedules, zero-hop and flood; either interval of 0 disables that one.
 func (r *Repeater) advertLoop(ctx context.Context) {
 	localSecs := r.cfg.AdvertIntervalOr()
 	floodSecs := r.cfg.FloodAdvertIntervalOr()
 
-	// One-shot boot advert (zero-hop, delayed).
 	boot := time.NewTimer(bootAdvertDelay)
 	defer boot.Stop()
 
-	// A nil channel blocks forever in select, which cleanly disables a
-	// schedule whose interval is 0.
+	// A nil channel blocks forever in select, disabling a schedule whose interval is 0.
 	var localC, floodC <-chan time.Time
 	if localSecs > 0 {
 		t := time.NewTicker(time.Duration(localSecs) * time.Second)
@@ -64,16 +54,10 @@ func (r *Repeater) advertLoop(ctx context.Context) {
 	}
 }
 
-// SendAdvert broadcasts a self-advert on demand (flood=true is mesh-wide and
-// rebuilt as it propagates; flood=false is a zero-hop advert to direct
-// neighbours only). Exposed for the API's manual "advertise now" action.
+// SendAdvert broadcasts a self-advert on demand; flood=false reaches direct neighbours only.
 func (r *Repeater) SendAdvert(flood bool) error { return r.sendAdvert(flood) }
 
-// sendAdvert emits a signed REPEATER advert (type REPEATER so other nodes
-// classify us as a repeater and neighbouring repeaters record us). The advert
-// carries our configured flood path-hash width; everything else is the shared
-// self-advert build. Flood adverts are scoped through the configured default
-// region (firmware default_scope) when one is set.
+// sendAdvert emits a signed REPEATER advert, scoped through the configured default region when one is set.
 func (r *Repeater) sendAdvert(flood bool) error {
 	err := advert.SendSelf(r.node, r.log, "REPEATER", r.cfg.Name,
 		r.cfg.Latitude, r.cfg.Longitude, flood, r.cfg.PathHashSizeOr(), r.defaultRegionScope())
@@ -83,9 +67,7 @@ func (r *Repeater) sendAdvert(flood bool) error {
 	return err
 }
 
-// defaultRegionScope resolves the configured default advert scope to the live
-// region (nil = unscoped flood, the firmware default_scope=<null> case). A
-// dangling name (region deleted out from under it) falls back to unscoped.
+// defaultRegionScope resolves the configured scope; nil means an unscoped flood, including when the name is dangling.
 func (r *Repeater) defaultRegionScope() *meshcore.Region {
 	name := r.cfgSnapshot().DefaultRegion
 	if name == "" || name == config.WildcardRegion {

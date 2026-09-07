@@ -18,28 +18,18 @@ import (
 
 const dmAckDelay = 200 * time.Millisecond
 
-// txtTypePlain (TXT_TYPE_PLAIN) is an ordinary chat message — the type carried
-// in the upper 6 bits of the flags byte (plaintext[4]>>2 for DMs, payload.Flags>>2
-// for channel text) when it is neither CLI data nor a signed room post.
+// txtTypePlain (TXT_TYPE_PLAIN): the text type is the upper 6 bits of the flags byte — plaintext[4]>>2 for DMs, payload.Flags>>2 for channel text.
 const txtTypePlain = 0
 
-// txtTypeCliData is the DM plaintext type byte for CLI data (TXT_TYPE_CLI_DATA),
-// extracted from a received DM via plaintext[4]>>2 to detect repeater CLI replies.
+// txtTypeCliData (TXT_TYPE_CLI_DATA) marks a repeater CLI reply.
 const txtTypeCliData = 1
 
 // txtTypeSignedPlain (TXT_TYPE_SIGNED_PLAIN) marks a post pushed by a room server.
 const txtTypeSignedPlain = 2
 
-// sendDMAck sends an ACK back to the DM sender. For flood-routed messages,
-// it builds a PathReturn (with ACK as extra data) so the sender learns the
-// path to us. For direct-routed messages, it sends a plain ACK packet using
-// the peer's known out_path (or floods if no path known).
-//
-// ackPayload is the firmware's ack bytes: 6 ([crc][attempt][random]) for a
-// plain DM, a bare 4-byte CRC for a room post push.
+// sendDMAck's ackPayload is the firmware's ack bytes: 6 ([crc][attempt][random]) for a plain DM, a bare 4-byte CRC for a room post push.
 func (c *Companion) sendDMAck(pkt *meshcore.Packet, senderPubKey []byte, sharedSecret []byte, ackPayload []byte) {
 	if pkt.IsRouteFlood() {
-		// Build PathReturn with ACK as extra data — tells the sender the path to us
 		pathReturn, err := c.buildPathReturn(senderPubKey, sharedSecret, pkt.Path, pkt.PathLength, meshcore.PayloadTypeAck, ackPayload)
 		if err != nil {
 			c.log.Debug("failed to build path return for DM ACK", "error", err)
@@ -49,10 +39,7 @@ func (c *Companion) sendDMAck(pkt *meshcore.Packet, senderPubKey []byte, sharedS
 			c.log.Debug("failed to send DM ACK (path return)", "error", err)
 		}
 	} else {
-		// Send the ACK along the peer's known out_path; flood only when the route
-		// is genuinely unknown (nil out_path). A direct neighbour is stored as an
-		// empty but non-nil path, so route it direct with 0 hops rather than
-		// flooding a node we can reach directly (which would pollute the mesh).
+		// An empty but non-nil out_path is a direct neighbour: route it direct at 0 hops; only a nil path floods.
 		ackPkt := &meshcore.Packet{
 			Header:  meshcore.MakeHeader(meshcore.RouteTypeFlood, meshcore.PayloadTypeAck, 0),
 			Payload: ackPayload,
@@ -76,10 +63,7 @@ func (c *Companion) sendDMAck(pkt *meshcore.Packet, senderPubKey []byte, sharedS
 	}
 }
 
-// buildPathReturn constructs a flood-routed Path packet (PathReturn) matching
-// the C++ firmware format. The payload is:
-//
-//	[dest_hash:1][src_hash:1][MAC:2][encrypted([pathLenByte][path_data][extra_type][extra_data])]
+// buildPathReturn matches the firmware's Path payload: [dest_hash:1][src_hash:1][MAC:2][encrypted([pathLenByte][path_data][extra_type][extra_data])].
 func (c *Companion) buildPathReturn(destPubKey []byte, sharedSecret []byte, inPath []byte, pathLenByte byte, extraType byte, extraData []byte) (*meshcore.Packet, error) {
 	pathHashSize := int((pathLenByte>>6)&3) + 1
 	pathHashCount := int(pathLenByte & 63)
@@ -88,7 +72,6 @@ func (c *Companion) buildPathReturn(destPubKey []byte, sharedSecret []byte, inPa
 		pathDataLen = len(inPath)
 	}
 
-	// Build plaintext: [pathLenByte][path_data][extra_type][extra_data]
 	plain := make([]byte, 0, 1+pathDataLen+1+len(extraData))
 	plain = append(plain, pathLenByte)
 	plain = append(plain, inPath[:pathDataLen]...)
@@ -100,7 +83,6 @@ func (c *Companion) buildPathReturn(destPubKey []byte, sharedSecret []byte, inPa
 		return nil, fmt.Errorf("encrypting path return: %w", err)
 	}
 
-	// Build full Path payload: [dest_hash][src_hash][MAC+encrypted]
 	selfPubKey := c.node.Identity().PublicKey()
 	payload := make([]byte, 0, meshcore.PathHashSize+meshcore.PathHashSize+len(encrypted))
 	payload = append(payload, destPubKey[:meshcore.PathHashSize]...)
@@ -115,10 +97,7 @@ func (c *Companion) buildPathReturn(destPubKey []byte, sharedSecret []byte, inPa
 	return pkt, nil
 }
 
-// handleRoomPush handles a room-server post pushed to us as a TXT_MSG flagged
-// TXT_TYPE_SIGNED_PLAIN: [post_timestamp:4][flags:1][author_pubkey_prefix:4][text:N].
-// Pushes are ACK-gated — the server won't advance our sync_since or send the
-// next post until it sees our ACK (hashed with OUR pubkey, not the sender's).
+// handleRoomPush handles a TXT_TYPE_SIGNED_PLAIN room post: [post_timestamp:4][flags:1][author_pubkey_prefix:4][text:N].
 func (c *Companion) handleRoomPush(pkt *meshcore.Packet, roomPubKey []byte, roomPubKeyHex string, sharedSecret []byte, plaintext []byte) {
 	if len(plaintext) < 9 {
 		c.log.Debug("room push plaintext too short", "room", roomPubKeyHex[:12])
@@ -129,9 +108,7 @@ func (c *Companion) handleRoomPush(pkt *meshcore.Packet, roomPubKey []byte, room
 	authorPrefix := plaintext[5:9]
 	text := strings.TrimRight(string(plaintext[9:]), "\x00")
 
-	// ACK even duplicates — each retry carries a fresh attempt byte, so a
-	// previous ACK can't satisfy it. Firmware: a bare 4-byte CRC over
-	// [ts][flags][author][text] + OUR pubkey (BaseChatMesh TXT_TYPE_SIGNED_PLAIN).
+	// Pushes are ACK-gated: the server sends no further post until it sees a CRC hashed with OUR pubkey, and each retry needs its own ACK.
 	selfPubKey := c.node.Identity().PublicKey()
 	ack := make([]byte, 4)
 	binary.LittleEndian.PutUint32(ack, meshcore.CalcAckHash(plaintext[:9+len(text)], selfPubKey[:]))
@@ -139,8 +116,7 @@ func (c *Companion) handleRoomPush(pkt *meshcore.Packet, roomPubKey []byte, room
 
 	channelKey := "dm:" + roomPubKeyHex
 
-	// Dedup re-pushed posts: the server's backlog holds at most 32, so 50
-	// recent rows cover the resync window.
+	// The server's backlog holds at most 32 posts, so 50 recent rows cover the resync window.
 	recent, err := c.store.Messages.List(c.runCtx, c.cfg.ID, channelKey, 50, 0)
 	if err == nil {
 		for _, m := range recent {
@@ -198,10 +174,7 @@ func (c *Companion) handleRoomPush(pkt *meshcore.Packet, roomPubKey []byte, room
 	})
 }
 
-// handleDMPathReturn processes incoming Path packets as potential DM ACK
-// responses. It tries each contact's shared secret to decrypt the payload.
-// On success it extracts the return path (updating the peer's out_path) and
-// any embedded ACK (feeding it into the node's ack tracker).
+// handleDMPathReturn tries every contact's shared secret against a Path packet, then stores the return path and feeds any embedded ACK to the tracker.
 func (c *Companion) handleDMPathReturn(pkt *meshcore.Packet) {
 	path, err := meshcore.PathFromBytes(pkt.Payload)
 	if err != nil {
@@ -251,7 +224,6 @@ func (c *Companion) handleDMPathReturn(pkt *meshcore.Packet) {
 			_ = c.store.Contacts.UpdateOutPath(context.Background(), c.cfg.ID, ct.PeerPubKey, returnPath, hs)
 		})
 
-		// Extract embedded ACK and feed it into the ack tracker
 		if extraType == meshcore.PayloadTypeAck && len(extraData) >= 4 {
 			ackCRC := binary.LittleEndian.Uint32(extraData[:4])
 			c.node.NotifyACK(ackCRC)
@@ -329,11 +301,7 @@ func (c *Companion) registerPacketHandlers() {
 				return
 			}
 
-			// Keep any saved contact's cached record current. Contacts own their
-			// identity/location/feat/last-seen now (decoupled from
-			// discovered_peers), so this is what refreshes them on re-advert.
-			// Location only updates when the advert carries one ("advert wins"
-			// over a hand-set location, but a no-GPS advert leaves it alone).
+			// Advert wins on location, but only when it carries one — a no-GPS advert leaves a hand-set location alone.
 			hasLoc := p.HasLocation()
 			if err := c.store.Contacts.RefreshFromAdvert(
 				context.Background(), p.PubKey, appData.Name, appData.Type,
@@ -376,25 +344,13 @@ func (c *Companion) registerPacketHandlers() {
 			return
 		}
 
-		// Channel messages are matched by a 1-byte channel hash and authenticated
-		// by a 2-byte HMAC, both of which collide cheaply on a busy mesh — and the
-		// cipher is AES-ECB, so foreign or binary traffic on a colliding channel
-		// "decrypts" to byte-noise (a repeating 16-byte block is the tell-tale).
-		//
-		// First gate matches the firmware (BaseChatMesh::onGroupDataRecv): a real
-		// channel chat message is TXT_TYPE_PLAIN, so the upper 6 bits of the flags
-		// byte are 0. On a wrong-key decrypt that slips the 2-byte MAC the flags
-		// byte is random, so this drops ~63/64 of collision garbage — the
-		// firmware's primary defence.
+		// Firmware gate (BaseChatMesh::onGroupDataRecv): real chat is TXT_TYPE_PLAIN, dropping ~63/64 of the garbage a 1-byte-hash channel collision decrypts to.
 		if txtType := payload.Flags >> 2; txtType != txtTypePlain {
 			c.log.Debug("dropping non-plain channel message",
 				"channel", ch.Name, "channelHash", ch.Hash, "txtType", txtType)
 			return
 		}
-		// Second gate goes beyond the firmware, which hands raw decrypted bytes to
-		// its UI: an authentic message on a shared-PSK channel (e.g. Public) can
-		// carry genuinely binary content. Real chat is text; drop anything that
-		// isn't valid UTF-8 so garbage never reaches the store or the chat UI.
+		// Beyond the firmware: a shared-PSK channel carries genuinely binary traffic too, so keep only text.
 		if !utf8.ValidString(payload.Text) || !utf8.ValidString(payload.Sender) {
 			c.log.Debug("dropping non-text channel message",
 				"channel", ch.Name, "channelHash", ch.Hash, "bytes", len(payload.Text))
@@ -469,15 +425,7 @@ func (c *Companion) registerPacketHandlers() {
 		})
 	})
 
-	// One persistent group-text handler dispatches to the current trigger set.
-	// Triggers register here (instead of each calling node.OnPacket) so
-	// ReloadTriggers can swap them at runtime — node.OnPacket has no
-	// deregistration, so per-trigger handlers would leak on every reload.
-	//
-	// Registered AFTER the rx-persist handler above on purpose: a matched
-	// trigger replies via WriteSync, which must be enqueued to the store writer
-	// *after* the inbound message's WriteAsync. Otherwise the reply gets a lower
-	// id and sorts before the message that triggered it.
+	// One persistent handler (node.OnPacket has no deregistration) registered after the rx-persist handler, so a trigger's reply gets a higher row id than the message it answers.
 	c.node.OnPacket(meshcore.PayloadTypeGrpTxt, func(pkt *meshcore.Packet) {
 		c.mu.Lock()
 		entries := c.triggers
@@ -580,7 +528,7 @@ func (c *Companion) registerPacketHandlers() {
 			return
 		}
 
-		// Send ACK for plain text DMs: [crc:4][attempt][random]
+		// Plain-DM ack payload: [crc:4][attempt][random]
 		ackPlaintext := plaintext[:5+len(text)]
 		var attemptByte byte
 		if 5+len(text)+1 < len(plaintext) {

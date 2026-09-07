@@ -1,5 +1,4 @@
-// Shared retry dropdown options for the node-monitoring poller
-// (internal/monitor), used by both MonitoringSettings and LinkMonitorSettings.
+// Retry dropdown options for the internal/monitor poller.
 export const RETRY_OPTS: { value: string; label: string }[] = [
   { value: "0", label: "Default (5m)" },
   { value: "60", label: "1 min" },

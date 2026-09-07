@@ -83,8 +83,7 @@ function typeToInt(t: string): number {
   return TYPE_INT[t] ?? 1;
 }
 
-// Split the stored advert path (out_path hex) into per-hop hashes. hashSize 0
-// means the default 1 byte per hop.
+// hashSize 0 means the default 1 byte per hop.
 export function advertPathInfo(outPath?: string, hashSize?: number) {
   const hex = (outPath || "").toLowerCase();
   const hs = hashSize && hashSize > 0 ? hashSize : 1;
@@ -195,8 +194,7 @@ function PeerDetailBody({
     () => advertPathInfo(peer.outPath, peer.outPathHashSize),
     [peer.outPath, peer.outPathHashSize],
   );
-  // Our own companion identities surface as discovered peers — a node can't be
-  // its own contact, so suppress the Add affordance for them.
+  // Our own companion identities surface as discovered peers; a node can't be its own contact.
   const isSelf = useMemo(
     () =>
       companions.some(
@@ -204,8 +202,6 @@ function PeerDetailBody({
       ),
     [companions, peer.pubkey],
   );
-  // Which companions hold this peer as a contact — shown as cross-links. A
-  // contact caches its own identity, so deleting the peer here leaves it intact.
   const membership = usePeerMembership(peer, companions);
   const lat = peer.lat / 1e6;
   const lon = peer.lon / 1e6;
@@ -429,9 +425,7 @@ function PeerDetailBody({
           </div>
         )}
 
-        {/* Danger zone — remove from the shared discovered-peers table. Any
-            saved contact keeps its own cached identity, so this never affects
-            contacts. */}
+        {/* Danger zone — a saved contact keeps its own cached identity, so this never touches contacts */}
         <div className="flex items-center justify-between border-t border-border px-5 py-4">
           <div className="space-y-0.5">
             <span className="label-overline">Discovered peer</span>
@@ -464,18 +458,14 @@ interface MembershipHit {
   isRepeater: boolean;
 }
 
-// Fetches which companions hold this peer as a contact (across all companions),
-// so both the "In companions" list and the delete gate share one source.
+// One fetch shared by the "In companions" list and the delete gate.
 function usePeerMembership(
   peer: PeerLike,
   companions: CompanionRef[],
 ): MembershipHit[] {
   const [hits, setHits] = useState<MembershipHit[]>([]);
   const key = peer.pubkey.toLowerCase();
-  // `companions` is live WS data — a fresh array identity every revalidation
-  // would re-fire the whole N-companion fan-out. Depend on a stable name key
-  // and read the current list through a ref so the fetch only re-runs when the
-  // peer or the set of companions actually changes.
+  // `companions` is live WS data — depend on a stable name key so revalidation can't re-fire the fan-out.
   const names = companions.map((c) => c.name).join(",");
   const companionsRef = useRef(companions);
   companionsRef.current = companions;
@@ -510,9 +500,7 @@ function usePeerMembership(
   return hits;
 }
 
-// Lists the companions that already have this peer in their contacts, each
-// linking to where it lives there (repeater admin page or contact detail) — so
-// a discovered peer is reachable in-companion from anywhere the sheet opens.
+// Each hit links to where the contact lives: repeater admin page or contact detail.
 function CompanionMembership({
   pubkeyHex,
   hits,
@@ -615,8 +603,7 @@ function AddPeerContactDialog({
   const [companion, setCompanion] = useState("");
   const [submitting, setSubmitting] = useState(false);
 
-  // Reset only on the closed→open transition: `companions` is live WS data and
-  // must not wipe the user's selection while the dialog is open.
+  // Reset only on closed→open: `companions` is live WS data and must not wipe the selection.
   const prevOpenRef = useRef(false);
   useEffect(() => {
     if (open && !prevOpenRef.current) {

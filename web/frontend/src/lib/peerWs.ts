@@ -1,6 +1,4 @@
-// The "peers" WS topic carries either a full peer upsert or a delete signal
-// ({ action: "delete", pubkeys }) broadcast when discovered peers are removed.
-// This guard lets each peer view drop them from local state without a refetch.
+// The "peers" WS topic carries either a full peer upsert or this delete signal.
 export interface PeerDeleteMsg {
   action: "delete";
   pubkeys: string[];

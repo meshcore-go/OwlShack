@@ -1,7 +1,4 @@
-// Package repeater is the client for talking to remote repeater nodes over the
-// mesh: login (ANON_REQ), status, CLI, path get/reset/set, neighbours,
-// telemetry and access-list (ACL) administration. It drives repeaters; it does
-// not emulate one. The local node it sends through is supplied at construction.
+// Package repeater drives remote repeater nodes over the mesh; it does not emulate one.
 package repeater
 
 import (
@@ -32,10 +29,7 @@ const (
 	respServerLoginOK       = 0 // login reply byte 4
 )
 
-// isLoginReply distinguishes a login reply ([ts:4][RESP_OK][0][isAdmin][perms]
-// [rand:4][ver]) from a tagged REQ response arriving while a login is pending.
-// Byte 4 alone also matched a status body whose batt_milli_volts low byte is 0;
-// byte 5 is the firmware's always-zero legacy keep-alive field.
+// isLoginReply: byte 4 alone also matches a status body with a zero batt low byte, so check byte 5's always-zero legacy field too.
 func isLoginReply(data []byte) bool {
 	return len(data) >= 13 && data[4] == respServerLoginOK && data[5] == 0
 }
@@ -43,9 +37,7 @@ func isLoginReply(data []byte) bool {
 type Session struct {
 	PubKeyHex string `json:"pubkeyHex"`
 	IsAdmin   bool   `json:"isAdmin"`
-	// Permissions is the ACL byte the node reported at login (reply byte 7 on
-	// repeaters and sensors): low 2 bits role, and on sensors bits 6–7 the
-	// alert subscription.
+	// Permissions is login reply byte 7: low 2 bits role, and on sensors bits 6-7 the alert subscription.
 	Permissions  int       `json:"permissions"`
 	Role         string    `json:"role,omitempty"` // room sessions: "admin" | "read-write" | "read-only"
 	IsRoom       bool      `json:"isRoom,omitempty"`
@@ -58,8 +50,7 @@ type pendingRequest struct {
 	ch      chan []byte
 	created time.Time
 
-	// Set for sessionless requests (contact telemetry) so the response — plain
-	// Response or flood PathReturn — can be matched/decrypted without a session.
+	// Set for sessionless requests so the response can be matched and decrypted without a session.
 	sharedSecret   []byte
 	peerPubKeyByte byte
 	peerPubKey     [32]byte
@@ -95,12 +86,7 @@ type Client struct {
 	lastTS uint32
 }
 
-// UniqueTimestamp returns a strictly increasing epoch-seconds value for the
-// timestamps we stamp on requests, logins and CLI messages — the firmware's
-// getCurrentTimeUnique(). Remote nodes drop a timestamp <= the last one they
-// saw from us as a replay, and treat an equal CLI timestamp as a retry that is
-// not executed and not answered, so two sends in one wall-clock second must
-// still differ.
+// UniqueTimestamp mirrors the firmware's getCurrentTimeUnique(): a remote node drops a timestamp <= the last one it saw.
 func (rm *Client) UniqueTimestamp() uint32 {
 	rm.tsMu.Lock()
 	defer rm.tsMu.Unlock()
@@ -132,16 +118,7 @@ func (rm *Client) persistOutPath(pubkey []byte, path []byte, hashSize uint8) {
 	})
 }
 
-// routeForPeer chooses the send route for a packet to peer, mirroring the
-// node.Peer OutPath contract:
-//   - nil           -> route unknown, FLOOD
-//   - []byte{}      -> direct neighbour (0 hops), RouteTypeDirect with empty path
-//   - []byte{...}   -> multi-hop, RouteTypeDirect along the stored path
-//
-// A node we can reach directly (including a 0-hop neighbour) must NOT be
-// flooded — flooding rebroadcasts across the whole mesh and pollutes it. Only a
-// genuinely unknown route (nil) floods. Returns the header route-type byte and
-// the encoded path-length byte (upper 2 bits = hashSize-1, lower 6 = hop count).
+// routeForPeer follows the OutPath contract: only nil (unknown) floods, and the length byte is hashSize-1 in the upper 2 bits.
 func routeForPeer(peer *node.Peer) (routeType byte, pathLen uint8) {
 	if peer == nil || peer.OutPath == nil {
 		return meshcore.RouteTypeFlood, 0
@@ -168,9 +145,7 @@ func (rm *Client) Logout(pubkeyHex string) {
 	delete(rm.sessions, pubkeyHex)
 }
 
-// sendBinaryRequest builds and sends a PAYLOAD_TYPE_REQ to a logged-in repeater
-// with a custom payload body (placed at offset 4 onward; tag is prepended), and
-// awaits the matching response. Returns the response data (without the tag).
+// sendBinaryRequest prepends the tag, placing body at offset 4, and returns the response without its tag.
 func (rm *Client) sendBinaryRequest(pubkeyHex string, body []byte, timeout time.Duration, label string) ([]byte, error) {
 	pubkeyBytes, err := hex.DecodeString(pubkeyHex)
 	if err != nil {
@@ -194,13 +169,11 @@ func (rm *Client) sendBinaryRequest(pubkeyHex string, body []byte, timeout time.
 		return nil, fmt.Errorf("not logged in to this repeater")
 	}
 
-	// Session decrypts the response, so the pending entry needn't carry the secret.
+	// The session decrypts the response, so the pending entry needn't carry the secret.
 	return rm.roundtripRequest(peerIdentity.PublicKey(), peer, sess.sharedSecret, sess.localPubKey[0], body, timeout, label, false)
 }
 
-// roundtripRequest encrypts body into a PayloadTypeReq, sends it (direct if an
-// OutPath is known, else flood), and awaits the tagged response (tag stripped).
-// storeSecret carries the secret on the pending entry for sessionless matching.
+// roundtripRequest awaits the tagged response; storeSecret puts the secret on the pending entry for sessionless matching.
 func (rm *Client) roundtripRequest(peerPub [32]byte, peer *node.Peer, sharedSecret []byte, localPubByte byte, body []byte, timeout time.Duration, label string, storeSecret bool) ([]byte, error) {
 	tag := rm.UniqueTimestamp()
 

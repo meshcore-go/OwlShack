@@ -14,8 +14,7 @@ import (
 	meshcore "github.com/meshcore-go/meshcore-go"
 )
 
-// fakeBroker answers MQTT 3.1.1 CONNECT with CONNACK and ACKs anything else it
-// can, which is all paho's Connect needs to return successfully.
+// fakeBroker answers MQTT 3.1.1 CONNECT with CONNACK and ACKs what it can, which is all paho's Connect needs.
 type fakeBroker struct {
 	ln      net.Listener
 	accepts atomic.Int32
@@ -85,8 +84,7 @@ func (f *fakeBroker) serve(conn net.Conn) {
 	}
 }
 
-// freePort binds and immediately releases a port, so connecting to it refuses
-// until listenFakeBroker claims it.
+// freePort binds and releases a port, so connecting to it refuses until listenFakeBroker claims it.
 func freePort(t *testing.T) (string, int) {
 	t.Helper()
 	ln, err := net.Listen("tcp", "127.0.0.1:0")
@@ -145,9 +143,7 @@ func waitFor(t *testing.T, what string, d time.Duration, cond func() bool) {
 	t.Fatalf("timed out waiting for %s", what)
 }
 
-// A broker that is down at startup must keep retrying and connect on its own
-// once it comes up — paho's SetAutoReconnect does not cover a client that
-// never connected.
+// A broker down at startup must keep retrying: paho's SetAutoReconnect does not cover a client that never connected.
 func TestRetryConnect_RecoversWhenBrokerAppears(t *testing.T) {
 	shrinkBackoff(t)
 	addr, port := freePort(t)
@@ -239,8 +235,7 @@ func TestRetryConnect_ExitsOnContextAndStop(t *testing.T) {
 	}
 }
 
-// Only one loop may run per broker: Start and a failed token refresh both
-// spawn one, and two would race on the client pointer.
+// Only one loop may run per broker: Start and a failed token refresh both spawn one, and two would race on the client pointer.
 func TestRetryConnect_SecondCallIsNoOp(t *testing.T) {
 	shrinkBackoff(t)
 	_, port := freePort(t)
@@ -262,9 +257,7 @@ func TestRetryConnect_SecondCallIsNoOp(t *testing.T) {
 	}
 }
 
-// refreshToken is what panicked in production: it ran on every configured
-// token broker, including one whose initial connect failed and left a nil
-// client, and Disconnect on a nil paho.Client kills the process.
+// refreshToken runs on every token broker, and Disconnect on the nil client of one that never connected kills the process.
 func TestRefreshToken_SkipsUnconnectedAndRetryingBrokers(t *testing.T) {
 	o := testObserver(t)
 	ctx := context.Background()
@@ -286,8 +279,7 @@ func TestRefreshToken_SkipsUnconnectedAndRetryingBrokers(t *testing.T) {
 	}
 }
 
-// A token broker that is up gets a genuinely new client, and the old one is
-// disconnected rather than orphaned.
+// A token broker that is up gets a new client, and the old one is disconnected rather than orphaned.
 func TestRefreshToken_SwapsClient(t *testing.T) {
 	addr, port := freePort(t)
 	fb := listenFakeBroker(t, addr)

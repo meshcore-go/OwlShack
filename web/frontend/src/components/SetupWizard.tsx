@@ -115,9 +115,7 @@ export function SetupWizard({
   const finish = async () => {
     setBusy(true);
     try {
-      // Create the companion first (it auto-joins Public server-side). Doing it
-      // before flipping setupComplete means a failure here keeps the wizard
-      // open rather than stranding a half-configured install.
+      // Before setupComplete, so a failure here keeps the wizard open instead of stranding a half-configured install.
       if (!skipCompanion && name.trim()) {
         await configApi.saveCompanion({
           name: name.trim(),
@@ -130,8 +128,7 @@ export function SetupWizard({
         });
       }
       await configApi.putSettings({
-        // Round-trip the values the wizard doesn't edit so saving them with the
-        // setupComplete flag never clears them.
+        // Round-trip the values the wizard doesn't edit so saving setupComplete never clears them.
         connectionType: settings.connectionType,
         logLevel: settings.logLevel,
         listenAddr: settings.listenAddr,
@@ -144,9 +141,7 @@ export function SetupWizard({
         tx: tx === "" ? null : parseInt(tx, 10),
         setupComplete: true,
       });
-      // The writes are validated + reloaded server-side before they return, so
-      // the re-fetched config already carries setupComplete and the App gate
-      // unmounts this wizard.
+      // Writes are validated and reloaded server-side before returning, so the re-fetched config already gates this wizard away.
       onComplete();
     } catch (e) {
       toast.error(e instanceof Error ? e.message : "Setup failed");

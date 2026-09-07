@@ -15,8 +15,7 @@ type Conversation struct {
 	LastMessage *ConversationMessage
 	UnreadCount int
 	LastActive  time.Time
-	// LastMessageID orders threads by when we learned of the newest message: a
-	// remote node's clock can be wrong, so LastActive is not a sort key.
+	// LastMessageID orders threads: a remote node's clock can be wrong, so LastActive is not a sort key.
 	LastMessageID int64
 }
 

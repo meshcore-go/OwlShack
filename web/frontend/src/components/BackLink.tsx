@@ -1,9 +1,7 @@
 import { Link } from "react-router-dom";
 import { ArrowLeft } from "lucide-react";
 
-// The "‹ back to X" link that sits above a detail page's header. Standardises
-// the eyebrow styling that was copy-pasted atop Contacts/Channels/Repeaters/
-// Monitoring detail pages.
+// The "back to X" eyebrow link above a detail page's header.
 export function BackLink({ to, label }: { to: string; label: string }) {
   return (
     <Link

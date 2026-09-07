@@ -1,5 +1,4 @@
-// Typed client for the signal-test REST (/api/signal-tests, /api/companions/{name}/signal-tests).
-// Mirrors the shape of nodesApi.ts.
+// Client for the signal-test REST (/api/signal-tests, /api/companions/{name}/signal-tests).
 
 export type SignalTestStatus = "running" | "done" | "cancelled" | "interrupted";
 
@@ -135,8 +134,7 @@ export const signalTestApi = {
     }),
 };
 
-// computeStats mirrors internal/signaltest.ComputeStats client-side, so the
-// live progress panel doesn't need a round-trip after every run event.
+// Mirrors internal/signaltest.ComputeStats so the live panel needs no round-trip per run event.
 export function computeStats(runs: SignalTestRun[]): SignalTestStats {
   const total = runs.length;
   let okCount = 0;
@@ -146,9 +144,7 @@ export function computeStats(runs: SignalTestRun[]): SignalTestStats {
 
   for (const run of runs) {
     if (run.ok) okCount++;
-    // Defensive: older/corrupted rows (fixed server-side, but may still be
-    // cached or already stored) can carry a null hopSNRs — a trace that
-    // timed out with zero echoes ever heard.
+    // Rows stored before a server-side fix can carry a null hopSNRs.
     (run.hopSNRs || []).forEach((v, i) => {
       (hopValues[i] ??= []).push(v);
     });

@@ -1,20 +1,12 @@
 import { useCallback, useEffect, useState } from "react";
 
-// The non-standard beforeinstallprompt event (Chromium only). We capture it,
-// suppress the default mini-infobar, and replay it from our own button.
+// The non-standard beforeinstallprompt event (Chromium only), captured to replay from our own button.
 interface BeforeInstallPromptEvent extends Event {
   prompt: () => Promise<void>;
   userChoice: Promise<{ outcome: "accepted" | "dismissed" }>;
 }
 
-/**
- * Drives the optional "Install app" button. `canInstall` is true only while the
- * browser has offered an install prompt we can replay (Chromium, installable,
- * not already installed). `promptInstall` shows the native chooser. Everywhere
- * else — already installed, or a browser without the event (e.g. iOS Safari) —
- * the browser never fires `beforeinstallprompt`, so `canInstall` stays false and
- * the button hides itself.
- */
+// `canInstall` stays false wherever the event never fires (already installed, iOS Safari).
 export function useInstallPrompt() {
   const [deferred, setDeferred] = useState<BeforeInstallPromptEvent | null>(
     null,
@@ -38,8 +30,7 @@ export function useInstallPrompt() {
   const promptInstall = useCallback(async () => {
     if (!deferred) return;
     await deferred.prompt();
-    // The event is single-use; drop it (accepted → appinstalled also clears,
-    // dismissed → the browser re-fires a fresh event on the next engagement).
+    // The event is single-use; a dismissal re-fires a fresh one on the next engagement.
     setDeferred(null);
   }, [deferred]);
 

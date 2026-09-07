@@ -8,14 +8,7 @@ import (
 	"github.com/meshcore-go/meshcore-go/node"
 )
 
-// TestRouteForPeer pins the OutPath routing contract that keeps direct-reachable
-// peers off the flood path. Expected (routeType, pathLen) values are read
-// directly from routeForPeer's body:
-//   - nil OutPath          -> (RouteTypeFlood, 0)
-//   - []byte{} (non-nil)   -> (RouteTypeDirect, 0)
-//   - multi-hop OutPath    -> (RouteTypeDirect, (hashSize-1)<<6 | hopCount)
-//
-// meshcore.RouteTypeFlood = 0x01, RouteTypeDirect = 0x02, PathHashSize = 1.
+// Pins the OutPath contract: only a nil OutPath floods, and pathLen is (hashSize-1)<<6 | hopCount.
 func TestRouteForPeer(t *testing.T) {
 	t.Parallel()
 
@@ -44,32 +37,28 @@ func TestRouteForPeer(t *testing.T) {
 			wantPathLen:   0,
 		},
 		{
-			// hashSize 0 defaults to PathHashSize (1). 3 path bytes / 1 = 3 hops.
-			// pathLen = (1-1)<<6 | 3 = 3.
+			// hashSize 0 defaults to 1, so 3 path bytes are 3 hops: (1-1)<<6 | 3 = 3.
 			name:          "3-hop path, default hash size (0 -> 1)",
 			peer:          &node.Peer{OutPath: []byte{0xAA, 0xBB, 0xCC}, OutPathHashSize: 0},
 			wantRouteType: meshcore.RouteTypeDirect, // 0x02
 			wantPathLen:   3,
 		},
 		{
-			// explicit hashSize 1, 2 path bytes / 1 = 2 hops.
-			// pathLen = (1-1)<<6 | 2 = 2.
+			// (1-1)<<6 | 2 = 2.
 			name:          "2-hop path, explicit hash size 1",
 			peer:          &node.Peer{OutPath: []byte{0x11, 0x22}, OutPathHashSize: 1},
 			wantRouteType: meshcore.RouteTypeDirect,
 			wantPathLen:   2,
 		},
 		{
-			// hashSize 2, 4 path bytes / 2 = 2 hops.
-			// pathLen = (2-1)<<6 | 2 = 0x40 | 2 = 66.
+			// (2-1)<<6 | 2 = 66.
 			name:          "2-hop path, hash size 2",
 			peer:          &node.Peer{OutPath: []byte{0x11, 0x22, 0x33, 0x44}, OutPathHashSize: 2},
 			wantRouteType: meshcore.RouteTypeDirect,
 			wantPathLen:   66,
 		},
 		{
-			// hashSize 4, 8 path bytes / 4 = 2 hops.
-			// pathLen = (4-1)<<6 | 2 = 0xC0 | 2 = 194.
+			// (4-1)<<6 | 2 = 194.
 			name:          "2-hop path, hash size 4",
 			peer:          &node.Peer{OutPath: []byte{1, 2, 3, 4, 5, 6, 7, 8}, OutPathHashSize: 4},
 			wantRouteType: meshcore.RouteTypeDirect,
@@ -93,31 +82,7 @@ func TestRouteForPeer(t *testing.T) {
 	}
 }
 
-// buildStatus assembles a 56-byte status payload with explicit values at the
-// documented little-endian offsets that parseRepeaterStatus reads. This doubles
-// as a spec of the wire format. Returns the full 56-byte slice; callers truncate
-// as needed.
-//
-// Offsets (all little-endian):
-//
-//	[0:2]   batteryMv     u16
-//	[2:4]   queueLen      u16
-//	[4:6]   noiseFloor    i16
-//	[6:8]   lastRssi      i16
-//	[8:12]  packetsRecv   u32
-//	[12:16] packetsSent   u32
-//	[16:20] txAirSecs     u32
-//	[20:24] uptimeSecs    u32
-//	[24:28] floodTx       u32
-//	[28:32] directTx      u32
-//	[32:36] floodRx       u32
-//	[36:40] directRx      u32
-//	[40:42] errEvents     u16   <- distinct from recvErrors
-//	[42:44] lastSnr       i16   (quarter-dB, /4 -> real dB)
-//	[44:46] directDups    u16
-//	[46:48] floodDups     u16
-//	[48:52] rxAirSecs     u32
-//	[52:56] recvErrors    u32   <- distinct from errEvents
+// buildStatus is the 56-byte little-endian wire layout parseRepeaterStatus reads; callers truncate as needed.
 func buildStatus() []byte {
 	b := make([]byte, 56)
 	binary.LittleEndian.PutUint16(b[0:2], 3700)         // batteryMv
@@ -230,7 +195,6 @@ func TestParseRepeaterNeighbors(t *testing.T) {
 
 	const prefixLen = 6
 	// Entry layout: [prefix:prefixLen][secsAgo:u32 LE][snr:i8].
-	// entrySize = prefixLen + 4 + 1.
 	buildNeighbors := func(total, results int16, entries [][]byte) []byte {
 		b := make([]byte, 4)
 		binary.LittleEndian.PutUint16(b[0:2], uint16(total))
@@ -433,10 +397,7 @@ func TestParseRepeaterOwnerInfo(t *testing.T) {
 	}
 }
 
-// TestParseRepeaterAccessListPadding: the decrypted reply is zero-padded to
-// the cipher block, and the firmware never emits a permissions==0 entry
-// (MyMesh.cpp handleRequest: "skip deleted entries"), so all-zero strides are
-// padding, not clients.
+// The firmware never emits a permissions==0 entry, so an all-zero stride is cipher-block padding, not a client.
 func TestParseRepeaterAccessListPadding(t *testing.T) {
 	t.Parallel()
 	data := []byte{
@@ -453,9 +414,7 @@ func TestParseRepeaterAccessListPadding(t *testing.T) {
 	}
 }
 
-// TestIsLoginReply pins the login reply shape
-// [ts:4][RESP_SERVER_LOGIN_OK=0][0][isAdmin][permissions][rand:4][ver] against
-// the tagged REQ responses that share the same secret and source hash.
+// Pins [ts:4][RESP_SERVER_LOGIN_OK=0][0][isAdmin][permissions][rand:4][ver] against tagged REQ responses.
 func TestIsLoginReply(t *testing.T) {
 	t.Parallel()
 	login := make([]byte, 16) // 13 bytes + block padding

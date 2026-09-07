@@ -40,8 +40,7 @@ export function ContactsPage() {
   );
   const [confirmRemove, setConfirmRemove] = useState<string | null>(null);
   const [dialogOpen, setDialogOpen] = useState(false);
-  // The companion's own pubkey, so the add dialog can block a self-contact
-  // inline (the backend rejects it too, but this avoids the round-trip).
+  // The companion's own pubkey, so the add dialog can block a self-contact inline.
   const ownPubkey = useCompanions().find((c) => c.name === companion)?.pubkey;
 
   const removeContact = useCallback(

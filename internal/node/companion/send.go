@@ -14,9 +14,7 @@ import (
 	"github.com/meshcore-go/OwlShack/internal/store"
 )
 
-// uniqueTimestamp mirrors the firmware's getCurrentTimeUnique(): strictly
-// increasing, so a room server never sees two posts with one timestamp (it
-// treats the second as a retry and drops it).
+// uniqueTimestamp mirrors the firmware's getCurrentTimeUnique(): a remote node drops a second post sharing a timestamp as a retry.
 func (c *Companion) uniqueTimestamp() uint32 { return c.repeaters.UniqueTimestamp() }
 
 func (c *Companion) SendChannelMessage(channelName, text string) error {
@@ -27,12 +25,7 @@ func (c *Companion) SendChannelMessage(channelName, text string) error {
 	return c.sendGroupReply(ch, text, c.pathHashSize(), 5*time.Second, 3)
 }
 
-// sendGroupReply persists an outgoing group-text message, broadcasts it to the
-// UI over the "messages" topic, tracks it for tx-echo correlation, and sends it
-// on the mesh. Shared by the chat API (SendChannelMessage) and the trigger
-// reply path so bot replies appear in the Messages page exactly like manual
-// sends — previously triggers called node.SendGroupText directly and their
-// replies were never persisted or broadcast.
+// sendGroupReply is the shared send path for the chat API and trigger replies, so bot replies are persisted, broadcast and echo-tracked like manual sends.
 func (c *Companion) sendGroupReply(ch *meshcore.ChannelEntry, text string, hashSize uint8, retryTimeout time.Duration, maxRetries int) error {
 	payload := &meshcore.GroupTextPayload{
 		Timestamp: c.uniqueTimestamp(),
@@ -94,10 +87,7 @@ func (c *Companion) SendContactMessage(pubkeyHex, text string) error {
 		return fmt.Errorf("invalid pubkey: %w", err)
 	}
 
-	// Route from the contact's own stored path (per companion). Fall back to the
-	// in-memory peer table for a non-contact send, then to flood (nil path) when
-	// neither knows a route — SendTextMessage treats a nil path as a flood, so a
-	// contact whose discovered peer was swept still sends fine.
+	// SendTextMessage treats a nil path as a flood, so an unrouted contact still sends.
 	var outPath []byte
 	var hashSize uint8
 	if ct, cerr := c.store.Contacts.Get(c.runCtx, c.cfg.ID, pubkeyBytes); cerr == nil && ct != nil {
@@ -105,9 +95,7 @@ func (c *Companion) SendContactMessage(pubkeyHex, text string) error {
 	} else if peer := c.node.Peers().Lookup(peerIdentity.PublicKey()); peer != nil {
 		outPath, hashSize = peer.OutPath, peer.OutPathHashSize
 	}
-	// A direct-routed packet needs a real hop-hash width; a stored 0 (e.g. a
-	// migrated row) would otherwise frame the path wrong. Empty/nil path floods,
-	// where the size is irrelevant.
+	// A stored 0 hash width (e.g. a migrated row) would frame a direct path wrong.
 	if len(outPath) > 0 && hashSize == 0 {
 		hashSize = meshcore.PathHashSize
 	}
@@ -212,9 +200,7 @@ func (c *Companion) SendTrace(path []byte, pathHashSize uint8) (uint32, error) {
 	return tag, nil
 }
 
-// sendTracePacket builds and transmits a Trace packet for an already-chosen
-// tag/auth pair. Split out of SendTrace so RunTrace (trace.go) can register
-// its result waiter under the tag before the packet hits the radio.
+// sendTracePacket is split out of SendTrace so RunTrace can register its waiter under the tag before the packet hits the radio.
 func (c *Companion) sendTracePacket(tag, auth uint32, path []byte, pathHashSize uint8) error {
 	var flags byte
 	switch pathHashSize {

@@ -1,14 +1,4 @@
-// Typed client for the per-resource config REST API (internal/api/
-// routes_config_rest.go). The frontend fetches only the slice a page needs
-// instead of the whole config document.
-//
-// Secrets are never sent to the browser: companion private keys and broker
-// passwords are redacted to `privateKeySet` / `passwordSet` booleans on read.
-// On write, a secret field is omitted to keep the stored value, sent to set it,
-// or sent as "" to clear it.
-//
-// Every write is validated + reloaded server-side before it returns, so a save
-// that resolves means the running config already reflects it.
+// Client for internal/api/routes_config_rest.go: secrets read back as `*Set` booleans, and on write omit = keep, "" = clear.
 
 // --- read shapes (GET DTOs) ---
 
@@ -93,9 +83,7 @@ export interface Trigger {
   schedule: string | null;
 }
 
-// The single repeater NODE (the relay the bot runs). Secret-redacted like a
-// companion. `configured` is false when no repeater is set up; `running`
-// reflects whether the live node is up.
+// The single repeater NODE (the relay we run), not a remote one being administered.
 export interface ConfigRepeater {
   configured: boolean;
   running: boolean;
@@ -123,8 +111,7 @@ export interface ConfigRepeater {
   regions: RepeaterRegion[];
 }
 
-// A transport scope the repeater relays. The key derives from the name
-// (SHA256(name)[:16]); denyFlood excludes it from flood relaying.
+// A transport scope the repeater relays; its key derives from the name as SHA256(name)[:16].
 export interface RepeaterRegion {
   name: string;
   denyFlood: boolean;
@@ -170,7 +157,7 @@ export interface RepeaterAclEntry {
   lastSeen: number; // unix seconds
 }
 
-// --- write shapes (request bodies). Omit a secret field to keep it. ---
+// --- write shapes (request bodies) ---
 
 export interface SettingsInput {
   logLevel?: string | null;
@@ -186,8 +173,7 @@ export interface SettingsInput {
   mapTileKey?: string | null; // omit = keep, "" = clear
   pathHashSize?: number | null;
   dutyCycle?: number | null;
-  // Only set by the first-run wizard; omit elsewhere so a radio edit never
-  // re-opens setup.
+  // Only set by the first-run wizard; omit elsewhere so a radio edit never re-opens setup.
   setupComplete?: boolean;
 }
 
@@ -215,7 +201,7 @@ export interface BrokerInput {
   tlsInsecure: boolean;
   authType: string;
   username: string;
-  password?: string; // omit = keep existing
+  password?: string;
   path: string;
   audience: string;
 }
@@ -231,7 +217,7 @@ export interface CompanionInput {
 
 export interface ChannelInput {
   name: string;
-  privateKey?: string; // omit = keep existing
+  privateKey?: string;
 }
 
 // Repeater node config is edited per-section (no whole-config bulk write).
@@ -285,8 +271,7 @@ export interface TriggerInput {
 
 // --- request helper ---
 
-// request issues a JSON request and throws the server's error message on a
-// non-2xx response (validation failures come back as 422 { error }).
+// Validation failures come back as 422 { error }; throw the server's message.
 async function request(
   url: string,
   method: string,

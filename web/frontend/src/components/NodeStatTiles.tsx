@@ -23,8 +23,7 @@ function compactUptime(secs: number): string {
   return `${m}m`;
 }
 
-// Coordinate formatting with hemisphere suffixes — reads clearer than a bare
-// minus sign and matches how coordinates are conventionally shown.
+// Hemisphere suffix instead of a bare minus sign.
 function fmtLat(v: number): string {
   return `${Math.abs(v).toFixed(4)}°${v >= 0 ? "N" : "S"}`;
 }
@@ -46,8 +45,7 @@ export function StatTile({
   unit?: string;
   band?: Band;
   extra?: React.ReactNode;
-  // content replaces the single big-value layout for tiles that don't fit it
-  // (e.g. a coordinate pair). When set, value/unit/extra are ignored.
+  // When set, value/unit/extra are ignored.
   content?: React.ReactNode;
   className?: string;
 }) {
@@ -90,8 +88,7 @@ interface TileSpec {
   unit?: string;
   band?: Band;
   extra?: React.ReactNode;
-  // content: custom tile body (overrides value/unit/extra). colSpan widens the
-  // tile in the grid. metric: source key for the trend sparkline.
+  // content overrides value/unit/extra; metric is the sparkline's source key.
   content?: React.ReactNode;
   colSpan?: number;
   metric?: string;
@@ -103,10 +100,7 @@ function channelOf(key: string): number {
   return m ? parseInt(m[1], 10) : 0;
 }
 
-// metricKeysOfType returns the keys in `m` of a given LPP base type — its bare
-// and channel-suffixed variants — lowest channel first. External sensors are
-// stored channel-suffixed, so this finds them on whatever channel the firmware
-// used, and adapts to boards with any number of sensors.
+// External sensors are stored channel-suffixed, so match both bare and `_chN` keys.
 const typeKeyRes = new Map<string, RegExp>();
 
 function metricKeysOfType(m: Record<string, number>, base: string): string[] {
@@ -131,17 +125,14 @@ function hopSNRKeys(m: Record<string, number>): string[] {
     );
 }
 
-// nodeTiles maps a metrics snapshot to the ordered tiles shown on a node.
-// hopLabel (link monitors only) resolves a hop number to
-// "<source> → <destination>" instead of the generic "SNR hop N".
+// hopLabel (link monitors only) resolves a hop number to "<source> → <destination>".
 export function nodeTiles(
   m: Record<string, number>,
   hopLabel?: (hop: number) => string,
 ): TileSpec[] {
   const tiles: TileSpec[] = [];
 
-  // Battery: repeaters report millivolts via status (battery_mv); companions /
-  // sensors report volts via telemetry (battery). Resolve to mV for the % + band.
+  // Repeaters report millivolts via status; companions and sensors report volts via telemetry.
   const battMv = m.battery_mv ?? (m.battery !== undefined ? m.battery * 1000 : undefined);
   if (battMv !== undefined) {
     const band = batteryBand(battMv);
@@ -165,8 +156,7 @@ export function nodeTiles(
   if (m.last_snr !== undefined)
     tiles.push({ key: "snr", label: "SNR", value: m.last_snr.toFixed(1), unit: "dB", band: snrBand(m.last_snr), metric: "last_snr" });
 
-  // Link monitoring (a saved trace path, polled on a schedule): delivery flag,
-  // one tile per hop's SNR, and round-trip time. Absent for node monitors.
+  // Link monitors only (a saved trace path polled on a schedule); absent for node monitors.
   if (m.success !== undefined)
     tiles.push({
       key: "success",
@@ -192,9 +182,7 @@ export function nodeTiles(
   if (m.chan_util !== undefined)
     tiles.push({ key: "util", label: "Chan util", value: m.chan_util.toFixed(1), unit: "%", metric: "chan_util" });
 
-  // Error events: a sticky _err_flags bitmask, not a count. Only surface it when
-  // something is flagged (cards stay clean otherwise); decode bits to chips. No
-  // `metric` → no sparkline (a bitmask trend is meaningless).
+  // _err_flags is a sticky bitmask, not a count — no `metric`, a bitmask trend is meaningless.
   if (m.err_events !== undefined && m.err_events > 0) {
     tiles.push({
       key: "err_events",
@@ -204,10 +192,7 @@ export function nodeTiles(
     });
   }
 
-  // Prefer an external temperature sensor (any channel); fall back to the MCU's
-  // own temperature, labelled "MCU temp" so it's clear it isn't ambient. Humidity
-  // is always an external sensor. The detail page shows every channel; the card
-  // shows one representative.
+  // MCU temperature is a fallback and isn't ambient; the card shows one channel, the detail page all.
   const tempKey =
     metricKeysOfType(m, "temperature")[0] ??
     (m.mcu_temperature !== undefined ? "mcu_temperature" : undefined);
@@ -217,10 +202,7 @@ export function nodeTiles(
   if (humKey !== undefined)
     tiles.push({ key: "humidity", label: "Humidity", value: m[humKey].toFixed(1), unit: "%", metric: humKey });
 
-  // Location: a coordinate pair shown at equal weight (NOT one big + one small),
-  // with hemisphere notation, altitude beneath, and a pin hinting it opens the
-  // track map on the detail page. Spans 2 columns for room. No sparkline — lat/lon
-  // over time is meaningless; the detail page draws the actual track on a map.
+  // No sparkline — lat/lon over time is meaningless; the detail page maps the track.
   if (m.location_lat !== undefined && m.location_lon !== undefined) {
     tiles.push({
       key: "location",
@@ -244,21 +226,14 @@ export function nodeTiles(
   return tiles;
 }
 
-// sparklineMetricKeys returns the metric keys backing a node's tiles — i.e. the
-// ones that get a trend sparkline. The overview fetches history for exactly
-// these, so it adapts to whatever channels a board exposes without a hardcoded
-// list.
+// The overview fetches history for exactly these keys, so it adapts to any channel set.
 export function sparklineMetricKeys(m: Record<string, number>): string[] {
   return nodeTiles(m)
     .map((t) => t.metric)
     .filter((k): k is string => !!k);
 }
 
-// NodeStatGrid renders a node's current-value tiles in a 1px-separated grid.
-// `className` should supply the grid-cols (defaults to 3 columns). When `history`
-// (metric → series) is supplied, a trend sparkline is drawn under each tile that
-// has a matching series — the overview cards pass it; the detail page omits it
-// (it has full charts below).
+// `className` supplies the grid-cols; `history` adds a sparkline per tile (overview only).
 export function NodeStatGrid({
   metrics,
   className,

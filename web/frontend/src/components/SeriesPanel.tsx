@@ -29,9 +29,7 @@ const WINDOWS: { label: string; secs: number }[] = [
   { label: "7d", secs: 7 * 86400 },
 ];
 
-// SeriesPanel requests a sensor's min / avg / max per channel over a window
-// (`${apiBase}/history?from=&to=`, the firmware GET_AVG_MIN_MAX). Costs one
-// radio round trip per request, so nothing fires until the operator asks.
+// One radio round trip per request (firmware GET_AVG_MIN_MAX), so nothing fires until the operator asks.
 export function SeriesPanel({ apiBase }: { apiBase: string }) {
   const [win, setWin] = useState(WINDOWS[2]);
   const [data, setData] = useState<Series | null>(null);

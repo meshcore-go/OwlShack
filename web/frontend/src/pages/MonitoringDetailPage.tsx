@@ -53,10 +53,7 @@ interface RangePreset {
   bucketSecs: number;
 }
 
-// 24h uses a 60s bucket (finer than the other ranges) so two readings within
-// a minute of each other — e.g. a failed poll and its retry — don't get
-// averaged by the backend's AVG(value) bucketing into one fractional point.
-// 60s matches the minimum link retry delay (lib/monitorOptions.ts RETRY_OPTS).
+// 24h buckets at 60s — the minimum link retry delay — so a poll and its retry aren't AVG'd together.
 const RANGES: RangePreset[] = [
   { key: "24h", label: "24h", spanSecs: 86400, bucketSecs: 60 },
   { key: "7d", label: "7d", spanSecs: 7 * 86400, bucketSecs: 3600 },
@@ -66,18 +63,12 @@ const RANGES: RangePreset[] = [
 
 const nowSecs = () => Math.floor(Date.now() / 1000);
 
-// The two headline metrics get large hero charts; everything else lands in the
-// grid below, in the canonical METRIC_ORDER (power → signal → sensors → health
-// → traffic → errors). Unknown keys sort to the end, alphabetically, so the
-// order is always stable and sensible.
 const HERO_METRICS = ["battery_mv", "last_snr"];
 
-// lat/lon are consumed by the track map, not charted (a lat-vs-time line is
-// meaningless). Altitude stays — it's a real elevation profile over time.
+// lat/lon feed the track map rather than a chart; altitude stays charted.
 const TRACK_METRICS = new Set(["location_lat", "location_lon"]);
 
-// A link monitor's headline is whether the path delivered and its first
-// hop's SNR, picked dynamically since path length varies.
+// A link's headline is delivery plus first-hop SNR, picked dynamically since path length varies.
 function linkHeroMetrics(available: string[]): string[] {
   const hopKeys = available
     .filter((m) => /^snr_hop\d+$/.test(m))
@@ -91,8 +82,7 @@ function linkHeroMetrics(available: string[]): string[] {
   );
 }
 
-// Resolves a "snr_hopN" metric to its "<source> → <destination>" chart title
-// when a hop resolver is available; other metrics keep MetricChart's default.
+// Undefined leaves MetricChart's default title in place.
 function hopMetricLabel(
   metric: string,
   hopLabel?: (hop: number) => string,
@@ -143,8 +133,7 @@ export function MonitoringDetailPage() {
     loadMeta();
   }, [loadMeta]);
 
-  // Only relevant for a link monitor — resolves "snr_hopN" to the actual
-  // "<source> → <destination>" repeater names for chart/tile titles.
+  // Link monitors only: resolves "snr_hopN" to real repeater names for titles.
   useEffect(() => {
     if (node?.kind !== "link") return;
     fetch("/api/links")
@@ -169,8 +158,7 @@ export function MonitoringDetailPage() {
     [link, peers],
   );
 
-  // Hides the first-hop/last-SNR readings per the link's settings across
-  // fetched series, hero/grid selection, and the stat-tile grid alike.
+  // The link's settings hide first-hop/last-SNR readings everywhere they appear.
   const displayAvailable = useMemo(
     () =>
       filterMetricNames(
@@ -241,8 +229,7 @@ export function MonitoringDetailPage() {
   }, [displayAvailable, node?.kind]);
   const name = node?.name || pubkey.slice(0, 12);
 
-  // On-demand poll, same as the monitoring list card. Success pushes fresh
-  // metrics over WS, which `onWs` folds into the live stat tiles.
+  // Success pushes fresh metrics over WS, which `onWs` folds into the live stat tiles.
   const [polling, setPolling] = useState(false);
   const handlePoll = useCallback(() => {
     if (polling) return;
@@ -253,8 +240,7 @@ export function MonitoringDetailPage() {
       .finally(() => setPolling(false));
   }, [polling, pubkey, name]);
 
-  // Zip the lat/lon (and optional alt) series — recorded together each poll, so
-  // they share bucket timestamps — into ordered track points for the map.
+  // lat/lon (and alt) are recorded together each poll, so they share bucket timestamps.
   const trackPoints = useMemo<TrackPoint[]>(() => {
     const lat = series["location_lat"] || [];
     const lon = series["location_lon"] || [];
@@ -438,9 +424,7 @@ export function MonitoringDetailPage() {
   );
 }
 
-// Live, self-ticking "X ago" label for a node's last successful poll. Holds its
-// own interval so the relative time counts up in real time without re-rendering
-// the charts; when a fresh poll lands over WS, `ts` changes and it snaps back.
+// Self-ticking so the relative time counts up without re-rendering the charts.
 function LiveAgo({
   ts,
   prefix,

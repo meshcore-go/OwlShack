@@ -2,25 +2,15 @@ package config
 
 import "strings"
 
-// Legacy config-file format. The pre-relational "main" deployment used
-// `nodeType`, `[[bot]]`/`[[bot.trigger]]`, and `[[observer]]`/`[observer.broker]`
-// where the current schema uses `connectionType`, `[[companion]]`, and a single
-// top-level `[mqtt]`. The alias fields on Config (NodeType / Bots / Observers)
-// plus the types here let an existing deployed config import without losing the
-// bot or the MQTT feed. migrateLegacyFormat folds them into the canonical
-// fields (called first in ApplyDefaults) and then clears them, so a config
-// assembled from the relational tables — which never sets these — is a no-op.
+// Pre-relational config format: `nodeType`, `[[bot]]`, `[[observer]]`, folded into the current fields by migrateLegacyFormat and then cleared.
 
-// BotConfig is a legacy `[[bot]]` block: a named node with triggers. It folds
-// into a CompanionConfig on import; new configs use `[[companion]]`.
+// BotConfig is a legacy `[[bot]]` block; it folds into a CompanionConfig on import.
 type BotConfig struct {
 	Name     *string         `json:"name" yaml:"name" toml:"name"`
 	Triggers []TriggerConfig `json:"triggers" yaml:"triggers" toml:"trigger"`
 }
 
-// legacyObserver is a legacy `[[observer]]` block. The deployed format allowed
-// several; the current model has one top-level MQTT feed, so the first observer
-// wins (matching the legacy per-companion `[companion.mqtt]` hoisting rule).
+// legacyObserver is a legacy `[[observer]]` block; with one top-level MQTT feed now, the first observer wins.
 type legacyObserver struct {
 	Name           *string        `json:"name" yaml:"name" toml:"name"`
 	IataCode       *string        `json:"iataCode" yaml:"iataCode" toml:"iataCode"`
@@ -29,14 +19,11 @@ type legacyObserver struct {
 	Email          *string        `json:"email" yaml:"email" toml:"email"`
 	Brokers        []BrokerConfig `json:"brokers" yaml:"brokers" toml:"broker"`
 	Advert         *legacyAdvert  `json:"advert" yaml:"advert" toml:"advert"`
-	// KeyFile named a standalone MQTT identity. The relational model feeds MQTT
-	// from the selected companion's identity, so it has no equivalent — dropped.
+	// KeyFile named a standalone MQTT identity; MQTT now uses the selected companion's, so it is dropped.
 	KeyFile *string `json:"keyFile" yaml:"keyFile" toml:"keyFile"`
 }
 
-// legacyAdvert is the observer's `[observer.advert]` position broadcast. It maps
-// onto the companion the observer feeds (that companion now carries the on-mesh
-// identity + position).
+// legacyAdvert is the observer's `[observer.advert]` position, mapped onto the companion it feeds.
 type legacyAdvert struct {
 	Enabled  bool     `json:"enabled" yaml:"enabled" toml:"enabled"`
 	Interval *int     `json:"interval,omitempty" yaml:"interval,omitempty" toml:"interval,omitempty"`
@@ -87,9 +74,7 @@ func (c *Config) migrateLegacyFormat() {
 	c.Observers = nil
 }
 
-// normalizeLegacyTransport rewrites the legacy ws/wss broker transports to the
-// canonical "websockets" (the runtime client and BrokerConfig.Validate only
-// speak tcp/websockets); wss also implies TLS.
+// normalizeLegacyTransport rewrites the legacy ws/wss transports to "websockets"; wss also implies TLS.
 func normalizeLegacyTransport(b *BrokerConfig) {
 	switch strings.ToLower(b.Transport) {
 	case "wss":
@@ -100,12 +85,7 @@ func normalizeLegacyTransport(b *BrokerConfig) {
 	}
 }
 
-// attachObserverToCompanion binds a legacy observer to the companion it feeds,
-// matched by name: the observer's standalone keyFile identity becomes that
-// companion's (read + inlined later by MigrateKeyFiles) and its advert position
-// carries over, without overriding values the companion already sets. When no
-// companion matches the observer's name, an observer-only companion is created
-// so the mqtt node reference resolves and the identity/position are preserved.
+// attachObserverToCompanion moves a legacy observer's identity and advert position onto the companion it names, creating one if none matches.
 func attachObserverToCompanion(c *Config, name string, obs legacyObserver) {
 	var comp *CompanionConfig
 	for i := range c.Companions {

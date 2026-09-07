@@ -269,7 +269,7 @@ func (s *Server) handleRetryMessage(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// Delete the failed message — dmSender will create a new one with fresh status tracking
+	// dmSender creates a new row with fresh status tracking.
 	var delErr error
 	s.store.WriteSync(func() { delErr = s.store.Messages.Delete(r.Context(), messageID) })
 	if delErr != nil {

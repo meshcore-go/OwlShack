@@ -18,20 +18,13 @@ import (
 	"github.com/meshcore-go/OwlShack/internal/telemetry"
 )
 
-// Per-request timeouts for a monitor poll. Kept tighter than the interactive API
-// path (10s) is generous enough; login (a flood round-trip) gets a bit more.
+// Per-request timeouts for a monitor poll; login is a flood round-trip, so it gets more.
 const (
 	monitorLoginTimeout = 15 * time.Second
 	monitorReqTimeout   = 12 * time.Second
-	// monitorRequestGap spaces consecutive radio round-trips within one poll so
-	// the repeater isn't hit with back-to-back requests — firing status,
-	// telemetry and neighbours without a gap causes RF collisions and spurious
-	// timeouts (the same requests succeed fine when spaced out).
+	// monitorRequestGap spaces round-trips within one poll; back-to-back requests collide on air.
 	monitorRequestGap = 1500 * time.Millisecond
-	// monitorProbeAttempts is how many times a best-effort probe (telemetry,
-	// neighbours) is tried within one poll before giving up. RF round-trips drop
-	// silently on collision/timeout, so a single in-poll retry (spaced by the
-	// request gap) recovers most transient failures without waiting a full cycle.
+	// monitorProbeAttempts: RF round-trips drop silently, so one in-poll retry beats waiting a whole cycle.
 	monitorProbeAttempts = 2
 )
 
@@ -43,11 +36,7 @@ func gap(ctx context.Context) {
 	}
 }
 
-// companionRegistry is a stable, reload-surviving handle to the current set of
-// running companions, keyed by name. The monitor Service and its collectors are
-// created once and live for the whole process, but the companion set is rebuilt
-// on every SIGHUP reload / modem reconnect — so collectors resolve the live
-// companion through this registry rather than capturing a slice.
+// companionRegistry is a reload-surviving handle to the current companions, so collectors resolve by name instead of capturing a slice.
 type companionRegistry struct {
 	mu     sync.RWMutex
 	byName map[string]*companion.Companion
@@ -67,9 +56,7 @@ func (r *companionRegistry) set(companions []*companion.Companion) {
 	r.mu.Unlock()
 }
 
-// all returns every registered companion. Used by feeds that must reach the
-// CURRENT set through the registry rather than capturing instances, since a
-// reload replaces them.
+// all returns the CURRENT set, which a reload replaces wholesale.
 func (r *companionRegistry) all() []*companion.Companion {
 	r.mu.RLock()
 	defer r.mu.RUnlock()
@@ -87,11 +74,7 @@ func (r *companionRegistry) find(name string) (*companion.Companion, bool) {
 	return c, ok
 }
 
-// newContactLister builds a monitor.Lister that derives the current monitor
-// targets from contact metadata: every running companion's contacts are scanned
-// for the per-node monitor flag. Deduped by pubkey (first companion wins) so a
-// node that's a contact of two companions isn't polled twice. Called once per
-// poll cycle, so toggling monitoring in the UI takes effect on the next tick.
+// newContactLister scans contacts for the monitor flag, deduped by pubkey so a node shared by two companions isn't polled twice.
 func newContactLister(reg *companionRegistry, db *store.Store) monitor.ListerFunc {
 	return func(ctx context.Context) ([]monitor.Target, error) {
 		reg.mu.RLock()
@@ -106,10 +89,7 @@ func newContactLister(reg *companionRegistry, db *store.Store) monitor.ListerFun
 		for name, c := range comps {
 			contacts, err := db.Contacts.List(ctx, c.ID())
 			if err != nil {
-				// Don't silently drop a companion's nodes — that surfaces as a
-				// misleading "not monitored" on a manual poll. Fail the listing so
-				// the caller can report a retryable error (the scheduler just skips
-				// the cycle and retries on the next tick).
+				// Fail the listing rather than drop a companion's nodes, which would read as "not monitored".
 				return nil, fmt.Errorf("listing contacts for %q: %w", name, err)
 			}
 			for _, ct := range contacts {
@@ -140,11 +120,7 @@ func newContactLister(reg *companionRegistry, db *store.Store) monitor.ListerFun
 	}
 }
 
-// monitorKind classifies a monitored contact into a collector kind. The
-// advertised peer type is authoritative when known: a stray isRepeater flag
-// must not route a chat node to the repeater collector — companion firmware
-// has no login handler, so that poll can only time out. The metadata flag is
-// the fallback for repeaters whose advert hasn't been heard (type unknown).
+// monitorKind trusts the advertised type over the isRepeater flag: companion firmware has no login handler, so that poll only times out.
 func monitorKind(c *companion.Companion, ct store.Contact) string {
 	var peerType string
 	if c != nil {
@@ -155,21 +131,16 @@ func monitorKind(c *companion.Companion, ct store.Contact) string {
 		}
 	}
 	if peerType == "" {
-		// Advert not heard yet (or a manually added contact): the contact row
-		// caches the type the operator or a past advert gave it.
+		// Advert not heard yet: the contact row caches the type the operator or a past advert gave it.
 		peerType = strings.ToUpper(ct.Type)
 	}
 	switch peerType {
 	case "REPEATER":
 		return "repeater"
 	case "SENSOR":
-		// Sensor firmware answers GET_TELEMETRY_DATA for any client in its ACL
-		// with the static-identity ECDH secret — the same sessionless request the
-		// companion collector already sends. No status/neighbours to collect.
+		// Sensors answer sessionless GET_TELEMETRY_DATA for any ACL client; there is no status or neighbour data.
 		return "companion"
 	case "ROOM", "ROOM_SERVER":
-		// Rooms answer GET_TELEMETRY_DATA for any ACL client — same sessionless
-		// request the companion collector sends. No status collector for them.
 		return "companion"
 	case "CHAT", "COMPANION":
 		return "companion"
@@ -180,11 +151,7 @@ func monitorKind(c *companion.Companion, ct store.Contact) string {
 	return ""
 }
 
-// repeaterCollector polls a remote repeater for status, telemetry and
-// neighbours, mapping everything onto the generic monitor.Reading time-series.
-// It owns session lifecycle: it logs in (with the contact's stored password, or
-// blank) when there's no session, and re-logs in once if a stale session causes
-// the status request to fail (e.g. the repeater rebooted and forgot us).
+// repeaterCollector owns the session: it logs in when there is none, and re-logs in once when a stale session fails the status request.
 type repeaterCollector struct {
 	reg *companionRegistry
 	db  *store.Store
@@ -223,8 +190,7 @@ func (rc *repeaterCollector) Collect(ctx context.Context, t monitor.Target) (*mo
 	if doStatus {
 		status, err := client.SendStatusReq(pubkeyHex, monitorReqTimeout)
 		if err != nil && hadSession {
-			// A pre-existing session went stale (repeater reboot / expiry):
-			// drop it, re-login once, and retry the request.
+			// A pre-existing session went stale (reboot or expiry): drop it, re-login once, retry.
 			client.Logout(pubkeyHex)
 			if lerr := rc.login(ctx, client, t, c.ID()); lerr != nil {
 				return nil, fmt.Errorf("re-login after stale session: %w", lerr)
@@ -238,9 +204,7 @@ func (rc *repeaterCollector) Collect(ctx context.Context, t monitor.Target) (*mo
 		first = false
 	}
 
-	// Telemetry and neighbours are best-effort: an admin-gated or transient
-	// failure shouldn't drop readings we already collected. Each is retried once
-	// in-poll (see monitorProbeAttempts) since RF round-trips drop silently.
+	// Telemetry and neighbours are best-effort: a failure must not drop the readings already collected.
 	if doTelemetry {
 		if !first {
 			gap(ctx)
@@ -272,10 +236,7 @@ func (rc *repeaterCollector) Collect(ctx context.Context, t monitor.Target) (*mo
 	return res, nil
 }
 
-// retryProbe runs a best-effort probe up to monitorProbeAttempts times, spacing
-// retries by the request gap so a retried request doesn't collide with the one
-// that just timed out. Returns the first success, or the last error. Aborts
-// early if ctx is cancelled (the poll's per-request timeout elapsed).
+// retryProbe spaces retries by the request gap, so a retry doesn't collide with the request that just timed out.
 func retryProbe[T any](ctx context.Context, log *slog.Logger, label, pubkeyHex string, fn func() (T, error)) (T, error) {
 	var (
 		zero T
@@ -298,8 +259,7 @@ func retryProbe[T any](ctx context.Context, log *slog.Logger, label, pubkeyHex s
 	return zero, last
 }
 
-// probeEnabled reports whether a probe should run. An empty/nil set means "all"
-// (the default for nodes whose monitoring hasn't been customised).
+// probeEnabled treats an empty or nil probe set as "all".
 func probeEnabled(probes []string, name string) bool {
 	if len(probes) == 0 {
 		return true
@@ -312,8 +272,7 @@ func probeEnabled(probes []string, name string) bool {
 	return false
 }
 
-// login resolves the stored admin password from contact metadata (blank if
-// none — some repeaters have no admin password) and authenticates.
+// login uses the admin password stored on the contact, blank when the repeater has none.
 func (rc *repeaterCollector) login(ctx context.Context, client *repeater.Client, t monitor.Target, companionID int64) error {
 	password := ""
 	if contact, err := rc.db.Contacts.Get(ctx, companionID, t.Pubkey); err == nil && contact != nil {
@@ -323,9 +282,7 @@ func (rc *repeaterCollector) login(ctx context.Context, client *repeater.Client,
 	return err
 }
 
-// nodeName returns a node's display name from the polling companion's peer
-// table, or "" if unknown (in which case node_state keeps its previous name).
-// Shared by all collectors.
+// nodeName returns "" when the name is unknown, in which case node_state keeps its previous one.
 func nodeName(c *companion.Companion, pubkey []byte) string {
 	id, err := meshcore.NewIdentityFromBytes(pubkey)
 	if err != nil {
@@ -337,8 +294,7 @@ func nodeName(c *companion.Companion, pubkey []byte) string {
 	return ""
 }
 
-// statusReadings maps the 18 repeater status fields to time-series readings. All
-// are channel 0 (no LPP channel). SNR is already real dB; RSSI/noise are dBm.
+// statusReadings: everything lands on channel 0; SNR is already real dB, RSSI and noise are dBm.
 func statusReadings(s *repeater.Status) []monitor.Reading {
 	return []monitor.Reading{
 		{Metric: "battery_mv", Value: float64(s.BatteryMV)},
@@ -363,10 +319,7 @@ func statusReadings(s *repeater.Status) []monitor.Reading {
 	}
 }
 
-// telemetryReadings adapts a decoded telemetry payload into monitor time-series
-// readings. The LPP decode, naming and channel-faithful keying live in the
-// shared internal/telemetry package (reused across node types); this only maps
-// the result onto monitor.Reading.
+// telemetryReadings only maps an already-decoded payload; LPP decode, naming and keying live in internal/telemetry.
 func telemetryReadings(t *telemetry.Telemetry) []monitor.Reading {
 	metrics := t.Metrics()
 	out := make([]monitor.Reading, 0, len(metrics))
@@ -376,8 +329,7 @@ func telemetryReadings(t *telemetry.Telemetry) []monitor.Reading {
 	return out
 }
 
-// neighborSamples converts the repeater's neighbour list to topology samples.
-// Firmware reports SNR scaled x4 (quarter-dB); we store real dB.
+// neighborSamples converts the firmware's x4 quarter-dB SNR to the real dB we store.
 func neighborSamples(nb *repeater.Neighbors) []monitor.NeighborSample {
 	out := make([]monitor.NeighborSample, 0, len(nb.Neighbors))
 	for _, n := range nb.Neighbors {
@@ -391,12 +343,7 @@ func neighborSamples(nb *repeater.Neighbors) []monitor.NeighborSample {
 	return out
 }
 
-// companionCollector polls a remote companion node for telemetry. Companions
-// answer sessionless contact-telemetry requests (ECDH-encrypted with the polling
-// companion's identity — no login) but not the repeater status/neighbours admin
-// requests, so this collector gathers telemetry only. It reuses the shared
-// internal/telemetry decode + keying, so a companion's battery/temperature land
-// in the same series shape as a repeater's.
+// companionCollector gathers telemetry only: companions answer the sessionless telemetry request but no admin requests.
 type companionCollector struct {
 	reg *companionRegistry
 	log *slog.Logger
@@ -416,7 +363,7 @@ func (cc *companionCollector) Collect(ctx context.Context, t monitor.Target) (*m
 	}
 	res := &monitor.CollectResult{Name: nodeName(c, t.Pubkey)}
 
-	// Telemetry is all a companion answers; an empty/nil probe set means "all".
+	// Telemetry is all a companion answers.
 	if !probeEnabled(t.Probes, "telemetry") {
 		return res, nil
 	}
@@ -432,7 +379,6 @@ func (cc *companionCollector) Collect(ctx context.Context, t monitor.Target) (*m
 	return res, nil
 }
 
-// ensure the collectors satisfy the monitor seam.
 var (
 	_ monitor.Collector = (*repeaterCollector)(nil)
 	_ monitor.Collector = (*companionCollector)(nil)

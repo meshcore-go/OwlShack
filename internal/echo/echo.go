@@ -120,8 +120,7 @@ func (t *Tracker) OnRawPacket(data []byte, snr float32, rssi int8, hasSignalInfo
 	})
 }
 
-// PruneLoop drops expired entries every ttl until ctx ends. Without it,
-// messages that are never echoed stay in the map for the life of the process.
+// PruneLoop drops expired entries every ttl; without it, never-echoed messages stay in the map forever.
 func (t *Tracker) PruneLoop(ctx context.Context) {
 	tick := time.NewTicker(t.ttl)
 	defer tick.Stop()

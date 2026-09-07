@@ -10,8 +10,7 @@ import (
 
 const DefaultMaxMessages = 5000
 
-// messageColumns is the SELECT list for a full Message row, shared by every
-// query that returns Messages (keep in sync with scanMessage and Insert).
+// messageColumns is the SELECT list for a full Message row; keep in sync with scanMessage and Insert.
 const messageColumns = `id, companion_id, channel, channel_hash, sender, text, direction, timestamp, snr, rssi, confirmed, path_hashes, path_hash_size, hops, status`
 
 type Message struct {
@@ -126,9 +125,7 @@ func (r *MessageRepo) List(ctx context.Context, companionID int64, channel strin
 	return messages, nil
 }
 
-// ListBefore returns up to `limit` messages older than beforeID (id < beforeID)
-// for a channel, newest-first (DESC) like List — the caller reverses for display.
-// Cursor-based (not OFFSET) so concurrent inserts can't shift the window.
+// ListBefore returns up to limit messages with id < beforeID, newest-first; cursor-based so concurrent inserts can't shift the window.
 func (r *MessageRepo) ListBefore(ctx context.Context, companionID int64, channel string, beforeID int64, limit int) ([]Message, error) {
 	if limit <= 0 {
 		limit = 100

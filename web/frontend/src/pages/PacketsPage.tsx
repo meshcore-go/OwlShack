@@ -53,8 +53,7 @@ interface Packet {
 interface PacketGroup {
   key: string;
   latest: Packet;
-  // Parsed once during grouping so the sort comparator doesn't re-allocate
-  // Date objects for strings already seen.
+  // Parsed once during grouping so the sort comparator allocates no Date objects.
   latestTs: number;
   observations: Packet[];
 }
@@ -94,16 +93,12 @@ function dirGlyph(direction: string): string {
 const MIN_SIDEBAR_WIDTH = 300;
 const DEFAULT_SIDEBAR_WIDTH = 480;
 
-// Cap on server-side filtered results pulled into the UI at once. A broad
-// type filter (e.g. Advert) can match thousands of the ~10k stored rows; this
-// bounds the payload and the client-side grouping cost. Surfaced in the UI
-// when hit so it doesn't read as "this is all there is".
+// A broad type filter can match thousands of the ~10k stored rows; the UI says when this is hit.
 const FILTER_LIMIT = 500;
 
 const NO_PACKETS: Packet[] = [];
 
-// buildGroups collapses observations sharing a packet hash into one group,
-// newest first. Shared by the live stream and the filtered result set.
+// Collapses observations sharing a packet hash into one group, newest first.
 function buildGroups(packets: Packet[]): PacketGroup[] {
   const map = new Map<string, PacketGroup>();
   for (const p of packets) {
@@ -137,8 +132,7 @@ export function PacketsPage() {
   const [typeFilter, setTypeFilter] = useState<number | "ALL">("ALL");
   const [sidebarWidth, setSidebarWidth] = useState(DEFAULT_SIDEBAR_WIDTH);
   const draggingRef = useRef(false);
-  // Read by onResizeStart so the drag handler stays referentially stable —
-  // listing sidebarWidth as a dep would rebuild it on every drag pixel.
+  // Read by onResizeStart: sidebarWidth as a dep would rebuild it on every drag pixel.
   const sidebarWidthRef = useRef(DEFAULT_SIDEBAR_WIDTH);
   sidebarWidthRef.current = sidebarWidth;
 
@@ -151,9 +145,7 @@ export function PacketsPage() {
 
   const filtering = typeFilter !== "ALL" || debouncedSearch !== "";
 
-  // When a filter/search is active, query the server across ALL stored history
-  // (the live buffer only holds the last 200), capped at FILTER_LIMIT. The
-  // payload hash and hop-path are indexed columns, so this is a cheap DB query.
+  // Filtering queries all stored history; the live buffer only holds the last 200.
   const filterUrl = filtering
     ? `/api/packets?limit=${FILTER_LIMIT}` +
       (typeFilter !== "ALL" ? `&payloadType=${typeFilter}` : "") +
@@ -175,8 +167,7 @@ export function PacketsPage() {
 
   const { connected } = useWebSocket(["packets"], onWsMessage);
 
-  // Pills are derived from the live buffer so they stay stable while a search
-  // narrows results; the live stream is also what we render when unfiltered.
+  // Pills come from the live buffer, so they stay stable while a search narrows results.
   const liveGroups = useMemo(() => buildGroups(livePackets), [livePackets]);
   const typeFilters = useMemo(() => {
     const counts = new Map<number, number>();
@@ -185,9 +176,7 @@ export function PacketsPage() {
       if (pt == null) continue;
       counts.set(pt, (counts.get(pt) ?? 0) + 1);
     }
-    // The active type must stay listed even once the live buffer holds none of
-    // it, or the menu opens with nothing checked while the table still filters
-    // on it (the query hits full history, not this buffer).
+    // The active type must stay listed, or the menu opens with nothing checked.
     if (typeFilter !== "ALL" && !counts.has(typeFilter)) {
       counts.set(typeFilter, 0);
     }
@@ -353,8 +342,7 @@ export function PacketsPage() {
                     key={g.key}
                     onClick={() => setSelectedKey(g.key)}
                     className={cn(
-                      // content-visibility lets the browser skip layout/paint
-                      // for offscreen rows of this live stream.
+                      // content-visibility lets the browser skip layout/paint offscreen.
                       "px-4 py-2.5 cursor-pointer [content-visibility:auto] [contain-intrinsic-size:auto_58px]",
                       isSelected && "bg-primary/5",
                     )}
@@ -804,9 +792,7 @@ function PacketsSkeleton() {
   );
 }
 
-// PacketTypeMenu is the phone-sized form of the type chips. The filter is
-// single-select, so these are radio items — and the type list is derived from
-// the live buffer, so it grows as new payload types are heard.
+// Phone-sized form of the type chips — single-select, so radio items.
 function PacketTypeMenu({
   value,
   onChange,

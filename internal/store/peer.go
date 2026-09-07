@@ -25,8 +25,7 @@ type Peer struct {
 	RSSI            *int8
 }
 
-// HasLocation reports whether the peer carries a usable geolocation. Lat/Lon of
-// 0,0 is the codebase's "unknown" sentinel (null island), not a real fix.
+// HasLocation reports a usable fix; 0,0 is the codebase's "unknown" sentinel, not a real position.
 func (p *Peer) HasLocation() bool { return p.Lat != 0 || p.Lon != 0 }
 
 type PeerRepo struct {
@@ -89,8 +88,7 @@ func (r *PeerRepo) Delete(ctx context.Context, pubkey []byte) error {
 	return nil
 }
 
-// DeleteMany removes a batch of peers (chunked to stay under SQLite's
-// bound-parameter limit).
+// DeleteMany removes a batch of peers, chunked under SQLite's bound-parameter limit.
 func (r *PeerRepo) DeleteMany(ctx context.Context, pubkeys [][]byte) error {
 	return eachInChunk(ctx, pubkeys, func(ctx context.Context, placeholders string, args []any) error {
 		_, err := r.db.ExecContext(ctx,
@@ -179,10 +177,7 @@ func scanPeers(rows *sql.Rows) ([]Peer, error) {
 	return peers, rows.Err()
 }
 
-// scanOutPath preserves the nil(unknown) vs empty(direct neighbour) distinction
-// a plain []byte scan loses: the driver hands back both NULL and a zero-length
-// blob as nil, but routeForPeer floods on nil and routes direct on a non-nil
-// empty path, so collapsing them makes a restored direct neighbour flood.
+// scanOutPath keeps nil (unknown, flood) distinct from empty (direct neighbour), which a plain []byte scan collapses.
 func scanOutPath(ns sql.NullString) []byte {
 	if !ns.Valid {
 		return nil
@@ -190,9 +185,7 @@ func scanOutPath(ns sql.NullString) []byte {
 	return []byte(ns.String)
 }
 
-// prefixUpperBound returns the smallest byte string strictly greater than every
-// value starting with prefix, for a half-open range scan. nil means no upper
-// bound exists (prefix is all 0xFF).
+// prefixUpperBound returns the smallest byte string greater than every value with prefix; nil means none exists (prefix is all 0xFF).
 func prefixUpperBound(prefix []byte) []byte {
 	upper := append([]byte(nil), prefix...)
 	for i := len(upper) - 1; i >= 0; i-- {
@@ -204,15 +197,7 @@ func prefixUpperBound(prefix []byte) []byte {
 	return nil
 }
 
-// FindByPrefix resolves a pubkey prefix (e.g. the 6-byte neighbour prefix the
-// firmware reports) to a full peer record, so callers get lat/lon/type/name in
-// one query. Returns nil, nil if no peer matches. Prefix collisions just
-// return the first row — an accepted, pre-existing risk shared with
-// LookupByHash (e.g. repeater ACL prefix resolution).
-//
-// Expressed as a half-open range (pubkey >= prefix AND pubkey < upper) rather
-// than substr(pubkey,1,n)=prefix so the query rides the pubkey PRIMARY KEY
-// index instead of scanning the whole table on every call.
+// FindByPrefix resolves a pubkey prefix as a half-open range so the query rides the PRIMARY KEY index; a collision returns the first row.
 func (r *PeerRepo) FindByPrefix(ctx context.Context, prefix []byte) (*Peer, error) {
 	if len(prefix) == 0 {
 		return nil, nil

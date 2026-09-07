@@ -1,7 +1,4 @@
-// Package app wires the bot's subsystems together and runs the supervisor
-// loop: it owns the database, modem, HTTP server and companion lifecycle, and
-// handles config reloads (SIGHUP) and modem reconnects. It is the only place
-// that depends on every other internal package.
+// Package app wires the subsystems together and runs the supervisor loop.
 package app
 
 import (
@@ -35,11 +32,7 @@ import (
 
 const defaultListenAddr = ":8080"
 
-// applyListenEnvOverrides lets the HOST and PORT environment variables override
-// the stored web listen address (precedence: env > DB config > default). Either
-// may be set alone: an unset HOST binds all interfaces, an unset PORT keeps the
-// configured one. This is for deployments (Docker, PaaS) that set the bind
-// address out-of-band without editing the stored config.
+// applyListenEnvOverrides gives HOST/PORT precedence over the stored address; either may be set alone.
 func applyListenEnvOverrides(addr string) string {
 	envHost, hasHost := os.LookupEnv("HOST")
 	envPort, hasPort := os.LookupEnv("PORT")
@@ -49,8 +42,7 @@ func applyListenEnvOverrides(addr string) string {
 
 	host, port, err := net.SplitHostPort(addr)
 	if err != nil {
-		// addr wasn't a clean host:port (e.g. a bare ":4432" edge or malformed);
-		// recover the port from a leading-colon form and leave host empty.
+		// Not a clean host:port; recover the port from a leading-colon form.
 		host, port = "", strings.TrimPrefix(addr, ":")
 	}
 	if hasHost {
@@ -68,13 +60,9 @@ func applyListenEnvOverrides(addr string) string {
 // dbPath is the SQLite file, relative to the working directory.
 const dbPath = "meshcore.db"
 
-// Run starts the bot and blocks until ctx is cancelled. The config lives in
-// the database; importPath (the -config flag) imports a config file into it.
-// It returns a non-nil error only on a fatal startup or unrecoverable failure;
-// a clean shutdown via ctx returns nil.
+// Run blocks until ctx is cancelled; importPath imports a config file into the DB.
 func Run(ctx context.Context, importPath string, verbosity int) error {
-	// A restore uploaded through the UI is staged beside the DB: the process
-	// that accepted it held the file open, so the swap happens here instead.
+	// A UI restore is staged beside the DB because the accepting process still held it open.
 	if adopted, err := store.AdoptPendingRestore(dbPath); err != nil {
 		return fmt.Errorf("restoring database: %w", err)
 	} else if adopted {
@@ -136,10 +124,7 @@ func Run(ctx context.Context, importPath string, verbosity int) error {
 	echoTracker := echo.NewTracker(db, srv.Hub(), slog.Default())
 	go echoTracker.PruneLoop(ctx)
 
-	// The monitor service is started once and lives for the whole process: it
-	// persists across config reloads / modem reconnects (which recreate the
-	// companion set). It resolves the live companions through compReg, which we
-	// re-point on every reload, and derives its targets from contact metadata.
+	// Long-lived across reloads: reaches the current companions through compReg, re-pointed on each reload.
 	compReg := newCompanionRegistry()
 	wirePacketLogger(mux, ms.Modem, db, srv, compReg)
 
@@ -148,11 +133,9 @@ func Run(ctx context.Context, importPath string, verbosity int) error {
 	mon.RegisterCollector("companion", newCompanionCollector(compReg, slog.Default()))
 	mon.RegisterCollector("link", newLinkCollector(compReg, db, slog.Default()))
 	mon.Start(ctx)
-	srv.SetPoller(mon) // long-lived: set once, never swapped on reload
+	srv.SetPoller(mon)
 
-	// The signal-test runner shares the monitor's airtime lock so a running
-	// test and a scheduled poll interleave per-operation instead of one
-	// starving the other. Also long-lived — set once, never swapped on reload.
+	// Shares the monitor's airtime lock so a test and a scheduled poll interleave per-operation.
 	tester := signaltest.New(db, srv.Hub(), newSignalTestTracer(compReg), mon.AirtimeLock(), slog.Default())
 	tester.Start(ctx)
 	srv.SetSignalTester(tester)
@@ -188,8 +171,7 @@ func Run(ctx context.Context, importPath string, verbosity int) error {
 				slog.Error("config reload failed, keeping current config", "error", err)
 				continue
 			}
-			// Zero companions is allowed (observer-only / first-run wizard skip);
-			// reloadCompanions stops any running companions and starts none.
+			// Zero companions is allowed (observer-only / wizard skip); reloadCompanions then starts none.
 
 			newLogLevel := ""
 			if newCfg.LogLevel != nil {
@@ -275,20 +257,9 @@ type reloadStats struct {
 	started, stopped, kept, reloaded int
 }
 
-// reloadCompanions reconciles the running companion set with newCfg: running
-// instances whose effective block is unchanged are reused (no restart, no
-// initial advert, repeater/room sessions survive); everything else is stopped
-// and/or built fresh. The result follows newCfg's companion order. A nil
-// oldCfg/running builds everything (startup, modem reconnect). On error all
-// instances — including reused ones — are stopped, since the caller exits the
-// process.
+// reloadCompanions reuses running instances whose block is unchanged; a nil oldCfg/running builds everything.
 func reloadCompanions(ctx context.Context, oldCfg, newCfg *config.Config, running []*companion.Companion, ms *modem.State, mux *node.RadioMux, db *store.Store, hub *api.Hub, echoTracker *echo.Tracker) ([]*companion.Companion, reloadStats, error) {
-	// The MQTT status carries the repeater's relay flag, and the observer
-	// publishes its first "online" status the instant a broker connects inside
-	// Start — so this has to be set BEFORE Start, not after, or the first
-	// status of every restart reports repeat:off for a node that does relay.
-	// A consumer can act on that: CoreScope drops the node from its path-hop
-	// disambiguator, and the correction waits for the 5-minute heartbeat.
+	// Must reach the observer before Start: it publishes its first status the instant a broker connects.
 	relaying := newCfg.Repeater != nil && !newCfg.Repeater.IsFwdDisabled()
 
 	oldBlocks := make(map[string]config.CompanionConfig)
@@ -303,8 +274,6 @@ func reloadCompanions(ctx context.Context, oldCfg, newCfg *config.Config, runnin
 		runningByName[c.Name()] = c
 	}
 
-	// Classify each desired companion against the running set: keep as-is,
-	// reload triggers in place, or (re)create fresh.
 	type plan struct {
 		block      config.CompanionConfig
 		reuse      *companion.Companion // nil = build fresh
@@ -321,13 +290,11 @@ func reloadCompanions(ctx context.Context, oldCfg, newCfg *config.Config, runnin
 		case isRunning && hadOld && triggersOnlyChange(ob, nb):
 			plans = append(plans, plan{block: nb, reuse: inst, reloadTrig: true})
 		default:
-			plans = append(plans, plan{block: nb}) // fresh build (new or full restart)
+			plans = append(plans, plan{block: nb})
 		}
 	}
 
-	// Instances we're keeping (reused as-is or trigger-reloaded in place);
-	// every other running instance is stopped. Derived from plans so there's a
-	// single source of truth.
+	// Instances we keep; every other running instance is stopped.
 	keep := make(map[*companion.Companion]bool)
 	for _, p := range plans {
 		if p.reuse != nil {
@@ -385,9 +352,7 @@ func reloadCompanions(ctx context.Context, oldCfg, newCfg *config.Config, runnin
 
 	hydratePeerTables(ctx, db, fresh)
 
-	// Reused instances kept their observer across the reload, so they need the
-	// current value too — `set repeat` over the CLI persists and reloads, and
-	// lands here. Fresh ones were set before Start, above.
+	// Reused instances kept their observer across the reload, so they need the current value too.
 	for _, c := range companions {
 		if obs := c.Observer(); obs != nil {
 			obs.SetRelaying(relaying)
@@ -397,10 +362,7 @@ func reloadCompanions(ctx context.Context, oldCfg, newCfg *config.Config, runnin
 	return companions, stats, nil
 }
 
-// effectiveCompanionConfigs returns the per-companion blocks exactly as
-// NewCompanion receives them: the single top-level mqtt block feeds one node's
-// observer — the companion named by mqtt.node (the first companion when
-// unset) — so it is injected into that block here.
+// effectiveCompanionConfigs injects the single top-level mqtt block into the companion named by mqtt.node (the first when unset).
 func effectiveCompanionConfigs(cfg *config.Config) []config.CompanionConfig {
 	mqttNode := ""
 	if cfg.Mqtt.IsEnabled() && len(cfg.Mqtt.Brokers) > 0 {
@@ -425,19 +387,14 @@ func effectiveCompanionConfigs(cfg *config.Config) []config.CompanionConfig {
 	return blocks
 }
 
-// blocksEqual reports whether two effective companion blocks are JSON-identical
-// (so the running instance can be reused untouched). Marshal errors report
-// "not equal", erring towards a restart.
+// blocksEqual compares blocks as JSON; a marshal error reports "not equal", erring towards a restart.
 func blocksEqual(a, b config.CompanionConfig) bool {
 	aj, err1 := json.Marshal(a)
 	bj, err2 := json.Marshal(b)
 	return err1 == nil && err2 == nil && bytes.Equal(aj, bj)
 }
 
-// triggersOnlyChange reports whether two effective companion blocks differ
-// solely in their Triggers field — the case ReloadTriggers can apply in place
-// without a full restart (no re-advert, sessions survive). Everything else
-// (identity, radio, position, mqtt, channels) must match exactly.
+// triggersOnlyChange reports whether only Triggers differ — the case ReloadTriggers applies in place.
 func triggersOnlyChange(a, b config.CompanionConfig) bool {
 	a.Triggers = nil
 	b.Triggers = nil
@@ -450,9 +407,7 @@ func stopCompanions(companions []*companion.Companion) {
 	}
 }
 
-// hydratePeerTables seeds the companions' in-memory peer tables from the
-// database so a fresh process knows about previously-seen peers. OutPath is
-// intentionally not seeded: send-paths are learned-only (flood first).
+// hydratePeerTables seeds peer tables from the DB; OutPath is deliberately left unseeded (send-paths are learned-only).
 func hydratePeerTables(ctx context.Context, db *store.Store, companions []*companion.Companion) {
 	if len(companions) == 0 {
 		return
@@ -496,8 +451,7 @@ func hydratePeerTables(ctx context.Context, db *store.Store, companions []*compa
 	slog.Info("hydrated peer tables from database", "peers", len(peers), "companions", len(companions))
 }
 
-// reconnectModem performs a single modem.Setup attempt and rebuilds the mux,
-// dead-watcher, and packet logger. Returns the new state on success.
+// reconnectModem performs a single modem.Setup attempt and rebuilds the mux, dead-watcher and packet logger.
 func reconnectModem(ctx context.Context, cfg *config.Config, db *store.Store, srv *api.Server, reconnectCh chan struct{}, compReg *companionRegistry) (*modem.State, *node.RadioMux, error) {
 	ms, err := modem.Setup(ctx, cfg)
 	if err != nil {
@@ -509,9 +463,7 @@ func reconnectModem(ctx context.Context, cfg *config.Config, db *store.Store, sr
 	return ms, mux, nil
 }
 
-// reconnectModemWithBackoff retries reconnectModem with capped exponential
-// backoff until the context is cancelled. Drains spurious reconnectCh sends
-// (e.g. from a half-open transport flapping) so they don't queue up.
+// reconnectModemWithBackoff retries reconnectModem with capped exponential backoff until ctx is cancelled.
 func reconnectModemWithBackoff(ctx context.Context, cfg *config.Config, db *store.Store, srv *api.Server, reconnectCh chan struct{}, compReg *companionRegistry) (*modem.State, *node.RadioMux, error) {
 	const (
 		initialDelay = 1 * time.Second

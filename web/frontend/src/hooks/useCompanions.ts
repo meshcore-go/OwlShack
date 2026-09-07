@@ -1,16 +1,12 @@
 import { useEffect, useState } from "react";
 
-// A companion reference as exposed by GET /api/companions — enough to label and
-// route to a companion. Pages previously each re-declared this shape.
+// A companion reference as exposed by GET /api/companions.
 export interface CompanionRef {
   name: string;
   pubkey?: string;
 }
 
-// Module-level stale-while-revalidate cache for /api/companions. Six pages
-// fetched this endpoint independently; this dedups concurrent requests (one
-// in-flight at a time), serves cached data instantly on navigation, and
-// self-heals after a mutation by revalidating on every mount.
+// Module-level stale-while-revalidate cache: many pages fetch /api/companions independently.
 let cache: CompanionRef[] | null = null;
 let inflight: Promise<CompanionRef[]> | null = null;
 const subscribers = new Set<(c: CompanionRef[]) => void>();
@@ -40,7 +36,7 @@ export function useCompanions(): CompanionRef[] {
       if (active) setCompanions(c);
     };
     subscribers.add(update);
-    // Revalidate on every mount; cached value already rendered for instant paint.
+    // Revalidate on every mount, so a mutation elsewhere self-heals.
     fetchCompanions().then(update);
     return () => {
       subscribers.delete(update);

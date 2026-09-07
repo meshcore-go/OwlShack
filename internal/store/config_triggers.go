@@ -6,9 +6,7 @@ import (
 	"fmt"
 )
 
-// Trigger is a bot rule owned by a companion (companion_id FK). ChannelIDs are
-// the companion_channels it listens on, resolved from the trigger_channels join.
-// MatchPatterns and Contacts are leaf string lists (newline-encoded TEXT).
+// Trigger is a bot rule owned by a companion; ChannelIDs come from the trigger_channels join and the leaf lists are newline-encoded TEXT.
 type Trigger struct {
 	ID                 int64
 	CompanionID        int64

@@ -15,9 +15,7 @@ import (
 	meshcore "github.com/meshcore-go/meshcore-go"
 )
 
-// newTestStore opens a fresh temp-file SQLite store for one test. Each test
-// gets its own DB so tests are independent and parallel-safe. The store is
-// closed automatically at test end.
+// newTestStore opens a fresh temp-file store per test, closed at test end.
 func newTestStore(t *testing.T) *Store {
 	t.Helper()
 	st, err := Open(context.Background(), filepath.Join(t.TempDir(), "test.db"))
@@ -28,8 +26,7 @@ func newTestStore(t *testing.T) *Store {
 	return st
 }
 
-// mkCompanion inserts a companion row and returns its id, for use as a valid
-// companion_id FK in message/contact tests.
+// mkCompanion returns the id of a new companion row, for use as a valid companion_id FK.
 func mkCompanion(t *testing.T, st *Store, name string) int64 {
 	t.Helper()
 	c := &Companion{Name: name}
@@ -165,8 +162,7 @@ func TestMessageRepo_GetByIDMissing(t *testing.T) {
 	}
 }
 
-// insertN inserts n messages on a channel and returns their ids in insertion
-// order (ascending).
+// insertN returns the ascending ids of n messages inserted on a channel.
 func insertN(t *testing.T, st *Store, cid int64, channel, direction string, n int) []int64 {
 	t.Helper()
 	ids := make([]int64, n)
@@ -351,9 +347,7 @@ func TestMessageRepo_Delete(t *testing.T) {
 	})
 }
 
-// TestMessageRepo_LatestRxSentinel guards the errors.Is(err, sql.ErrNoRows)
-// handling from the refactor: a channel with no rx rows must return (nil, nil),
-// NOT an error.
+// A channel with no rx rows must return (nil, nil), not an error.
 func TestMessageRepo_LatestRxSentinel(t *testing.T) {
 	t.Parallel()
 	st := newTestStore(t)
@@ -485,12 +479,7 @@ func TestPeerRepo_GetByPubKeyMissing(t *testing.T) {
 	}
 }
 
-// TestPeerRepo_OutPathSemantics covers the OutPath contract through the DB
-// round-trip: nil = path unknown (flood), []byte{} = direct neighbour (0 hops,
-// direct route), non-empty = multi-hop. All three must survive persistence —
-// scanOutPath reads the column as nullable so a stored zero-length BLOB comes
-// back as a non-nil empty slice, not nil (which would make a restored direct
-// neighbour flood).
+// nil (unknown), empty (direct neighbour) and non-empty (multi-hop) must all survive the DB round-trip distinctly.
 func TestPeerRepo_OutPathSemantics(t *testing.T) {
 	t.Parallel()
 	st := newTestStore(t)
@@ -512,8 +501,7 @@ func TestPeerRepo_OutPathSemantics(t *testing.T) {
 		t.Run(tt.name, func(t *testing.T) {
 			t.Parallel()
 			pk := []byte{0x10, byte(i)}
-			// Upsert with a known dummy path first, then UpdateOutPath to the
-			// case value — exercises both write paths.
+			// Upsert then UpdateOutPath exercises both write paths.
 			if err := st.Peers.Upsert(t.Context(), &Peer{PubKey: pk, OutPath: []byte{0xff}, OutPathHashSize: 1, LastSeen: time.Now()}); err != nil {
 				t.Fatalf("Upsert: %v", err)
 			}
@@ -587,8 +575,7 @@ func TestPeerRepo_LookupByHash(t *testing.T) {
 	})
 }
 
-// TestPeerRepo_DeleteMany exercises eachInChunk with a batch larger than the
-// 500-row chunk size so the chunk boundary is crossed.
+// A batch larger than the 500-row chunk size crosses eachInChunk's boundary.
 func TestPeerRepo_DeleteMany(t *testing.T) {
 	t.Parallel()
 	st := newTestStore(t)
@@ -626,9 +613,7 @@ func TestPeerRepo_DeleteMany(t *testing.T) {
 	})
 }
 
-// TestCompanionRepo_IDByNameSentinel is THE refactor invariant: an absent name
-// must return an error whose chain includes sql.ErrNoRows (the %w wrapping must
-// preserve the sentinel).
+// An absent name must return an error whose chain still includes sql.ErrNoRows.
 func TestCompanionRepo_IDByNameSentinel(t *testing.T) {
 	t.Parallel()
 	st := newTestStore(t)
@@ -655,10 +640,7 @@ func TestCompanionRepo_IDByNameSentinel(t *testing.T) {
 	})
 }
 
-// TestConversationRepo_List guards the unread-count path: the last_read_id
-// query has a no-rows branch (no read marker yet) that must NOT error and must
-// default the count, plus the with-marker path. This guards the
-// silent-`_=`-discard fix from the refactor.
+// The unread count must survive the no-read-marker branch without erroring.
 func TestConversationRepo_List(t *testing.T) {
 	t.Parallel()
 	st := newTestStore(t)
@@ -731,9 +713,7 @@ func idsOf(ms []Message) []int64 {
 	return out
 }
 
-// TestPacketRepo_ListFilter covers the server-side payload-type and hash/path
-// search added for the Packets page. packet_hash/path are derived from raw
-// bytes on insert, so the raw packets here are hand-built with known hop paths.
+// packet_hash/path are derived from raw bytes on insert, so these packets are hand-built with known hop paths.
 func TestPacketRepo_ListFilter(t *testing.T) {
 	t.Parallel()
 	st := newTestStore(t)
@@ -780,9 +760,7 @@ func TestPacketRepo_ListFilter(t *testing.T) {
 	}
 }
 
-// TestStore_MigrateUserVersion confirms Open ran every migration and stamped
-// the schema version to the migration count. Bump wantVersion whenever a
-// migration is appended to the slice in migrate().
+// Bump wantVersion whenever a migration is appended to the migrations slice.
 func TestStore_MigrateUserVersion(t *testing.T) {
 	t.Parallel()
 	const wantVersion = 9 // migrateV1, 2 squashed noop slots, migrateV2..migrateV7
@@ -796,8 +774,7 @@ func TestStore_MigrateUserVersion(t *testing.T) {
 	}
 }
 
-// TestStore_ForeignKeysEnforced confirms the foreign_keys pragma is on:
-// inserting a message with a non-existent companion_id must fail.
+// The foreign_keys pragma must be on: a message with an unknown companion_id must fail.
 func TestStore_ForeignKeysEnforced(t *testing.T) {
 	t.Parallel()
 	st := newTestStore(t)
@@ -808,8 +785,7 @@ func TestStore_ForeignKeysEnforced(t *testing.T) {
 	}
 }
 
-// TestStore_WriteAfterClose confirms a late writer call during shutdown is a
-// no-op rather than a send on a closed channel.
+// A late writer call during shutdown must be a no-op, not a send on a closed channel.
 func TestStore_WriteAfterClose(t *testing.T) {
 	t.Parallel()
 	st := newTestStore(t)
@@ -826,20 +802,14 @@ func TestStore_WriteAfterClose(t *testing.T) {
 	}
 }
 
-// An existing operator's database must survive the upgrade: the new slots have
-// to apply to a database that already has tables and rows, not just to a fresh
-// one. It builds the older shape from the shipped slots, so it does NOT detect a
-// renumbered or edited shipped slot — that is TestMigrations_ShippedSlotsFrozen's
-// job, and this test passes happily under exactly that mutation.
+// New slots must apply to a database that already has tables and rows, not just a fresh one.
 func TestStore_UpgradeFromReleasedSchema(t *testing.T) {
 	t.Parallel()
 	const releasedVersion = 7 // len(migrations) at v1.1.0
 
 	path := filepath.Join(t.TempDir(), "released.db")
 
-	// Build a released database by running only the slots that shipped. Those
-	// are byte-identical to v1.1.0 apart from taking a tx, so this is a faithful
-	// stand-in for a node in the field.
+	// Running only the shipped slots reproduces a node in the field.
 	db, err := openWritableDB(path)
 	if err != nil {
 		t.Fatalf("openWritableDB: %v", err)
@@ -902,8 +872,7 @@ func TestStore_UpgradeFromReleasedSchema(t *testing.T) {
 	}
 }
 
-// recordingExecer forwards to a real transaction while capturing the SQL, so a
-// migration's statements can be fingerprinted without vendoring the DDL.
+// recordingExecer captures a migration's SQL so it can be fingerprinted without vendoring the DDL.
 type recordingExecer struct {
 	inner dbExecer
 	sql   []string
@@ -919,16 +888,7 @@ func (r *recordingExecer) QueryContext(ctx context.Context, q string, args ...an
 	return r.inner.QueryContext(ctx, q, args...)
 }
 
-// Once a migration has shipped, its slot is frozen: a released database has
-// already stamped that version and will never run the slot again, so editing,
-// renumbering or squashing one silently leaves a field node without the schema
-// change. Nothing else in the build notices, and the node fails later at a
-// query. This fingerprints the SQL of every slot released in v1.1.0.
-//
-// A failure here is not a test to update. It means a shipped migration changed,
-// and the fix is to append a new slot instead. The constant only changes when
-// the RELEASED set legitimately grows — i.e. after a release, extend
-// shippedSlots and re-pin.
+// A failure means a shipped, frozen slot changed: append a new slot instead of re-pinning, unless the released set itself grew.
 func TestMigrations_ShippedSlotsFrozen(t *testing.T) {
 	t.Parallel()
 	const (
@@ -951,8 +911,7 @@ func TestMigrations_ShippedSlotsFrozen(t *testing.T) {
 	h := sha256.New()
 	for i := range shippedSlots {
 		rec := &recordingExecer{inner: tx}
-		// Errors are irrelevant: the schema already exists, so re-running a
-		// slot may fail. The SQL it attempts is what is being pinned.
+		// Re-running a slot may fail; the SQL it attempts is what is pinned.
 		_ = migrations[i](t.Context(), rec)
 		fmt.Fprintf(h, "slot %d\n", i+1)
 		for _, q := range rec.sql {

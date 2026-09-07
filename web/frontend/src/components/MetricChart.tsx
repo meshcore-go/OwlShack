@@ -18,8 +18,7 @@ export interface SeriesPoint {
   value: number;
 }
 
-// toDeltas turns a cumulative counter series into per-bucket deltas (rate of
-// change). A counter reset (node reboot) yields a negative diff → clamped to 0.
+// A counter reset (node reboot) yields a negative diff → clamped to 0.
 function toDeltas(data: SeriesPoint[]): SeriesPoint[] {
   const out: SeriesPoint[] = [];
   for (let i = 1; i < data.length; i++) {
@@ -29,9 +28,7 @@ function toDeltas(data: SeriesPoint[]): SeriesPoint[] {
   return out;
 }
 
-// yTickFormatter keeps axis labels readable across magnitudes: abbreviate only
-// genuinely large values (so a tight 4029–4032 battery range doesn't collapse to
-// "4k 4k 4k"), and trim noise from fractional buckets.
+// Abbreviate only genuinely large values, so a tight 4029-4032 range doesn't collapse to "4k 4k 4k".
 function yTickFormatter(v: number): string {
   const a = Math.abs(v);
   if (a >= 10000) return `${(v / 1000).toFixed(0)}k`;
@@ -50,10 +47,7 @@ function xTickFormatter(spanSecs: number) {
   };
 }
 
-// MetricChart renders one metric, self-scaled, with its own title + value.
-// Gauges (instantaneous values) draw an area chart of the raw value; counters
-// (monotonic totals) draw bars of the per-bucket delta — a raw counter line only
-// ever climbs and tells you nothing. Presentational: the parent passes `data`.
+// Gauges draw an area of the raw value; counters draw bars of the per-bucket delta.
 export function MetricChart({
   metric,
   data,
@@ -69,9 +63,7 @@ export function MetricChart({
   height?: number;
   variant?: "hero" | "compact";
   className?: string;
-  // Overrides the title (e.g. a link monitor's "<source> → <destination>"
-  // instead of the generic "SNR hop N"). Colour/format/kind still come from
-  // the metric catalogue.
+  // Overrides the title only; colour, format and kind still come from the metric catalogue.
   label?: string;
 }) {
   const def = metricDef(metric);
@@ -80,18 +72,13 @@ export function MetricChart({
   const hero = variant === "hero";
   const isCounter = def.kind === "counter";
 
-  // Header shows the current value (gauge) or the cumulative total (counter).
   const lastRaw = data.length ? data[data.length - 1].value : undefined;
-  // Counters are plotted as per-bucket deltas; gauges as the raw value.
   const chartData = useMemo(
     () => (isCounter ? toDeltas(data) : data),
     [isCounter, data],
   );
 
-  // Axis + tooltip elements are shared by both chart types (recharts flattens
-  // an array of children, so this keeps them in sync without duplication).
-  // Memoized — a detail page renders 10+ charts and these four elements don't
-  // depend on `data`, so unrelated re-renders shouldn't rebuild them.
+  // Recharts flattens an array of children, so both chart types can share these.
   const sharedAxes = useMemo(() => [
     <CartesianGrid key="g" stroke="var(--border)" strokeDasharray="2 4" vertical={false} />,
     <XAxis
@@ -124,8 +111,7 @@ export function MetricChart({
       }}
       labelFormatter={(ts) => new Date((ts as number) * 1000).toLocaleString()}
       formatter={(value) => {
-        // recharts v3 types the value as ValueType | undefined; our series is
-        // always numeric, so coerce before formatting.
+        // recharts v3 types the value as ValueType | undefined; our series is always numeric.
         const v = Number(value);
         return [
           isCounter ? `+${formatMetric(metric, v)}` : formatMetric(metric, v),
@@ -219,11 +205,7 @@ export function Sparkline({
     return <div style={{ height }} className="w-full" />;
   }
 
-  // Recharts' implicit Y axis is zero-anchored, which flattens high-offset
-  // series — a ~4 V battery varies <1% of a 0-to-max scale, i.e. sub-pixel at
-  // this height. Fit the domain to the data instead: a sparkline shows shape,
-  // not magnitude. A flat series gets symmetric padding so the line sits
-  // mid-tile rather than on an edge.
+  // Recharts' implicit Y axis is zero-anchored, which flattens a high-offset series to sub-pixel.
   let min = Infinity;
   let max = -Infinity;
   for (const p of data) {

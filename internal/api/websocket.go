@@ -16,10 +16,7 @@ var upgrader = websocket.Upgrader{
 	CheckOrigin: sameHostOrigin,
 }
 
-// sameHostOrigin admits browser connections only from the page we served: the
-// Origin's host must equal the request Host. Non-browser clients send no Origin
-// and are allowed. Without this any web page could open our socket and read
-// the live feed from a visitor's browser on the LAN.
+// sameHostOrigin requires Origin's host to equal the request Host; non-browser clients send no Origin.
 func sameHostOrigin(r *http.Request) bool {
 	origin := r.Header.Get("Origin")
 	if origin == "" {
@@ -32,11 +29,7 @@ func sameHostOrigin(r *http.Request) bool {
 	return strings.EqualFold(u.Host, r.Host)
 }
 
-// Keepalive tuning. The server pings every wsPingPeriod; browsers answer with
-// a protocol pong automatically, which extends the read deadline. A client
-// that stops answering (mobile tab suspended, network switched) is reaped
-// after wsPongWait instead of lingering as a zombie that broadcasts silently
-// drop into.
+// Keepalive: a browser's automatic pong extends the read deadline, and a silent client is reaped after wsPongWait.
 const (
 	wsWriteWait  = 10 * time.Second
 	wsPongWait   = 75 * time.Second
@@ -160,8 +153,7 @@ func (s *Server) wsReadPump(c *client) {
 			delete(c.topics, msg.Topic)
 			c.mu.Unlock()
 		case "ping":
-			// App-level liveness probe: the SPA sends this on tab resume to
-			// detect a half-open socket (protocol pongs aren't visible to JS).
+			// App-level probe: protocol pongs aren't visible to JS, so the SPA checks a half-open socket this way.
 			pong, _ := json.Marshal(wsMessage{Topic: "pong"})
 			select {
 			case c.send <- pong:

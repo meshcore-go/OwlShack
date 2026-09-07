@@ -58,9 +58,7 @@ func (s *Server) handleDeletePeer(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// Contacts are decoupled from discovered_peers (they cache their own
-	// identity), so deleting a peer never affects a saved contact — no guard
-	// needed.
+	// Contacts cache their own identity, so deleting a peer never affects a saved contact.
 	var delErr error
 	s.store.WriteSync(func() {
 		delErr = s.store.Peers.Delete(r.Context(), pubkey)
@@ -110,9 +108,7 @@ func (s *Server) handleBulkDeletePeers(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, map[string]int{"deleted": len(pubkeys)})
 }
 
-// afterPeerDelete evicts deleted peers from the in-memory tables and tells all
-// WS clients to drop them, so the Peers/Map/Overview views stay consistent
-// without a manual refresh.
+// afterPeerDelete evicts deleted peers from the in-memory tables and tells WS clients to drop them.
 func (s *Server) afterPeerDelete(hexes []string, pubkeys [][]byte) {
 	if remove := s.peerRemover(); remove != nil {
 		remove(pubkeys)

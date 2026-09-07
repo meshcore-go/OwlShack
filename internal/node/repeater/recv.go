@@ -10,13 +10,7 @@ import (
 	"github.com/meshcore-go/OwlShack/internal/store"
 )
 
-// registerHandlers wires the radio raw-packet counter and the packet handlers.
-// A repeater intentionally handles far fewer payload types than a companion:
-// it has no channels, DMs or triggers — just adverts (neighbours) and the
-// admin surface (login, requests, CLI).
 func (r *Repeater) registerHandlers() {
-	// Count every raw packet, capture last signal, and accumulate RX airtime —
-	// all surfaced in the over-mesh STATUS response.
 	r.radio.SetRawDataHandler(func(data []byte, snr float32, rssi int8, hasSignal bool) {
 		r.recvCount.Add(1)
 		if hasSignal {
@@ -40,10 +34,7 @@ func (r *Repeater) registerHandlers() {
 	r.node.OnPacket(meshcore.PayloadTypeControl, r.handleControl) // discover req/resp
 }
 
-// handleAdvert records RF neighbours and persists discovered peers. A companion
-// running alongside also stores adverts, but a repeater-only deployment has no
-// companion, so the repeater keeps discovered_peers (and thus the Map / Peers
-// pages) populated on its own. Upsert is idempotent, so the overlap is harmless.
+// handleAdvert also persists peers so a repeater-only deployment populates discovered_peers; Upsert makes the overlap with a companion harmless.
 func (r *Repeater) handleAdvert(pkt *meshcore.Packet) {
 	adv, err := meshcore.AdvertFromBytes(pkt.Payload)
 	if err != nil || !adv.Verify() {
@@ -51,11 +42,10 @@ func (r *Repeater) handleAdvert(pkt *meshcore.Packet) {
 	}
 	appData := adv.AppData()
 
-	// Neighbour tracking (firmware onAdvertRecv): a zero-hop REPEATER advert is
-	// a direct RF neighbour — unless it was a "Share" (transport codes {0,0}).
+	// Firmware onAdvertRecv: a zero-hop REPEATER advert is a direct RF neighbour, unless it is a "Share" (transport codes {0,0}).
 	isShare := pkt.IsTransport() && pkt.TransportCode1 == 0 && pkt.TransportCode2 == 0
 	if pkt.PathHashCount() == 0 && !isShare && appData.Type == "REPEATER" {
-		pub := adv.PublicKey.PublicKey()                   // [32]byte
+		pub := adv.PublicKey.PublicKey()
 		if pub != r.node.Identity().Identity.PublicKey() { // don't record ourselves
 			snr := 0.0
 			if pkt.HasSignalInfo {

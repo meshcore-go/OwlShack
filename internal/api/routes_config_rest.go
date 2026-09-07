@@ -7,11 +7,7 @@ import (
 	"github.com/meshcore-go/OwlShack/internal/store"
 )
 
-// Per-resource config REST (reads). The frontend fetches only the slice it
-// needs instead of the whole document. Secrets (private keys, broker passwords)
-// are never sent: each is replaced by a boolean "<field>Set" so the UI can show
-// "configured" without leaking the value. Writes go through the backend
-// (validation + reload live in the domain layer) and are added separately.
+// Config REST reads never send a secret: each becomes a boolean "<field>Set".
 
 // --- DTOs (JSON shapes) ---
 
@@ -28,8 +24,7 @@ type settingsDTO struct {
 	ListenAddr     *string  `json:"listenAddr"`
 	MapTileKey     *string  `json:"mapTileKey"` // sent to the browser by design: it rides on tile URLs
 	PathHashSize   *int     `json:"pathHashSize"`
-	// DutyCycle is the TX airtime cap as a percentage — the unit the firmware
-	// uses, bare like its `set dutycycle`. null = the default (50%).
+	// DutyCycle is a percentage, the unit the firmware's `set dutycycle` takes; null is the default (50%).
 	DutyCycle     *float64 `json:"dutyCycle"`
 	SetupComplete bool     `json:"setupComplete"`
 }
@@ -188,9 +183,7 @@ func (s *Server) handleGetCompanionChannels(w http.ResponseWriter, r *http.Reque
 	writeJSON(w, http.StatusOK, mapSlice(chans, channelToDTO))
 }
 
-// handleGetAllChannels lists every channel across all companions. The Bots page
-// uses it to resolve a trigger's channelIds to names without a fetch per
-// companion (each channel carries its companionId for client-side grouping).
+// handleGetAllChannels lists every channel across all companions, each carrying its companionId.
 func (s *Server) handleGetAllChannels(w http.ResponseWriter, r *http.Request) {
 	chans, err := s.store.Channels.List(r.Context())
 	if err != nil {
@@ -207,8 +200,7 @@ func pathID(r *http.Request, name string) (int64, bool) {
 	return id, err == nil
 }
 
-// mapSlice maps a slice of store rows to their DTOs. Returns a non-nil empty
-// slice for empty input so the JSON encodes as [] rather than null.
+// mapSlice returns a non-nil empty slice so the JSON encodes as [] rather than null.
 func mapSlice[S, D any](in []S, f func(S) D) []D {
 	out := make([]D, 0, len(in))
 	for _, x := range in {
@@ -217,8 +209,7 @@ func mapSlice[S, D any](in []S, f func(S) D) []D {
 	return out
 }
 
-// configBackend returns the wired backend, or writes a 503 and returns
-// ok=false when no backend is installed yet (startup / between reloads).
+// configBackend writes a 503 and returns ok=false when no backend is wired yet.
 func (s *Server) configBackend(w http.ResponseWriter) (Backend, bool) {
 	b := s.backendRef()
 	if b == nil {
@@ -462,10 +453,7 @@ func (s *Server) handleGetTriggers(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, mapSlice(trigs, triggerToDTO))
 }
 
-// handleMqttStatus reports live broker connection state. Runtime state, so it
-// comes from the backend rather than the config tables — and it lists every
-// CONFIGURED broker, including one whose connect failed, since a broker that
-// silently vanished is exactly what an operator needs to see.
+// handleMqttStatus lists every configured broker, including one whose connect failed.
 func (s *Server) handleMqttStatus(w http.ResponseWriter, r *http.Request) {
 	b := s.backendRef()
 	if b == nil {

@@ -8,9 +8,7 @@ export interface RadioPreset {
   bw: number;
   sf: number;
   cr: number;
-  // Path hash width the region runs, in bytes. Shown in the label but not
-  // applied: it's a per-node routing setting (the repeater's Path hash mode),
-  // not part of the shared RF config these fields write.
+  // Shown in the label but not applied: it's per-node routing, not shared RF config.
   pathHashSize?: number;
 }
 
@@ -25,13 +23,7 @@ function matches(p: RadioPreset, freq: string, bw: string, sf: string, cr: strin
   );
 }
 
-// Community radio presets, generated from the official app's config feed
-// (https://api.meshcore.nz/api/v1/config → suggested_radio_settings.entries).
-// The selection is derived from the live RF fields, so manually typing values
-// that match a preset shows that preset; anything else shows "Custom". An
-// explicit pick is remembered only to disambiguate presets that share the same
-// RF values (e.g. Brazil vs Australia: SA, WA), so picking one doesn't visibly
-// snap to whichever appears first in the list. Connection/TX are untouched.
+// Generated from https://api.meshcore.nz/api/v1/config (suggested_radio_settings.entries); an explicit pick is kept only to disambiguate presets sharing RF values.
 export function RadioPresetSelect({
   freq,
   bw,

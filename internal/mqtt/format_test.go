@@ -8,9 +8,7 @@ import (
 	meshcore "github.com/meshcore-go/meshcore-go"
 )
 
-// The TX counters must not be cross-wired. Busy and queue drops mean opposite
-// things to an operator (RF congestion they cannot fix vs their own send rate),
-// so a swapped mapping inverts the diagnosis and is completely silent.
+// Busy and queue drops mean opposite things to an operator, so a cross-wired mapping inverts the diagnosis silently.
 func TestFormatStatus_CountersMapDistinctly(t *testing.T) {
 	tx := TxCounts{
 		Sent: 1, QueueLen: 2, BusyRequeued: 3,
@@ -34,13 +32,11 @@ func TestFormatStatus_CountersMapDistinctly(t *testing.T) {
 		t.Fatalf("unmarshal: %v", err)
 	}
 
-	// packets_received was never read by anything — CoreScope's status ingest
-	// wants packets_recv — so it must not come back.
+	// packets_received matched no consumer: CoreScope's status ingest wants packets_recv.
 	if _, ok := got.Stats["packets_received"]; ok {
 		t.Error(`"packets_received" matched no consumer; the key CoreScope reads is packets_recv`)
 	}
-	// Both vocabularies ship: recv/sent for the firmware convention,
-	// packets_recv/packets_sent for CoreScope's observer-status ingest.
+	// Both vocabularies ship: recv/sent for the firmware, packets_recv/packets_sent for CoreScope's status ingest.
 	for _, want := range []string{"recv", "packets_recv", "sent", "packets_sent"} {
 		if _, ok := got.Stats[want]; !ok {
 			t.Errorf("%q missing from published stats", want)
@@ -77,10 +73,7 @@ func TestFormatStatus_CountersMapDistinctly(t *testing.T) {
 	}
 }
 
-// The published SNR must be the same integer string the firmware's own log
-// line carries, because meshcoretomqtt scrapes that line with SNR=(-?\d+) and
-// republishes the capture verbatim. A decimal point breaks that contract, and
-// C's (int) cast truncates toward zero rather than rounding.
+// meshcoretomqtt scrapes the firmware log line with SNR=(-?\d+) and republishes the capture, and C's (int) cast truncates toward zero.
 func TestFormatPacket_SNRIsIntegerDBTruncated(t *testing.T) {
 	for _, tc := range []struct {
 		wire int8
@@ -106,9 +99,7 @@ func TestFormatPacket_SNRIsIntegerDBTruncated(t *testing.T) {
 	}
 }
 
-// Board readings live inside "stats" under the firmware's own key names,
-// because meshcoretomqtt forwards the stats-core / stats-radio JSON verbatim as
-// that block. A missing MCU sensor must omit the key rather than report 0 °C.
+// Board readings live inside "stats" under the firmware's key names, which meshcoretomqtt forwards verbatim; a missing MCU sensor omits the key.
 func TestFormatStatus_BoardReadings(t *testing.T) {
 	read := func(ds modem.DeviceStats) map[string]any {
 		raw, err := formatStatus("online", "n", "id", modem.RadioInfo{}, ds,
@@ -148,8 +139,7 @@ func TestFormatStatus_BoardReadings(t *testing.T) {
 	}
 }
 
-// SNR, RSSI, score and duration are measurements of a received packet. On a TX
-// row they would publish a measured 0 dB for our own transmission.
+// On a TX row these would publish a measured 0 dB for our own transmission.
 func TestFormatPacket_TxOmitsRxMeasurements(t *testing.T) {
 	pkt := &meshcore.Packet{SNR: 0, RSSI: 0}
 	raw, err := formatPacket(pkt, []byte{0x00, 0x01}, "n", "AA", "tx", nil)
@@ -179,9 +169,7 @@ type fakeStats struct {
 func (f fakeStats) EstAirtimeMs(int) uint32          { return f.airMs }
 func (f fakeStats) PacketScore(float64, int) float64 { return f.score }
 
-// score and duration mirror the firmware's own log line: score is scaled by
-// 1000 and truncated, duration is the airtime estimate in ms. path reproduces
-// its "[src -> dst]" trailer, which it prints for addressed payload types only.
+// Mirrors the firmware's log line: score scaled by 1000 and truncated, duration the airtime estimate in ms, path its "[src -> dst]" trailer.
 func TestFormatPacket_RxDerivedFields(t *testing.T) {
 	// A direct-routed TXT_MSG: dest hash 0xAB, source hash 0xCD.
 	pkt := &meshcore.Packet{
@@ -210,9 +198,7 @@ func TestFormatPacket_RxDerivedFields(t *testing.T) {
 	}
 }
 
-// TX rows and the counters they feed. flood_tx / direct_tx and tx_air_secs are
-// derived from the transmitted packet itself, so they cover the whole process
-// (companion and repeater) rather than needing the repeater's own counters.
+// flood_tx / direct_tx and tx_air_secs derive from the transmitted packet itself, so they cover the whole process.
 func TestFormatStatus_TxCountersAndRepeat(t *testing.T) {
 	raw, err := formatStatus("online", "n", "id", modem.RadioInfo{}, modem.DeviceStats{},
 		PacketCounts{}, TxCounts{}, modem.LinkStats{},
@@ -246,9 +232,7 @@ func TestFormatStatus_TxCountersAndRepeat(t *testing.T) {
 	}
 }
 
-// A received packet whose signal metadata never arrived must carry no
-// measurement rather than 0 dB / 0 dBm, and score goes with them because it is
-// computed from the SNR. The frame-derived fields stay.
+// Signal metadata that never arrived must publish no measurement rather than 0 dB / 0 dBm; the frame-derived fields stay.
 func TestFormatPacket_RxWithoutSignalInfoOmitsMeasurements(t *testing.T) {
 	pkt := &meshcore.Packet{
 		Header:  meshcore.PayloadTypeTxtMsg<<2 | meshcore.RouteTypeDirect,

@@ -6,9 +6,7 @@ import { apiErrorMessage } from "@/lib/apiError";
 
 type Result = { kind: string; detail: string; restartRequired: boolean };
 
-// RestoreFromBackup is the first-run restore path. It only appears during
-// setup: applying a backup to a configured node is what breaks things, so
-// there is deliberately no equivalent on the Settings page.
+// Setup-only: applying a backup to an already-configured node is what breaks things.
 export function RestoreFromBackup({ onRestored }: { onRestored: () => void }) {
   const fileRef = useRef<HTMLInputElement>(null);
   const [file, setFile] = useState<File | null>(null);

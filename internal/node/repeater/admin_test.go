@@ -26,9 +26,7 @@ func TestCString(t *testing.T) {
 	}
 }
 
-// TestRunCLIPrefix pins the "XX|" correlation-prefix handling: the prefix is
-// stripped from the command and reflected onto the reply (the client matches
-// its pending request by it). A wrong offset breaks every CLI reply on the air.
+// A wrong "XX|" correlation-prefix offset breaks every CLI reply on the air.
 func TestRunCLIPrefix(t *testing.T) {
 	r := &Repeater{cfg: config.RepeaterConfig{Name: "rp"}}
 	if got := r.runCLI("A5|get name"); got != "A5|> rp" {
@@ -45,8 +43,7 @@ func TestRunCLIPrefix(t *testing.T) {
 	}
 }
 
-// TestCLIAdvertIntervalDefaults: fetching advert intervals must report the
-// effective values (incl. defaults), not 0 — zero-hop off, flood 30min→1h.
+// Advert intervals must report their effective values, not 0.
 func TestCLIAdvertIntervalDefaults(t *testing.T) {
 	r := &Repeater{cfg: config.RepeaterConfig{}} // nil intervals → defaults
 	if got := r.runCLI("get advert.interval"); got != "> 0" {
@@ -75,8 +72,7 @@ func TestCLIRadioReadOnly(t *testing.T) {
 	}
 }
 
-// TestSetMutation pins the `set` value validation + units against the firmware
-// (ranges, error strings, minutes→seconds conversion).
+// Pins `set` validation, units and error strings against the firmware.
 func TestSetMutation(t *testing.T) {
 	r := &Repeater{cfg: config.RepeaterConfig{}}
 	cases := []struct {
@@ -150,8 +146,7 @@ func TestUnsupportedCmd(t *testing.T) {
 	}
 }
 
-// TestRegionReads: region list filters by flood state; remove of a missing
-// region errors without touching config.
+// Region list filters by flood state, and removing a missing region must not touch config.
 func TestRegionReads(t *testing.T) {
 	r := &Repeater{cfg: config.RepeaterConfig{Regions: []config.RepeaterRegion{
 		{Name: "alpha"}, {Name: "bravo", DenyFlood: true},
@@ -167,9 +162,7 @@ func TestRegionReads(t *testing.T) {
 	}
 }
 
-// TestRegionsFromConfig pins how the "*" wildcard entry maps to the node's
-// wildcard flags (governs plain unscoped flood) and is kept out of the named
-// transport scopes. Absent "*" ⇒ unscoped flood denied.
+// Pins the "*" entry mapping to wildcard flags, and an absent "*" denying unscoped flood.
 func TestRegionsFromConfig(t *testing.T) {
 	cases := []struct {
 		name      string
@@ -224,12 +217,7 @@ func TestClearStats(t *testing.T) {
 	}
 }
 
-// TestNeighboursBody pins the neighbours response layout the client decodes:
-// [total:2][results:2] then [prefix:N][secsAgo:4][snr:i8] entries, SNR in
-// firmware quarter-dB.
-// Telemetry (REQ 0x03) reports battery voltage then MCU temperature on the
-// self channel, mirroring simple_repeater MyMesh.cpp: addVoltage first, and
-// addTemperature only when the board can measure one (its isnan check).
+// Pins the neighbours layout the client decodes, and the telemetry order (voltage then temperature, temperature only when measurable).
 func TestTelemetryBody(t *testing.T) {
 	r := &Repeater{}
 	r.batteryMV.Store(4168)
@@ -314,9 +302,7 @@ func TestRateLimiter(t *testing.T) {
 	}
 }
 
-// TestRegionsExport pins the anon REGIONS reply body (firmware
-// exportNamesTo(mask=DENY_FLOOD)): flood-allowed names, comma-separated,
-// "*" first when unscoped flood is allowed.
+// Pins the anon REGIONS reply body against firmware exportNamesTo(mask=DENY_FLOOD).
 func TestRegionsExport(t *testing.T) {
 	r := &Repeater{cfg: config.RepeaterConfig{Regions: []config.RepeaterRegion{
 		{Name: "alpha"}, {Name: "bravo", DenyFlood: true}, {Name: "*"},
@@ -330,8 +316,7 @@ func TestRegionsExport(t *testing.T) {
 	}
 }
 
-// TestNeighboursOrderBy pins the order_by selector (firmware semantics):
-// 0/absent=newest first, 1=oldest first, 2=strongest, 3=weakest.
+// Pins the order_by selector: 0/absent=newest, 1=oldest, 2=strongest, 3=weakest.
 func TestNeighboursOrderBy(t *testing.T) {
 	r := &Repeater{}
 	r.neighbors.m = map[[32]byte]*neighbor{}
@@ -360,10 +345,7 @@ func TestNeighboursOrderBy(t *testing.T) {
 	}
 }
 
-// TestRegionDefaultCLI pins `region default` (the firmware default_scope):
-// read form reports <null>, set auto-creates the region flood-allowed,
-// <null> clears. Runs against an in-process reconfigure hook; the config
-// write lands asynchronously (after the reply-TX delay), so poll for it.
+// Pins `region default`; the config write lands after the reply-TX delay, so it polls.
 func TestRegionDefaultCLI(t *testing.T) {
 	r := &Repeater{cfg: config.RepeaterConfig{Name: "rp"}}
 	r.reconfigure = testReconfigure(r)
@@ -404,8 +386,7 @@ func TestRegionDefaultCLI(t *testing.T) {
 	await("", 1) // clearing keeps the region itself
 }
 
-// TestSetACLPrefix pins the firmware's asymmetry (ClientACL::applyPermissions):
-// a revoke may name the client by a pubkey prefix, a grant may not.
+// Pins the firmware asymmetry: a revoke accepts a pubkey prefix, a grant does not.
 func TestSetACLPrefix(t *testing.T) {
 	full := "aabbccddeeff00112233445566778899aabbccddeeff00112233445566778899"
 	r := &Repeater{}
@@ -432,8 +413,7 @@ func TestSetACLPrefix(t *testing.T) {
 	}
 }
 
-// TestNeighborRemove pins `neighbor.remove` matching on the bytes supplied
-// (the firmware accepts a prefix, not just the full key).
+// `neighbor.remove` matches on the bytes supplied, prefix included.
 func TestNeighborRemove(t *testing.T) {
 	r := &Repeater{}
 	r.neighbors.m = map[[32]byte]*neighbor{}
@@ -455,9 +435,7 @@ func TestNeighborRemove(t *testing.T) {
 	}
 }
 
-// TestRegionTree pins the bare `region` reply against the firmware's exportTo:
-// wildcard first, children indented one space, "^" marks home, " F" means
-// flood is allowed.
+// Pins the bare `region` reply against the firmware's exportTo.
 func TestRegionTree(t *testing.T) {
 	r := &Repeater{cfg: config.RepeaterConfig{
 		HomeRegion: "alpha",
@@ -518,8 +496,7 @@ func TestRegionGetHomeSaveLoad(t *testing.T) {
 	}
 }
 
-// TestRegionRemoveClearsRefs: a dangling defaultRegion/homeRegion fails
-// Config.Validate, which would make the reload after the reply fail.
+// A dangling defaultRegion/homeRegion fails Config.Validate and would break the reload after the reply.
 func TestRegionRemoveClearsRefs(t *testing.T) {
 	r := &Repeater{cfg: config.RepeaterConfig{
 		DefaultRegion: "alpha", HomeRegion: "alpha",
@@ -542,8 +519,7 @@ func TestRegionRemoveClearsRefs(t *testing.T) {
 	}
 }
 
-// TestNeighboursBodyCap pins the firmware's results_buffer bound: a reply
-// carries at most what fits in 130 bytes, however many the client asks for.
+// A reply carries at most what fits the firmware's 130-byte results_buffer, however many the client asks for.
 func TestNeighboursBodyCap(t *testing.T) {
 	r := &Repeater{}
 	r.neighbors.m = map[[32]byte]*neighbor{}
@@ -566,8 +542,7 @@ func TestNeighboursBodyCap(t *testing.T) {
 	}
 }
 
-// TestStatusBodyCounters pins the RepeaterStats field offsets for the counters
-// that were previously always zero.
+// Pins the RepeaterStats field offsets for the counters.
 func TestStatusBodyCounters(t *testing.T) {
 	r := &Repeater{}
 	r.sentFlood.Store(11)
@@ -608,8 +583,7 @@ func TestStatusBodyCounters(t *testing.T) {
 	}
 }
 
-// TestRelayDelay pins the firmware's rand[0, 5·airtime·factor] envelope and
-// that rxdelay is off at base 0 (MyMesh::calcRxDelay).
+// Pins the rand[0, 5·airtime·factor] envelope and rxdelay being off at base 0.
 func TestRelayDelay(t *testing.T) {
 	for range 200 {
 		if d := relayDelay(100, 0.5); d < 0 || d > 250*time.Millisecond {
@@ -633,8 +607,7 @@ func TestRelayDelay(t *testing.T) {
 	}
 }
 
-// TestCountTx: our own sends count alongside relays, matching the firmware,
-// which counts in the Dispatcher as each packet goes out.
+// Our own sends count alongside relays, as the firmware Dispatcher does.
 func TestCountTx(t *testing.T) {
 	r := &Repeater{}
 	r.countTx(true)
@@ -645,10 +618,7 @@ func TestCountTx(t *testing.T) {
 	}
 }
 
-// TestAdvertIntervalRoundTrip: what `set` accepts, `get` reports back in the
-// same firmware units. The stored value is seconds, so a UI that writes
-// seconds directly (60) makes `get` report an unsettable 1 — hence the
-// minutes/hours fields on the Repeater page.
+// `get` must report back in the same firmware units `set` accepts; the stored value is seconds.
 func TestAdvertIntervalRoundTrip(t *testing.T) {
 	r := &Repeater{cfg: config.RepeaterConfig{}}
 	r.reconfigure = testReconfigure(r)
@@ -687,16 +657,13 @@ func TestAdvertIntervalRoundTrip(t *testing.T) {
 	}
 	await("get flood.advert.interval", "> 12")
 
-	// 1 minute is what a seconds-based UI used to produce; the firmware range
-	// rejects it.
+	// 1 minute is what a seconds-based UI produces, and the firmware range rejects it.
 	if got := r.runCLI("set advert.interval 1"); got != "Error: interval range is 60-240 minutes" {
 		t.Errorf("set advert.interval 1 = %q, want the range error", got)
 	}
 }
 
-// TestCLIReplyFormats pins the reply shapes clients parse, against the
-// firmware's own sprintf formats: DateTime for clocks, ftoa (always a decimal
-// point) for floats, "<ver> (Build: <date>)" for ver.
+// Pins the reply shapes clients parse against the firmware's own sprintf formats.
 func TestCLIReplyFormats(t *testing.T) {
 	lat, lon, freq := -41.28, 174.0, 915.0
 	r := &Repeater{cfg: config.RepeaterConfig{Latitude: &lat, Longitude: &lon}}
@@ -731,8 +698,7 @@ func TestCLIReplyFormats(t *testing.T) {
 	}
 }
 
-// TestNeighborsListCap: the text reply stays inside the firmware's 134-byte
-// buffer however many neighbours are known.
+// The text reply stays inside the firmware's 134-byte buffer however many neighbours are known.
 func TestNeighborsListCap(t *testing.T) {
 	r := &Repeater{}
 	r.neighbors.m = map[[32]byte]*neighbor{}
@@ -750,8 +716,7 @@ func TestNeighborsListCap(t *testing.T) {
 	if len(lines) < 2 {
 		t.Fatalf("expected several neighbours, got %q", got)
 	}
-	// Firmware appends while `dp - reply < 134`: everything but the last entry
-	// fits under the bound, and one more entry would not have been started.
+	// Firmware appends while `dp - reply < 134`, so everything but the last entry fits under the bound.
 	if before := len(strings.Join(lines[:len(lines)-1], "\n")); before >= neighborsTextMax {
 		t.Errorf("appended an entry at %d bytes, past the %d bound", before, neighborsTextMax)
 	}
@@ -760,8 +725,7 @@ func TestNeighborsListCap(t *testing.T) {
 	}
 }
 
-// testReconfigure applies a CLI mutation straight onto r.cfg under the config
-// lock, standing in for the app's persist+reload hook.
+// testReconfigure stands in for the app's persist+reload hook, mutating r.cfg under the config lock.
 func testReconfigure(r *Repeater) func(func(*config.RepeaterConfig)) error {
 	return func(m func(*config.RepeaterConfig)) error {
 		r.mu.Lock()
@@ -771,8 +735,7 @@ func testReconfigure(r *Repeater) func(func(*config.RepeaterConfig)) error {
 	}
 }
 
-// TestReverseHops pins the send-order flip for routes learned from a flood
-// request's accumulated path (the client's neighbour comes first on the wire).
+// Pins the send-order flip: a flood request's accumulated path lists the client's neighbour first.
 func TestReverseHops(t *testing.T) {
 	if got := reverseHops([]byte{1, 2, 3}, 1); string(got) != string([]byte{3, 2, 1}) {
 		t.Errorf("1-byte = %x", got)
@@ -785,8 +748,7 @@ func TestReverseHops(t *testing.T) {
 	}
 }
 
-// TestCLIFirmwareReplies pins the reply strings the firmware uses for things it
-// doesn't know, and the parsing helpers behind `set`.
+// Pins the firmware's unknown-command reply strings and the parsing helpers behind `set`.
 func TestCLIFirmwareReplies(t *testing.T) {
 	r := &Repeater{cfg: config.RepeaterConfig{Name: "rp"}}
 	for cmd, want := range map[string]string{
@@ -838,8 +800,7 @@ func TestCLIFirmwareReplies(t *testing.T) {
 	}
 }
 
-// TestSetPermByte pins setperm storing the whole permission byte and revoking
-// on any guest role (perms&3 == 0), as ClientACL::applyPermissions does.
+// setperm stores the whole permission byte and revokes on any guest role (perms&3 == 0).
 func TestSetPermByte(t *testing.T) {
 	full := "aabbccddeeff00112233445566778899aabbccddeeff00112233445566778899"
 	r := &Repeater{} // no store: the ACL cache is memory-only
@@ -858,8 +819,7 @@ func TestSetPermByte(t *testing.T) {
 	}
 }
 
-// TestRegionPrefixLookup pins findByNamePrefix: exact wins, else the last
-// prefix match; the wildcard is always known and its deny state is implicit.
+// Pins findByNamePrefix: exact wins, else the last prefix match, and the wildcard is always known.
 func TestRegionPrefixLookup(t *testing.T) {
 	r := &Repeater{cfg: config.RepeaterConfig{Regions: []config.RepeaterRegion{
 		{Name: "alpha"}, {Name: "alphabet", DenyFlood: true}, {Name: "al"},

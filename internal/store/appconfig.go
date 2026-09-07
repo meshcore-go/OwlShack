@@ -6,8 +6,7 @@ import (
 	"fmt"
 )
 
-// AppConfigRepo persists the bot's configuration as a single JSON document —
-// the database is the source of truth; config files are one-time imports.
+// AppConfigRepo persists the config as one JSON document; the database is the source of truth, config files are one-time imports.
 type AppConfigRepo struct {
 	db *sql.DB
 }

@@ -9,8 +9,7 @@ import (
 	"strings"
 )
 
-// openReadOnly opens a database file for inspection without migrating it or
-// creating anything. mode=ro fails rather than creating a missing file.
+// openReadOnly inspects a database file without migrating it; mode=ro fails rather than creating a missing file.
 func openReadOnly(path string) (*sql.DB, error) {
 	db, err := sql.Open("sqlite", "file:"+path+"?mode=ro&_pragma=busy_timeout(5000)")
 	if err != nil {
@@ -23,16 +22,12 @@ func openReadOnly(path string) (*sql.DB, error) {
 	return db, nil
 }
 
-// BackupTo writes a consistent snapshot of the whole database to path using
-// SQLite's VACUUM INTO, which is safe to run while the DB is open and in use.
-// It reads the source only, so it deliberately does not go through the writer
-// goroutine; the destination must not already exist.
+// BackupTo snapshots the database with VACUUM INTO; read-only, so it bypasses the writer goroutine, and the destination must not exist.
 func (s *Store) BackupTo(ctx context.Context, path string) error {
 	if _, err := os.Stat(path); err == nil {
 		return fmt.Errorf("backup target %s already exists", path)
 	}
-	// VACUUM INTO takes a literal or bound path; bind it so a path with quotes
-	// can't break out of the statement.
+	// Bind the path so quotes in it can't break out of the statement.
 	if _, err := s.db.ExecContext(ctx, "VACUUM INTO ?", path); err != nil {
 		return fmt.Errorf("vacuum into %s: %w", path, err)
 	}
@@ -51,10 +46,7 @@ func (s *Store) SchemaVersion(ctx context.Context) (int, error) {
 // LatestSchemaVersion is the version this binary migrates to.
 func LatestSchemaVersion() int { return len(migrations) }
 
-// InspectBackup validates that path is a SQLite database this binary can
-// adopt, returning its schema version. It is the guard in front of a restore:
-// a file from a newer build would need migrations we do not have, and
-// migrations never run backwards.
+// InspectBackup returns path's schema version, rejecting a file from a newer build since migrations never run backwards.
 func InspectBackup(ctx context.Context, path string) (int, error) {
 	db, err := openReadOnly(path)
 	if err != nil {
@@ -80,14 +72,10 @@ func InspectBackup(ctx context.Context, path string) (int, error) {
 	return v, nil
 }
 
-// RestorePath is where a pending restore is staged. Startup swaps it over the
-// live database before opening it: the running process holds the DB open, so it
-// cannot replace the file underneath itself.
+// RestorePath is where a restore is staged for startup to swap in; the running process cannot replace the DB underneath itself.
 func RestorePath(dbPath string) string { return dbPath + ".restore" }
 
-// AdoptPendingRestore moves a staged restore over dbPath and returns whether it
-// did. Call before Open. The rename is atomic within a directory, so an
-// interrupted restore either happened or did not.
+// AdoptPendingRestore moves a staged restore over dbPath; call before Open.
 func AdoptPendingRestore(dbPath string) (bool, error) {
 	pending := RestorePath(dbPath)
 	if _, err := os.Stat(pending); err != nil {
@@ -111,8 +99,7 @@ func AdoptPendingRestore(dbPath string) (bool, error) {
 	return true, nil
 }
 
-// StageRestore writes backup bytes next to the live DB for the next startup to
-// adopt, after checking the file is a database this binary can use.
+// StageRestore writes backup bytes beside the live DB for the next startup to adopt.
 func StageRestore(ctx context.Context, dbPath string, data []byte) (schemaVersion int, err error) {
 	dir := filepath.Dir(dbPath)
 	tmp, err := os.CreateTemp(dir, ".owlshack-restore-*")
@@ -143,13 +130,9 @@ func StageRestore(ctx context.Context, dbPath string, data []byte) (schemaVersio
 	return v, nil
 }
 
-// PruneOptions selects what a backup keeps. Day counts are DaysAll for
-// everything, DaysNone for nothing, or a positive number of days back.
+// PruneOptions selects what a backup keeps; day counts are DaysAll, DaysNone, or a positive number of days back.
 type PruneOptions struct {
-	// CompanionIDs is exactly what to keep: empty keeps none, every id keeps
-	// all. There is deliberately no "unset means all" case — that only ever
-	// means a caller which forgot the field gets the biggest possible backup.
-	// Dropping a companion cascades to its channels, contacts and messages.
+	// CompanionIDs is exactly what to keep: empty keeps none, and there is no "unset means all" case.
 	CompanionIDs []int64
 	Contacts     bool
 	Triggers     bool
@@ -159,8 +142,7 @@ type PruneOptions struct {
 	MessageDays  int
 	PacketDays   int
 	MetricDays   int
-	// IdentityKeys keeps the node private keys. When false they are blanked and
-	// startup mints new ones.
+	// IdentityKeys keeps the node private keys; false blanks them and startup mints new ones.
 	IdentityKeys bool
 }
 
@@ -169,8 +151,7 @@ const (
 	DaysAll  = -1
 )
 
-// PruneBackup deletes unselected data from a backup copy in place, then
-// vacuums it so the file actually shrinks. Only ever call this on a copy.
+// PruneBackup deletes unselected data in place then vacuums; only ever call it on a copy.
 func PruneBackup(ctx context.Context, path string, opts PruneOptions) error {
 	db, err := openWritableDB(path)
 	if err != nil {
@@ -214,8 +195,7 @@ func PruneBackup(ctx context.Context, path string, opts PruneOptions) error {
 		}
 	}
 
-	// Time-windowed tables. DATETIME columns compare against a SQL timestamp;
-	// the metrics/neighbour tables store unix seconds.
+	// DATETIME columns compare against a SQL timestamp; the metrics/neighbour tables store unix seconds.
 	windows := []struct {
 		table, col string
 		days       int
@@ -285,8 +265,7 @@ func openWritableDB(path string) (*sql.DB, error) {
 	return db, nil
 }
 
-// BackupCounts is what a set of PruneOptions would capture. Bytes is the live
-// database size, which is the ceiling — a pruned backup is smaller.
+// BackupCounts is what a set of PruneOptions would capture; Bytes is the live DB size, the ceiling for a pruned backup.
 type BackupCounts struct {
 	Companions int64
 	Contacts   int64
@@ -297,9 +276,7 @@ type BackupCounts struct {
 	Bytes      int64
 }
 
-// CountForBackup counts what a backup with these options would include. It
-// runs against the live DB with the same predicates PruneBackup deletes by, so
-// the wizard can show the cost of a choice without building the file.
+// CountForBackup counts what a backup would include, using the same predicates PruneBackup deletes by.
 func (s *Store) CountForBackup(ctx context.Context, opts PruneOptions) (*BackupCounts, error) {
 	out := &BackupCounts{}
 

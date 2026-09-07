@@ -4,17 +4,13 @@ import type { Dispatch, SetStateAction } from "react";
 interface ApiObject<T> {
   /** null until the first successful load. */
   item: T | null;
-  /** Exposed so pages can patch the loaded object after a write. */
   setItem: Dispatch<SetStateAction<T | null>>;
   loading: boolean;
   error: string | null;
   reload: () => void;
 }
 
-// Single-object sibling of useApiList: loading/error/retry state plus auto-fetch
-// on mount and whenever the URL changes. Pass url=null to defer. Use this for
-// the single-row config resources (settings, mqtt) instead of hand-rolling
-// fetch state in the page.
+// Single-object sibling of useApiList; pass url=null to defer.
 export function useApiObject<T>(
   url: string | null,
   errorMessage: string,

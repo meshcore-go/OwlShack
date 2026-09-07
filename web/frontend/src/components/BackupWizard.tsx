@@ -34,8 +34,7 @@ const WINDOWS = [
 ];
 
 type Options = {
-  // Exactly which companions to include: [] is none, every id is all. The
-  // server rejects the request if it is missing, so never omit it.
+  // [] is none, every id is all; the server rejects the request if it is missing.
   companionIds?: number[];
   contacts: boolean;
   triggers: boolean;
@@ -147,9 +146,7 @@ function formatBytes(n: number) {
   return `${(n / (1024 * 1024)).toFixed(1)} MB`;
 }
 
-// BackupWizard walks the operator through what a backup should contain. It is
-// export only: restoring is offered in the setup wizard, because merging a
-// backup into a node that is already running is what breaks things.
+// Export only — restore lives in the setup wizard, because merging into a running node breaks things.
 export function BackupWizard({
   open,
   onOpenChange,
@@ -169,9 +166,7 @@ export function BackupWizard({
   );
   const all = companions ?? [];
 
-  // The selection lives here, not in opts, and is always sent in full. null
-  // means the companion list has not loaded yet, which is the only reason to
-  // hold off on a request — it never travels as a meaning.
+  // null means the companion list hasn't loaded yet; it never travels to the server.
   const [picked, setPicked] = useState<number[] | null>(null);
   useEffect(() => {
     if (companions && picked === null) setPicked(companions.map((c) => c.id));

@@ -56,11 +56,7 @@ func NewChannelTrigger(botName string, cfg config.TriggerConfig, n *node.Node, c
 	}, nil
 }
 
-// Start stores the callback. Group-text packets are delivered via the
-// companion's single persistent GrpTxt handler (which calls HandleGroupText),
-// not a per-trigger node.OnPacket registration — that lets triggers be swapped
-// at runtime without leaking node packet handlers (node.OnPacket cannot
-// deregister).
+// Start only stores the callback: group text arrives via the companion's persistent GrpTxt handler, because node.OnPacket cannot deregister.
 func (t *ChannelTrigger) Start(_ context.Context, callback Callback) error {
 	t.mu.Lock()
 	t.callback = callback
@@ -68,8 +64,7 @@ func (t *ChannelTrigger) Start(_ context.Context, callback Callback) error {
 	return nil
 }
 
-// Stop clears the callback so HandleGroupText becomes a no-op even if the
-// companion's dispatcher still holds a reference to this (now removed) trigger.
+// Stop clears the callback so HandleGroupText is a no-op even if the dispatcher still holds this trigger.
 func (t *ChannelTrigger) Stop() error {
 	t.mu.Lock()
 	t.callback = nil
@@ -77,9 +72,7 @@ func (t *ChannelTrigger) Stop() error {
 	return nil
 }
 
-// HandleGroupText is invoked by the companion's persistent GrpTxt handler for
-// every received group message. It decrypts, applies this trigger's channel
-// and pattern filters, and fires the callback on a match.
+// HandleGroupText is invoked by the companion's persistent GrpTxt handler for every received group message.
 func (t *ChannelTrigger) HandleGroupText(pkt *meshcore.Packet) {
 	t.mu.Lock()
 	cb := t.callback
@@ -98,9 +91,7 @@ func (t *ChannelTrigger) HandleGroupText(pkt *meshcore.Packet) {
 		"channel", ch.Name, "sender", msg.Sender,
 		"text", msg.Text, "snr", pkt.SNR, "rssi", pkt.RSSI)
 
-	// Never react to our own companion's traffic — a manual channel send or a
-	// bot reply is heard back over the air, and matching it would let a bot
-	// trigger on itself (and loop). Mirrors the rx persistence handler's skip.
+	// Our own sends are heard back over the air; matching them would let a bot trigger on itself and loop.
 	if msg.Sender == t.botName {
 		t.log.Log(context.Background(), logging.LevelTrace, "own message, skipping trigger",
 			"channel", ch.Name)
@@ -141,12 +132,10 @@ func (t *ChannelTrigger) HandleGroupText(pkt *meshcore.Packet) {
 	})
 }
 
-// matchesAny returns the first matching pattern's named capture groups, or nil
-// if no pattern matches. When there are no patterns, it returns an empty
-// (non-nil) map to indicate a match-all.
+// matchesAny returns the first matching pattern's named captures, nil on no match, or an empty non-nil map when there are no patterns.
 func (t *ChannelTrigger) matchesAny(text string) map[string]string {
 	if len(t.patterns) == 0 {
-		return map[string]string{} // no patterns = match everything
+		return map[string]string{}
 	}
 	for _, re := range t.patterns {
 		m := re.FindStringSubmatch(text)

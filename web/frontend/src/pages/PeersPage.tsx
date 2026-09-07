@@ -56,8 +56,7 @@ interface Peer {
   outPathHashSize?: number;
 }
 
-// Sharp-cornered checkbox matching the operator aesthetic; stops propagation so
-// ticking a row in the table/list doesn't also open its detail sheet.
+// Stops propagation so ticking a row doesn't also open its detail sheet.
 function SelectBox({
   checked,
   onChange,
@@ -198,8 +197,7 @@ export function PeersPage() {
   const allFilteredSelected =
     filtered.length > 0 && filtered.every((p) => selected.has(p.pubkey));
 
-  // Toggle every currently-filtered peer; selections outside the filter are
-  // preserved so search/type filtering can build a selection incrementally.
+  // Selections outside the current filter are preserved, so filtering builds one up.
   const toggleSelectAll = useCallback(() => {
     setSelected((prev) => {
       const next = new Set(prev);
@@ -540,8 +538,7 @@ export function PeersPage() {
   );
 }
 
-// PeerTypeMenu is the phone-sized form of the type chips — single-select, so
-// radio items. Mirrors PacketsPage's PacketTypeMenu and MapPage's FilterMenu.
+// Phone-sized form of the type chips — single-select, so radio items.
 function PeerTypeMenu({
   value,
   onChange,

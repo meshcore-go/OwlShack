@@ -22,8 +22,7 @@ function readSystem(): "dark" | "light" {
 
 export function ThemeProvider({ children }: { children: React.ReactNode }) {
   const [theme, setThemeState] = useState<Theme>(() => {
-    // localStorage can throw when storage is disabled (strict privacy modes);
-    // never let that take down the whole tree at mount.
+    // localStorage throws outright when storage is disabled (strict privacy modes).
     try {
       const stored = localStorage.getItem(STORAGE_KEY) as Theme | null;
       return stored ?? "dark";

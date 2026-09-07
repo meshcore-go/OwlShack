@@ -12,15 +12,8 @@ import (
 	"github.com/meshcore-go/OwlShack/internal/store"
 )
 
-// A backup is a pruned copy of the database: VACUUM INTO a temp file, delete
-// what the operator did not select, compact. That reuses the restore path (a
-// whole-file swap) and needs no per-table serialization.
-//
-// Restore is deliberately only reachable from the setup wizard. Merging a
-// backup into a node that is already configured and on the air is what breaks:
-// identities collide, contacts half-overwrite, live sessions dangle.
+// Restore is a whole-file swap, so it is reachable only from the setup wizard: merging into a live node collides.
 
-// pruneFrom converts the API's options into store.PruneOptions.
 func pruneFrom(in api.BackupOptions) store.PruneOptions {
 	ids := []int64{}
 	if in.CompanionIDs != nil {
@@ -40,7 +33,6 @@ func pruneFrom(in api.BackupOptions) store.PruneOptions {
 	}
 }
 
-// ExportBackup builds a downloadable backup honouring the selected options.
 func (b *backend) ExportBackup(ctx context.Context, opts api.BackupOptions) (*api.BackupFile, error) {
 	if b.db == nil {
 		return nil, fmt.Errorf("database unavailable")
@@ -92,8 +84,7 @@ func validateOptions(opts api.BackupOptions) error {
 	return nil
 }
 
-// reserveTempName returns a free path for VACUUM INTO, which refuses to write
-// to a file that already exists.
+// reserveTempName returns a free path because VACUUM INTO refuses to write to an existing file.
 func reserveTempName() (string, error) {
 	f, err := os.CreateTemp("", "owlshack-backup-*.db")
 	if err != nil {
@@ -107,8 +98,7 @@ func reserveTempName() (string, error) {
 	return name, nil
 }
 
-// EstimateBackup reports what the current options would capture, so the wizard
-// can say what including the packet log actually costs before downloading it.
+// EstimateBackup reports what the current options would capture, before downloading.
 func (b *backend) EstimateBackup(ctx context.Context, opts api.BackupOptions) (*api.BackupEstimate, error) {
 	if b.db == nil {
 		return nil, fmt.Errorf("database unavailable")
@@ -131,10 +121,7 @@ func (b *backend) EstimateBackup(ctx context.Context, opts api.BackupOptions) (*
 	}, nil
 }
 
-// ImportBackup restores an uploaded file. A database is staged for the next
-// startup (this process holds the live one open); anything else is treated as
-// a config file, which also lets an operator bring an old TOML/YAML config
-// across through the UI.
+// ImportBackup stages a database for the next startup (this process holds the live one open); anything else is treated as a config file.
 func (b *backend) ImportBackup(ctx context.Context, data []byte, filename string) (*api.ImportResult, error) {
 	if b.db == nil {
 		return nil, fmt.Errorf("database unavailable")
@@ -159,11 +146,9 @@ func (b *backend) ImportBackup(ctx context.Context, data []byte, filename string
 	return b.importConfigUpload(ctx, data, filename)
 }
 
-// importConfigUpload writes the upload to a temp file so it goes through the
-// same multi-format loader as the -config flag.
+// importConfigUpload writes the upload to a temp file to reuse the -config loader.
 func (b *backend) importConfigUpload(ctx context.Context, data []byte, filename string) (*api.ImportResult, error) {
-	// LoadFromPath picks its parser from the extension; default to JSON rather
-	// than guessing, so an unrecognised name gives a parse error we can explain.
+	// LoadFromPath picks its parser from the extension; default to JSON so an unknown name gives a parse error.
 	ext := strings.ToLower(filepath.Ext(filename))
 	switch ext {
 	case ".json", ".toml", ".yaml", ".yml":

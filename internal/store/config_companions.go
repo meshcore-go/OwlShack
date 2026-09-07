@@ -6,8 +6,7 @@ import (
 	"fmt"
 )
 
-// Companion is a node personality the bot runs. id is the stable key; name,
-// pubkey and private_key are all mutable (rename / rotate keypair freely).
+// Companion is a node personality the bot runs; id is the stable key, name/pubkey/private_key are all mutable.
 type Companion struct {
 	ID             int64
 	Name           string
@@ -61,9 +60,7 @@ func (r *CompanionRepo) Get(ctx context.Context, id int64) (*Companion, error) {
 	return c, nil
 }
 
-// IDByName resolves a companion's surrogate id from its (current) name. The API
-// keeps name in its URLs; history is keyed by id, so handlers resolve here.
-// Returns sql.ErrNoRows when no companion has that name.
+// IDByName resolves the surrogate id from the current name, returning sql.ErrNoRows when no companion has it.
 func (r *CompanionRepo) IDByName(ctx context.Context, name string) (int64, error) {
 	var id int64
 	err := r.db.QueryRowContext(ctx, `SELECT id FROM companions WHERE name = ?`, name).Scan(&id)
@@ -108,8 +105,7 @@ func (r *CompanionRepo) Delete(ctx context.Context, id int64) error {
 	return nil
 }
 
-// CompanionChannel is a companion-owned channel. private_key empty = a public /
-// hashtag-derived channel. Triggers reference these rows via trigger_channels.
+// CompanionChannel is a companion-owned channel; an empty private_key means a public/hashtag-derived one.
 type CompanionChannel struct {
 	ID          int64
 	CompanionID int64

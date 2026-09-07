@@ -10,13 +10,9 @@ import (
 	"github.com/meshcore-go/OwlShack/internal/store"
 )
 
-// Per-resource config writes. Each loads the current row snapshot, applies the
-// change in memory, assembles + Validates the result, and only persists (by
-// surrogate id) + reloads if valid — so an invalid edit is rejected before it
-// touches the DB, and renames/edits keep their id.
+// Every per-resource write validates the assembled result before it touches the DB, and keeps ids across renames.
 
-// configMutate is the shared write transaction: snapshot → apply → validate →
-// persist → reload, serialized on the store's writer goroutine.
+// configMutate is the shared write transaction, serialized on the store's writer goroutine.
 func (b *backend) configMutate(ctx context.Context, apply func(*configRows), persist func(*store.Store) error) error {
 	return writeConfigTx(ctx, b.db, b.reload, func(rows *configRows) error {
 		apply(rows)
@@ -27,11 +23,7 @@ func (b *backend) configMutate(ctx context.Context, apply func(*configRows), per
 	})
 }
 
-// writeConfigTx is the shared config-write transaction skeleton: inside the
-// single writer it loads the row snapshot and runs work (which mutates,
-// validates, and persists), then reloads only if work succeeded. Both
-// backend.configMutate and the node's repeaterReconfigurer route through it so
-// the "load → validate → persist → reload" contract lives in one place.
+// writeConfigTx runs load → validate → persist inside the single writer, and reloads only if work succeeded.
 func writeConfigTx(ctx context.Context, db *store.Store, reload func() error, work func(*configRows) error) error {
 	var resultErr error
 	db.WriteSync(func() {
@@ -61,8 +53,7 @@ func filterOut[T any](s []T, drop func(T) bool) []T {
 	return out
 }
 
-// or returns p when set, else the default d (used to fall back optional
-// settings inputs to DefaultConfig values).
+// or returns p when set, else the default d.
 func or[T any](p, d *T) *T {
 	if p != nil {
 		return p
@@ -79,8 +70,7 @@ func (b *backend) SaveSettings(ctx context.Context, in api.SettingsInput) error 
 			if in.ConnectionType != nil && *in.ConnectionType != "" {
 				ct = *in.ConnectionType
 			}
-			// SetupComplete is only changed when explicitly provided, so a radio
-			// edit never re-opens the setup wizard.
+			// SetupComplete changes only when explicitly provided, so a radio edit never re-opens the wizard.
 			setup := rows.settings.SetupComplete
 			if in.SetupComplete != nil {
 				setup = *in.SetupComplete
@@ -209,8 +199,7 @@ func (b *backend) SaveCompanion(ctx context.Context, in api.CompanionInput) (int
 
 			if in.ID == 0 {
 				rows.companions = append(rows.companions, row)
-				// Every companion is always joined to Public (companion id 0 in
-				// the snapshot pairs with the new companion's id-0 channels).
+				// Every companion is always joined to Public.
 				newPublic = &store.CompanionChannel{Name: "Public"}
 				rows.channels = append(rows.channels, *newPublic)
 			} else {
@@ -325,10 +314,7 @@ func (b *backend) SaveTrigger(ctx context.Context, in api.TriggerInput) (int64, 
 	return row.ID, err
 }
 
-// CreateRepeater sets up the singleton repeater. Only identity is taken here;
-// the rest is edited via the section endpoints. A blank key is generated, and
-// the "*" wildcard scope is seeded so the new repeater relays plain unscoped
-// flood by default (firmware's implicit wildcard). Errors if one already exists.
+// CreateRepeater seeds the "*" wildcard scope so the repeater relays unscoped flood, as the firmware implicitly does.
 func (b *backend) CreateRepeater(ctx context.Context, in api.RepeaterCreateInput) error {
 	var row store.Repeater
 	exists := false
@@ -359,10 +345,7 @@ func (b *backend) CreateRepeater(ctx context.Context, in api.RepeaterCreateInput
 	)
 }
 
-// mutateRepeater applies a partial change to the existing repeater through one
-// validated, reloaded write (the per-section / per-region edit primitive). It
-// errors when no repeater is configured — sections can't be edited before one
-// exists — and that error short-circuits before the reload (persist returns it).
+// mutateRepeater applies a partial change through one validated, reloaded write; it errors when no repeater exists.
 func (b *backend) mutateRepeater(ctx context.Context, mutate func(*store.Repeater)) error {
 	var row store.Repeater
 	found := false
@@ -385,8 +368,7 @@ func (b *backend) mutateRepeater(ctx context.Context, mutate func(*store.Repeate
 	)
 }
 
-// UpdateRepeaterNode edits the Node section: name, position, and (only when a
-// value is given) rotates the identity key.
+// UpdateRepeaterNode edits the Node section; a supplied key value rotates the identity.
 func (b *backend) UpdateRepeaterNode(ctx context.Context, in api.RepeaterNodeInput) error {
 	return b.mutateRepeater(ctx, func(r *store.Repeater) {
 		r.Name = in.Name
@@ -427,9 +409,7 @@ func (b *backend) UpdateRepeaterAdmin(ctx context.Context, in api.RepeaterAdminI
 	})
 }
 
-// AddRepeaterRegion adds a region (or updates its deny-flood flag if it already
-// exists, so a re-add is idempotent). Empty/invalid names are rejected by
-// Validate() inside mutateRepeater.
+// AddRepeaterRegion updates the deny-flood flag when the region exists, so a re-add is idempotent.
 func (b *backend) AddRepeaterRegion(ctx context.Context, in api.RepeaterRegionInput) error {
 	return b.mutateRepeater(ctx, func(r *store.Repeater) {
 		for i := range r.Regions {
@@ -453,10 +433,7 @@ func (b *backend) SetRepeaterRegionFlood(ctx context.Context, name string, denyF
 	})
 }
 
-// RemoveRepeaterRegion deletes a region. Removing "*" stops relaying unscoped
-// flood (see regionsFromConfig); removing the default advert scope clears it,
-// keeping DefaultRegion / HomeRegion pointing at a configured region (Validate
-// enforces it).
+// RemoveRepeaterRegion: removing "*" stops relaying unscoped flood (see regionsFromConfig).
 func (b *backend) RemoveRepeaterRegion(ctx context.Context, name string) error {
 	return b.mutateRepeater(ctx, func(r *store.Repeater) {
 		r.Regions = slices.DeleteFunc(r.Regions, func(rg store.RepeaterRegion) bool { return rg.Name == name })
@@ -481,8 +458,7 @@ func (b *backend) DeleteRepeater(ctx context.Context) error {
 	)
 }
 
-// keepSecret returns *in when the pointer is set (set/clear), else the stored
-// value — the "omit to keep" contract for redacted secret fields.
+// keepSecret implements the "omit to keep" contract for redacted secret fields.
 func keepSecret(in *string, prev string) string {
 	if in != nil {
 		return *in

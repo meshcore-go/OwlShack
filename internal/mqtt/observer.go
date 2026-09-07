@@ -20,9 +20,7 @@ import (
 	"github.com/meshcore-go/meshcore-go/node"
 )
 
-// publishJob is queued from the RX/heartbeat goroutines and consumed by the
-// per-broker worker. Keeping the publish call off the hot path prevents a
-// stalled broker from back-pressuring the modem dispatch goroutine.
+// publishJob keeps the publish call off the RX hot path, so a stalled broker can't back-pressure the modem dispatch goroutine.
 type publishJob struct {
 	topic   string
 	payload []byte
@@ -31,22 +29,17 @@ type publishJob struct {
 }
 
 const (
-	// publishQueueDepth is the per-broker job buffer. Sized to absorb a
-	// short network hiccup without touching the modem RX goroutine.
+	// publishQueueDepth absorbs a short network hiccup without touching the modem RX goroutine.
 	publishQueueDepth = 256
 
-	// publishWaitTimeout bounds how long the worker waits for paho's
-	// publish token. A misbehaving broker will not freeze the worker.
+	// publishWaitTimeout bounds the worker's wait for paho's publish token.
 	publishWaitTimeout = 5 * time.Second
 
 	// connectWaitTimeout bounds the initial connect handshake.
 	connectWaitTimeout = 10 * time.Second
 )
 
-// Initial-connect retry backoff. paho's SetAutoReconnect only covers a client
-// that has connected at least once, so a broker that is down at startup needs
-// our own loop or it stays down until the process restarts. Vars, not consts,
-// so tests can shrink them.
+// Initial-connect backoff: paho's SetAutoReconnect only covers a client that has connected at least once. Vars so tests can shrink them.
 var (
 	connectRetryMin = 5 * time.Second
 	connectRetryMax = 5 * time.Minute
@@ -65,9 +58,7 @@ type brokerClient struct {
 
 	disallowed map[byte]bool
 	dedup      *meshcore.DedupCache // rx; nil when dedup disabled for this broker
-	// dedupTx is separate because DedupCache keys on the packet hash alone:
-	// relaying a flood we already published as rx carries the SAME hash, so one
-	// shared cache would drop every relay we transmit.
+	// Separate cache: DedupCache keys on the packet hash alone, and a relayed flood carries the same hash as the rx we published.
 	dedupTx *meshcore.DedupCache
 
 	publishCh  chan publishJob
@@ -75,8 +66,7 @@ type brokerClient struct {
 	workerDone chan struct{}
 	dropped    atomic.Uint64
 	published  atomic.Uint64
-	// retrying guards retryConnect so the two call sites (startup failure and
-	// a failed token refresh) can never run two loops for one broker.
+	// retrying guards retryConnect so its two call sites never run two loops for one broker.
 	retrying atomic.Bool
 }
 
@@ -102,8 +92,7 @@ const (
 	defaultStatusTopic = "meshcore/{iata}/{pubkey}/status"
 )
 
-// resolveTopics expands a broker's topic templates (defaulting to the
-// meshcoretomqtt-compatible "meshcore/{iata}/{pubkey}/<kind>" structure).
+// resolveTopics expands a broker's topic templates, defaulting to the meshcoretomqtt-compatible layout.
 func resolveTopics(bcfg config.BrokerConfig, iata, pubKeyHx, origin string) (packetTopic, statusTopic string) {
 	expand := func(tmpl, fallback string) string {
 		if tmpl == "" {
@@ -127,8 +116,7 @@ func (b *brokerClient) isAllowed(payloadType byte) bool {
 
 type Observer struct {
 	radio node.MuxRadio
-	// mux is retained for TxStats, which is not on the MuxRadio interface.
-	// Its counters are process-wide: one mux serves every node here.
+	// mux is retained for TxStats, which is not on MuxRadio; its counters are process-wide.
 	mux   *node.RadioMux
 	id    meshcore.LocalIdentity
 	stats modem.StatsProvider
@@ -141,17 +129,12 @@ type Observer struct {
 	packetsReceived atomic.Uint64
 	floodRx         atomic.Uint64
 	directRx        atomic.Uint64
-	// Airtime is accumulated per packet from the radio's own estimate, the way
-	// the firmware accumulates rx_air_time / total_air_time. TX is fed by NoteTx
-	// from the modem's outbound handler, so it covers every transmission this
-	// process makes — companion and repeater alike, like sent and queue_len.
+	// Per-packet estimates, as the firmware accumulates rx_air_time / total_air_time; TX comes from NoteTx, so it covers every transmission this process makes.
 	rxAirMs  atomic.Uint64
 	txAirMs  atomic.Uint64
 	floodTx  atomic.Uint64
 	directTx atomic.Uint64
-	// relaying is the repeater's `repeat` setting, published as the top-level
-	// `repeat` flag firmware 1.16 introduced. False when no repeater runs here,
-	// which is accurate rather than unknown.
+	// relaying is the repeater's `repeat` setting; false when no repeater runs here.
 	relaying   atomic.Bool
 	lastSNR    atomic.Int64 // quarter-dB, so the float survives an atomic
 	lastRSSI   atomic.Int32
@@ -161,18 +144,14 @@ type Observer struct {
 
 	mu     sync.Mutex
 	cancel context.CancelFunc
-	// runCtx is the started context, kept so SetRelaying can publish a status
-	// out of band. Guarded by mu with cancel.
+	// runCtx, guarded by mu, lets SetRelaying publish a status out of band.
 	runCtx   context.Context
 	stopOnce sync.Once
 
-	// brokersMu guards the brokers slice: Start publishes it while the API
-	// server is already serving BrokerStatuses.
+	// brokersMu guards the brokers slice: Start appends while the API server is already serving BrokerStatuses.
 	brokersMu sync.RWMutex
 
-	// health carries per-broker connection state keyed by broker name. It is
-	// keyed by name rather than held on brokerClient so a configured broker
-	// still reports its last error after a reload drops its brokerClient.
+	// Keyed by broker name, not held on brokerClient, so a broker still reports its last error after a reload drops its client.
 	healthMu sync.Mutex
 	health   map[string]*brokerHealth
 }
@@ -238,9 +217,7 @@ func (o *Observer) brokerHealthLocked(name string) *brokerHealth {
 	return h
 }
 
-// BrokerStatuses reports every configured broker, connected or not. Liveness
-// comes from paho's own IsConnected so an auto-reconnect is reflected without
-// us tracking it.
+// BrokerStatuses reports every configured broker, connected or not; liveness comes from paho's own IsConnected.
 func (o *Observer) BrokerStatuses() []BrokerStatus {
 	live := make(map[string]*brokerClient)
 	for _, bc := range o.brokerList() {
@@ -332,9 +309,7 @@ func (o *Observer) Start(ctx context.Context) error {
 
 		go o.publishWorker(bc)
 
-		// The broker is registered whether or not it connects: a configured
-		// broker that is unreachable must stay visible and keep retrying, not
-		// disappear until restart.
+		// Registered whether or not it connects: an unreachable broker must stay visible and keep retrying.
 		o.brokersMu.Lock()
 		o.brokers = append(o.brokers, bc)
 		o.brokersMu.Unlock()
@@ -373,10 +348,7 @@ func (o *Observer) stop() {
 	}
 	o.mu.Unlock()
 
-	// Detach from the radio mux so no new packets are dispatched to onData.
-	// A deliver already in-flight (the mux snapshots its radio list before
-	// delivering) is still handled safely: enqueuePublish never sends on a
-	// closed channel because publishCh is closed by no one.
+	// Detach from the mux so no new packets reach onData; an in-flight deliver is safe because publishCh is never closed.
 	if o.radio != nil {
 		o.radio.Close()
 	}
@@ -398,16 +370,13 @@ func (o *Observer) stop() {
 	}
 }
 
-// publishWorker drains a broker's publish channel serially. token.Wait() is
-// bounded so a stalled broker never blocks indefinitely; the worker just
-// drops the job, logs once, and moves on.
+// publishWorker drains a broker's publish channel serially, with a bounded token wait so a stalled broker never blocks it.
 func (o *Observer) publishWorker(bc *brokerClient) {
 	defer close(bc.workerDone)
 	for {
 		select {
 		case <-bc.stop:
-			// Drain whatever is already buffered (e.g. the offline status
-			// enqueued during Stop) on a best-effort basis, then exit.
+			// Drain what is already buffered (the offline status enqueued during Stop), then exit.
 			for {
 				select {
 				case job := <-bc.publishCh:
@@ -425,10 +394,7 @@ func (o *Observer) publishWorker(bc *brokerClient) {
 func (o *Observer) doPublish(bc *brokerClient, job publishJob) {
 	client := bc.currentClient()
 	if client == nil || !client.IsConnected() {
-		// Publishing to a disconnected client would block for the full
-		// publishWaitTimeout per job and stall the worker. Count it as a drop:
-		// from the operator's side the message did not go out, and the broker
-		// already shows as offline.
+		// Publishing to a disconnected client would block for the full publishWaitTimeout per job and stall the worker.
 		bc.dropped.Add(1)
 		return
 	}
@@ -446,16 +412,12 @@ func (o *Observer) doPublish(bc *brokerClient, job publishJob) {
 	bc.published.Add(1)
 }
 
-// enqueuePublish hands a job to the broker's worker without blocking. If the
-// queue is full (broker is stalled), the job is dropped and counted. Called
-// from the modem RX goroutine, so this MUST never block.
+// enqueuePublish is called from the modem RX goroutine, so it MUST never block: a full queue drops and counts the job.
 func (o *Observer) enqueuePublish(bc *brokerClient, job publishJob) {
 	select {
 	case bc.publishCh <- job:
 	case <-bc.stop:
-		// Observer is shutting down; drop silently. publishCh is never closed,
-		// so this send can never panic even if a radio deliver is still
-		// in-flight after Stop detaches the radio.
+		// Shutting down; drop silently.
 	default:
 		dropped := bc.dropped.Add(1)
 		if dropped == 1 || dropped%100 == 0 {
@@ -491,9 +453,7 @@ func (o *Observer) onData(data []byte, snr float32, rssi int8, hasSignalInfo boo
 	o.publishPacket(pkt, data, "rx")
 }
 
-// NoteTx publishes one transmitted packet and folds it into the TX counters.
-// Registered on the modem's outbound handler, which fires once per actual
-// transmission for every virtual radio — the same hook the packet logger uses.
+// NoteTx publishes one transmitted packet and folds it into the TX counters, from the modem's outbound handler.
 func (o *Observer) NoteTx(data []byte) {
 	pkt, err := meshcore.PacketFromBytes(data)
 	if err != nil {
@@ -508,12 +468,7 @@ func (o *Observer) NoteTx(data []byte) {
 	o.publishPacket(pkt, data, "tx")
 }
 
-// SetRelaying records whether this node relays, for the `repeat` flag, and
-// publishes a status straight away when the value changed on a running
-// observer. Without that, a `set repeat` would not reach consumers until the
-// next heartbeat — up to StatusIntervalSeconds (300s default) of advertising a
-// relay state we no longer have. Consumers act on this flag, so the lag is not
-// cosmetic.
+// SetRelaying records the `repeat` flag and publishes a status on change, so consumers don't wait up to StatusIntervalSeconds for it.
 func (o *Observer) SetRelaying(v bool) {
 	if o.relaying.Swap(v) == v {
 		return
@@ -584,10 +539,7 @@ func (o *Observer) heartbeatLoop(ctx context.Context) {
 	}
 }
 
-// retryConnect reconnects a broker that has no working client, with capped
-// exponential backoff, until it succeeds or the observer stops. It covers the
-// two cases paho's own auto-reconnect does not: a broker that was unreachable
-// at startup, and a token refresh whose reconnect failed.
+// retryConnect covers the two cases paho's auto-reconnect does not: a broker unreachable at startup, and a failed token-refresh reconnect.
 func (o *Observer) retryConnect(ctx context.Context, bc *brokerClient) {
 	if !bc.retrying.CompareAndSwap(false, true) {
 		return // a loop is already running for this broker
@@ -644,14 +596,12 @@ func (o *Observer) tokenRefreshLoop(ctx context.Context) {
 	}
 }
 
-// refreshToken re-mints a token broker's credentials by reconnecting it. It
-// reports whether it reconnected.
+// refreshToken re-mints a token broker's credentials by reconnecting it, and reports whether it did.
 func (o *Observer) refreshToken(ctx context.Context, bc *brokerClient) bool {
 	if !strings.EqualFold(bc.cfg.AuthType, "token") {
 		return false
 	}
-	// retryConnect owns the client while it runs, and a broker that never
-	// connected has none: either way this would orphan a live client or panic.
+	// retryConnect owns the client while it runs, and a never-connected broker has none.
 	if bc.retrying.Load() {
 		return false
 	}
@@ -660,8 +610,7 @@ func (o *Observer) refreshToken(ctx context.Context, bc *brokerClient) bool {
 		return false
 	}
 	o.log.Debug("refreshing token", "broker", bc.cfg.Name)
-	// Disconnect before connecting: the new client reuses the ClientID, so the
-	// broker would kick this one and its auto-reconnect would kick the new one.
+	// Disconnect first: the new client reuses the ClientID, so the broker would kick each in turn.
 	c.Disconnect(250)
 
 	newClient, err := o.connectBroker(bc.cfg, bc.iata)
@@ -669,8 +618,7 @@ func (o *Observer) refreshToken(ctx context.Context, bc *brokerClient) bool {
 		o.log.Error("token refresh reconnect failed, retrying in background",
 			"broker", bc.cfg.Name, "error", err)
 		o.recordBrokerErr(bc.cfg.Name, err)
-		// Without this the broker sits disconnected until the next refresh
-		// tick (0.8 x token lifetime away).
+		// Without this the broker sits disconnected until the next refresh tick.
 		go o.retryConnect(ctx, bc)
 		return false
 	}
@@ -680,8 +628,7 @@ func (o *Observer) refreshToken(ctx context.Context, bc *brokerClient) bool {
 	return true
 }
 
-// txCounts reads the shared mux's transmit counters. Zero when no mux is
-// wired (tests), rather than panicking on a status publish.
+// txCounts reads the shared mux's transmit counters; zero when no mux is wired (tests).
 func (o *Observer) txCounts() TxCounts {
 	if o.mux == nil {
 		return TxCounts{}
@@ -700,8 +647,7 @@ func (o *Observer) txCounts() TxCounts {
 	return out
 }
 
-// addAir accumulates one packet's estimated airtime. Cheap arithmetic, so it
-// runs on the RX path rather than being sampled.
+// addAir accumulates one packet's estimated airtime.
 func (o *Observer) addAir(dst *atomic.Uint64, packetLen int) {
 	if o.stats == nil {
 		return
@@ -815,8 +761,7 @@ func (o *Observer) connectBroker(bcfg config.BrokerConfig, iata string) (paho.Cl
 		opts.SetCredentialsProvider(func() (string, string) {
 			token, _, err := generateToken(o.id, audience, email, owner)
 			if err != nil {
-				// The provider cannot fail, so surface it here or the operator
-				// only ever sees the broker's auth rejection.
+				// The provider cannot fail, so surface the error here.
 				o.log.Error("generating auth token", "broker", bcfg.Name, "error", err)
 				o.recordBrokerErr(bcfg.Name, fmt.Errorf("generating auth token: %w", err))
 			}

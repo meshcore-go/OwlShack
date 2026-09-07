@@ -59,8 +59,6 @@ const REGEX_EXAMPLES: { pattern: string; desc: string }[] = [
   },
 ];
 
-// Help popover explaining the regex match patterns with copyable examples and
-// a link to regex101 (Go flavour) so users can test patterns against text.
 function RegexHelp() {
   return (
     <Popover>
@@ -122,8 +120,7 @@ export function BotsPage() {
     error,
     reload,
   } = useApiList<Trigger>("/api/config/triggers", "Failed to load bots");
-  // companions + channels only seed the editor's selectors; a trigger write
-  // never changes them, so they load once on mount and aren't refetched.
+  // A trigger write never changes these, so they load once on mount.
   const { items: companions } = useApiList<ConfigCompanion>(
     "/api/config/companions",
     "Failed to load companions",
@@ -310,8 +307,7 @@ function BotEditor({
     trigger?.type === "channel" ? "group" : (trigger?.type ?? "group"),
   );
   const [template, setTemplate] = useState(trigger?.template ?? "");
-  // Channels are tracked by name (unique per companion) so the picker stays
-  // name-based; they are resolved back to channel ids on submit.
+  // Tracked by name (unique per companion), resolved back to channel ids on submit.
   const [selectedChannels, setSelectedChannels] = useState<string[]>(
     (trigger?.channelIds ?? [])
       .map((id) => channelById.get(id)?.name)
@@ -330,8 +326,7 @@ function BotEditor({
   );
   const [saving, setSaving] = useState(false);
 
-  // A trigger can only target channels its companion already has (Public plus
-  // any added on the Channels page). Names are unique within a companion.
+  // A trigger can only target channels its companion already has.
   const companionChannels = useMemo(
     () => channels.filter((ch) => ch.companionId === companionId),
     [channels, companionId],

@@ -1,7 +1,4 @@
-// Discovered-peer deletion. Deletes are guarded server-side: a peer saved as a
-// contact of any companion is refused (single) or skipped (bulk) — contacts are
-// removed from the Contacts page, never by peer cleanup. The "peers" WS topic
-// broadcasts the removal so live views prune without a refetch.
+// Server-side guard: a peer saved as any companion's contact is refused (single) or skipped (bulk).
 
 export interface DeletePeersResult {
   deleted: number;

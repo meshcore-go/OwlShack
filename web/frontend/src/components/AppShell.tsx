@@ -134,8 +134,7 @@ function ThemeToggle() {
   );
 }
 
-// Only renders when the browser has offered an install prompt we can replay
-// (Chromium, installable, not already installed). Self-hides otherwise.
+// Only Chromium offers an install prompt we can replay, and only when not already installed.
 function InstallButton() {
   const { canInstall, promptInstall } = useInstallPrompt();
   if (!canInstall) return null;
@@ -201,11 +200,7 @@ function NavSection({
   );
 }
 
-// Comms group: "Companions" (→ management list) with each companion nested
-// beneath it as a one-click link to its chat, then "Bots". The companion
-// sub-list is the fast path into a conversation from anywhere — see the data
-// fetch + nav-refresh in AppShell. Sub-items auto-hide when the sidebar
-// collapses to icons (SidebarMenuSub is icon-collapse-hidden by default).
+// Sub-items auto-hide when the sidebar collapses to icons (SidebarMenuSub is icon-collapse-hidden).
 function CommsSection({
   companions,
   pathname,
@@ -231,8 +226,7 @@ function CommsSection({
           <SidebarMenuItem>
             <SidebarMenuButton
               asChild
-              // Active only on the management list itself; a selected companion
-              // lights its own sub-item instead.
+              // Active only on the management list; a selected companion lights its own sub-item.
               isActive={pathname === "/companions"}
               tooltip="Companions"
               className={cn(
@@ -325,11 +319,7 @@ export function AppShell({ children }: { children: React.ReactNode }) {
   const location = useLocation();
   const pathname = location.pathname;
 
-  // Companion roster for the Comms sub-nav. Config has no WS topic, so refresh
-  // it around companion-area navigation — the roster only changes on the
-  // companions management screens (add/rename/remove), so refetching when we
-  // enter or leave `/companions*` catches every change without polling on every
-  // unrelated nav. Items persist across the refetch, so the list never flickers.
+  // Config has no WS topic, and the roster only changes on `/companions*`, so refresh around that nav.
   const { items: companions, reload: reloadCompanions } =
     useApiList<ConfigCompanion>(
       "/api/config/companions",
@@ -448,8 +438,7 @@ function routeLabel(pathname: string): string {
   return seg.join(" / ");
 }
 
-// The phone header has room for one segment: the current page, with the
-// companion name when that is what distinguishes it.
+// The phone header has room for one segment only.
 function routeLabelShort(pathname: string): string {
   if (pathname === "/") return "overview";
   const seg = pathname.split("/").filter(Boolean).map(decodeURIComponent);
@@ -462,10 +451,7 @@ function routeLabelShort(pathname: string): string {
   return seg[seg.length - 1] ?? "overview";
 }
 
-// BottomNav is the phone-only primary navigation: the four places people go
-// most, one tap away, plus "More" which opens the full sidebar sheet. Hidden
-// from md up, where the sidebar itself is visible; --bottom-nav (index.css)
-// reserves its height so content never hides behind it.
+// --bottom-nav (index.css) reserves this bar's height so content never hides behind it.
 function BottomNav({
   companions,
   pathname,

@@ -12,11 +12,7 @@ import { cn } from "@/lib/utils";
 // Matches a ":shortcode" being typed at the caret (after start or whitespace).
 const TRIGGER = /(?:^|\s)(:[a-zA-Z0-9_+-]{2,})$/;
 
-/**
- * Signal-style inline emoji autocomplete for a textarea. Wire handleChange into
- * onChange, handleKeyDown ahead of the textarea's own key handling, and render
- * `dropdown` inside a relatively-positioned composer container.
- */
+// Wire handleKeyDown ahead of the textarea's own key handling, and render `dropdown` in a relatively-positioned container.
 export function useEmojiAutocomplete({
   textareaRef,
   setText,
@@ -101,8 +97,7 @@ export function useEmojiAutocomplete({
     [items, index, accept, close],
   );
 
-  // Memoized: this hook lives in the chat page, which re-renders on every WS
-  // message — the (usually empty) dropdown shouldn't be rebuilt each time.
+  // Memoized: the chat page re-renders on every WS message.
   const dropdown = useMemo(() => {
     if (items.length === 0) return null;
     return (

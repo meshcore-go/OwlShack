@@ -41,18 +41,12 @@ interface WsMetrics {
 
 const nowSecs = () => Math.floor(Date.now() / 1000);
 
-// staleThreshold: how long without a successful poll before a node is flagged
-// stale (amber). Derived from the node's own poll cadence — one interval plus a
-// 25% grace (min 5 min) to absorb scheduler tick + stagger — rather than a fixed
-// constant, since the interval is configurable per node.
+// One poll interval plus grace, to absorb the scheduler's tick and per-node stagger.
 function staleThreshold(intervalSecs: number): number {
   if (intervalSecs <= 0) return 0; // unknown cadence → don't flag on time
   return intervalSecs + Math.max(intervalSecs * 0.25, 300);
 }
 
-// Which metrics get a trend sparkline is decided per-node by sparklineMetricKeys
-// (the keys backing the tiles), so it adapts to whatever sensors/channels a board
-// exposes rather than a hardcoded list.
 const SPARK_SPAN_SECS = 24 * 3600; // recent-trend window for the cards
 const SPARK_BUCKET_SECS = 900; // 15-min buckets → ~smooth, light payload
 
@@ -105,9 +99,7 @@ export function MonitoringPage() {
     load();
   }, [load]);
 
-  // Only needed to resolve link-monitor hop labels ("A → B" instead of "SNR
-  // hop N") — cheap, so fetched unconditionally rather than gating on
-  // whether any card is currently a link.
+  // Only resolves link-monitor hop labels ("A → B" instead of "SNR hop N").
   useEffect(() => {
     fetch("/api/links")
       .then((r) => (r.ok ? r.json() : []))
@@ -155,8 +147,7 @@ export function MonitoringPage() {
         lastPollTs: m.ts,
         lastOkTs: m.ts,
         lastError: "",
-        // WS payload carries no interval; keep the value from the last fetch
-        // (0 for a node first seen over WS — it's fresh, so never stale anyway).
+        // The WS payload carries no interval; keep the value from the last fetch.
         intervalSecs: idx >= 0 ? prev[idx].intervalSecs : 0,
         metrics: { ...(idx >= 0 ? prev[idx].metrics : {}), ...m.metrics },
       };
@@ -185,8 +176,7 @@ export function MonitoringPage() {
 
   const { connected } = useWebSocket(["metrics"], onWs);
 
-  // Stable, name-ordered card layout (falls back to pubkey for unnamed nodes) so
-  // cards don't jump around as WS updates arrive.
+  // Stable ordering so cards don't jump around as WS updates arrive.
   const sortedNodes = useMemo(
     () =>
       [...nodes].sort((a, b) =>

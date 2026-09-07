@@ -12,12 +12,7 @@ import (
 	"github.com/meshcore-go/meshcore-go/node"
 )
 
-// wirePacketLogger taps the mux to persist every rx/tx packet and broadcast it
-// to WebSocket subscribers. TX is taken from the modem, not from a virtual
-// radio: a virtual radio only fires its outbound handlers for its OWN sends
-// (mux.virtualRadio.Enqueue), so a logging radio nothing transmits through
-// never sees one. The modem hook fires once per actual transmission, at write
-// time, for every virtual radio.
+// TX is hooked on the modem, not a virtual radio: a virtual radio fires outbound handlers only for its own sends.
 func wirePacketLogger(mux *node.RadioMux, modem node.Modem, db *store.Store, srv *api.Server, compReg *companionRegistry) {
 	hub := srv.Hub()
 	logRadio := mux.NewRadio()
@@ -84,10 +79,7 @@ func wirePacketLogger(mux *node.RadioMux, modem node.Modem, db *store.Store, srv
 
 		hub.Broadcast("packets", packetBroadcastMsg("tx", rec.ReceivedAt, data, pkt, err, srv.ChannelLookup()))
 
-		// Same hook feeds the MQTT observer: it taps the mux's RX side only, so
-		// this is the only place that sees a transmission. Resolved through the
-		// registry because a config reload builds new companions (and new
-		// observers) while this handler, once added, can never be removed.
+		// Resolved through the registry because a reload builds new observers while this handler can never be removed.
 		if compReg != nil {
 			for _, c := range compReg.all() {
 				if obs := c.Observer(); obs != nil {
@@ -98,8 +90,7 @@ func wirePacketLogger(mux *node.RadioMux, modem node.Modem, db *store.Store, srv
 	})
 }
 
-// packetTypes extracts the route and payload type pointers from a parsed
-// packet, or (nil, nil) when parsing failed.
+// packetTypes returns (nil, nil) when parsing failed.
 func packetTypes(pkt *meshcore.Packet, parseErr error) (routeType, payloadType *uint8) {
 	if parseErr != nil {
 		return nil, nil

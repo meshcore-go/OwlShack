@@ -23,39 +23,20 @@ type DeviceStats struct {
 	NoiseFloor int16
 	BatteryMV  uint16
 	UptimeSecs uint32
-	// MCUTempC is the modem board's MCU temperature. HaveMCUTemp is false when
-	// the board can't measure one (the modem answers HW_ERR_NO_CALLBACK), so
-	// 0 °C is distinguishable from unknown.
+	// HaveMCUTemp is false when the board cannot measure one, keeping 0 °C distinguishable from unknown.
 	MCUTempC    float64
 	HaveMCUTemp bool
 }
 
-// LinkStats mirrors hardware.ModemStats so consumers don't take a dependency
-// on the driver package. These are the library's own counters for faults we
-// otherwise never see: dropped frames, hardware errors, stalled handlers, and
-// signal metadata that could not be matched to a packet.
-//
-// ponytail: KISS-shaped despite the neutral name, and KISS is the only driver
-// meshcore-go v1.3.0 has. Only InboundDropped* and HandlerSlow are
-// driver-neutral (any modem has an inbound queue and a dispatch loop); the
-// other six are KISS *protocol* concepts — HW_RESP_ERROR frames, SETHARDWARE
-// frame decoding, TX_DONE waits, signal-report frame pairing — with no SPI
-// analogue. When a direct SX126x/SPI driver lands, those six must become
-// omittable on the wire rather than publishing 0, the way DeviceStats.
-// HaveMCUTemp keeps "no sensor" distinguishable from 0 °C; and that driver's
-// own counters (CRC errors, IRQ timeouts, FIFO overruns) will need somewhere
-// to go. Don't design that seam before the driver exists.
+// ponytail: LinkStats mirrors hardware.ModemStats; six counters are KISS protocol concepts, to become omittable rather than 0 when a direct SX126x driver lands.
 type LinkStats struct {
 	// InboundDropped* are frames discarded because our inbound queue was full.
 	InboundDroppedOldest uint64
 	InboundDroppedNew    uint64
-	// RxMetaTimeouts is signal metadata that never arrived; RxMetaMisattributed
-	// is metadata matched to the wrong packet — which means any SNR/RSSI we
-	// publish for it is wrong, so it matters more than its rarity suggests.
+	// RxMetaTimeouts: metadata never arrived. RxMetaMisattributed: matched to the wrong packet, so its SNR/RSSI is wrong.
 	RxMetaTimeouts      uint64
 	RxMetaMisattributed uint64
-	// HandlerSlow counts dispatches over the watchdog threshold. DATA frames
-	// dispatch serially, so one slow handler stalls RX for every consumer.
+	// HandlerSlow counts dispatches over the watchdog; DATA dispatch is serial, so one slow handler stalls RX for every consumer.
 	HandlerSlow    uint64
 	HwDecodeErrors uint64
 	HwErrors       uint64 // HW_RESP_ERROR frames received
@@ -65,13 +46,9 @@ type LinkStats struct {
 type StatsProvider interface {
 	RadioConfig() RadioInfo
 	Stats(ctx context.Context) DeviceStats
-	// LinkStats reports the driver's fault counters. No ctx: these are atomic
-	// loads, unlike Stats which polls the board over the wire.
+	// LinkStats takes no ctx: atomic loads, unlike Stats which polls the board over the wire.
 	LinkStats() LinkStats
-	// EstAirtimeMs and PacketScore mirror the firmware's getEstAirtimeFor and
-	// packetScore, which is what its packet log reports as time= and score=.
-	// They live here so consumers stay off the driver package; both return 0
-	// when the radio params are unknown. Pure arithmetic, so no ctx.
+	// EstAirtimeMs and PacketScore mirror the firmware's getEstAirtimeFor and packetScore; both return 0 when radio params are unknown.
 	EstAirtimeMs(packetLen int) uint32
 	PacketScore(snrDB float64, packetLen int) float64
 }
@@ -176,8 +153,7 @@ func (p *kissStatsProvider) onNoiseFloor(_ byte, data []byte) {
 	p.mu.Unlock()
 }
 
-// onMCUTemp decodes the modem's int16 tenths-of-a-degree reply
-// (KissModem::handleGetMCUTemp).
+// onMCUTemp decodes the int16 tenths-of-a-degree reply (KissModem::handleGetMCUTemp).
 func (p *kissStatsProvider) onMCUTemp(_ byte, data []byte) {
 	if len(data) < 2 {
 		return

@@ -7,8 +7,7 @@ import (
 	meshcore "github.com/meshcore-go/meshcore-go"
 )
 
-// SeriesEntry is one sensor channel's min/max/avg over the requested window
-// (firmware MinMaxAvg).
+// SeriesEntry is one sensor channel's min/max/avg over the requested window (firmware MinMaxAvg).
 type SeriesEntry struct {
 	Channel int     `json:"channel"`
 	Type    int     `json:"type"`
@@ -26,13 +25,7 @@ type Series struct {
 	Raw      string        `json:"raw"`
 }
 
-// ParseSeries decodes the body of a sensor's GET_AVG_MIN_MAX reply (after the
-// reflected tag): [now:u32 LE] then per entry [channel:u8][lpp_type:u8] and
-// min, max, avg each packed by the firmware's putFloat — MSB-first integer of
-// lppDataSize(type) bytes, scaled by lppMultiplier(type), two's-complement when
-// lppSigned(type). Composite types (GPS, accelerometer…) are never aggregated
-// by the firmware; their size is honoured so the stream stays aligned but the
-// value is reported as its raw integer.
+// ParseSeries decodes a GET_AVG_MIN_MAX body (after the reflected tag): [now:u32 LE] then per entry [channel:u8][lpp_type:u8][min][max][avg], each value packed by the firmware's putFloat.
 func ParseSeries(data []byte) (*Series, error) {
 	if len(data) < 4 {
 		return nil, fmt.Errorf("series data too short: got %d bytes", len(data))
@@ -44,8 +37,7 @@ func ParseSeries(data []byte) (*Series, error) {
 	}
 	pos := 4
 	for pos+2 <= len(data) {
-		// The reply is AES-ECB padded to a 16-byte block, so a run of trailing
-		// zeros is padding rather than a channel — firmware channels are 1-based.
+		// The reply is AES-ECB padded to a 16-byte block; firmware channels are 1-based, so trailing zeros are padding.
 		if allZero(data[pos:]) {
 			break
 		}
@@ -71,8 +63,7 @@ func ParseSeries(data []byte) (*Series, error) {
 	return s, nil
 }
 
-// lppGetFloat mirrors the firmware getFloat: MSB-first, optional two's
-// complement over `size*8` bits, divided by the multiplier.
+// lppGetFloat mirrors the firmware getFloat: MSB-first, optional two's complement over size*8 bits, divided by the multiplier.
 func lppGetFloat(b []byte, mult uint32, signed bool) float64 {
 	var v uint64
 	for _, x := range b {
@@ -99,8 +90,7 @@ func allZero(b []byte) bool {
 	return true
 }
 
-// The three tables below are the firmware's getDataSize / getMultiplier /
-// isSigned (examples/simple_sensor/SensorMesh.cpp).
+// The three tables below are the firmware's getDataSize / getMultiplier / isSigned (examples/simple_sensor/SensorMesh.cpp).
 func lppDataSize(typ byte) int {
 	switch typ {
 	case meshcore.LPPGPS:

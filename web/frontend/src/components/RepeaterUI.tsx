@@ -38,13 +38,7 @@ import { cn } from "@/lib/utils";
 
 // Shared by RepeaterDetailPage (remote) and RepeaterNodePage (local).
 
-// RepeaterTabsList is one horizontally scrolling row. Three overrides earn
-// their keep: the height must be orientation-scoped (a plain h-auto loses to
-// `group-data-[orientation=horizontal]/tabs:h-9`, which pinned the strip to
-// 36px while a wrapped second row painted over the panel below it); overflow-x
-// forces overflow-y to compute to `auto`, so the active indicator's default
-// `after:bottom-[-5px]` hangs below the box and the strip scrolls vertically —
-// pb-1.5 takes that overhang into the padding box instead of clipping it.
+// The height override must be orientation-scoped or `tabs:h-9` wins; pb-1.5 absorbs the active indicator's overhang.
 export function RepeaterTabsList({ children }: { children: ReactNode }) {
   const ref = useRef<HTMLDivElement>(null);
   const [edges, setEdges] = useState({ left: false, right: false });
@@ -59,8 +53,7 @@ export function RepeaterTabsList({ children }: { children: ReactNode }) {
     setEdges((p) => (p.left === left && p.right === right ? p : { left, right }));
   }, []);
 
-  // No dep array: the tab count changes when an admin logs in, which resizes
-  // nothing a ResizeObserver would see.
+  // No dep array: an admin login changes the tab count without a resize the observer would see.
   useEffect(sync);
 
   useEffect(() => {
@@ -90,9 +83,7 @@ export function RepeaterTabsList({ children }: { children: ReactNode }) {
   );
 }
 
-// ScrollEdge is the "there are more tabs this way" affordance. It sits outside
-// the scroll container (a child would scroll with the tabs) and stops a pixel
-// short of the bottom so it never paints over the strip's underline.
+// Sits outside the scroll container — a child would scroll with the tabs.
 function ScrollEdge({ side, show }: { side: "left" | "right"; show: boolean }) {
   const Icon = side === "left" ? ChevronLeft : ChevronRight;
   return (
@@ -126,9 +117,7 @@ export function RepeaterTab({
       value={value}
       className={cn(
         "rounded-none flex-none min-h-10 sm:min-h-0 px-3 sm:px-4 py-2.5 font-mono text-[11px] uppercase tracking-widest gap-1.5 border-b-2 border-transparent hover:bg-muted/30",
-        // ! is required: the primitive's dark: + group-data-[variant=line] active
-        // rules outrank a plain data-[state=active], so these were dead in dark
-        // mode. after:!opacity-0 drops its near-white bar, 5px below the tab.
+        // ! is required: the primitive's dark: + group-data-[variant=line] rules outrank plain data-[state=active].
         "data-[state=active]:!bg-primary/10 data-[state=active]:!text-primary data-[state=active]:border-b-2 data-[state=active]:!border-primary data-[state=active]:after:!opacity-0",
       )}
     >
@@ -182,9 +171,7 @@ export const PERM_GUEST = 0;
 export const PERM_READ_ONLY = 1;
 export const PERM_READ_WRITE = 2;
 export const PERM_ADMIN = 3;
-// Sensor-only alert subscription bits (SensorMesh.h PERM_RECV_ALERTS_*). The
-// firmware writes the permission byte whole on setperm, so a role change must
-// carry these along or the client silently stops receiving alerts.
+// Sensor alert bits (SensorMesh.h PERM_RECV_ALERTS_*); setperm writes the byte whole, so a role change must carry them.
 export const PERM_ALERTS_LO = 0x40;
 export const PERM_ALERTS_HI = 0x80;
 export const PERM_ALERTS_MASK = PERM_ALERTS_LO | PERM_ALERTS_HI;

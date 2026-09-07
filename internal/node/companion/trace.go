@@ -9,12 +9,10 @@ import (
 	"time"
 )
 
-// traceSilenceWindow mirrors the frontend's TRACE_TIMEOUT_MS: a trace is only
-// considered done once no further partial echo has arrived for this long.
+// traceSilenceWindow mirrors the frontend's TRACE_TIMEOUT_MS.
 const traceSilenceWindow = 5 * time.Second
 
-// traceEcho is one overheard trace packet (partial or final) for a tag, fed
-// in by the PayloadTypeTrace handler in recv.go.
+// traceEcho is one overheard trace packet, partial or final, fed in by the PayloadTypeTrace handler.
 type traceEcho struct {
 	hops    int
 	pathHex []string
@@ -25,19 +23,14 @@ type traceEcho struct {
 // TraceOutcome is the result of one awaited trace, returned by RunTrace.
 type TraceOutcome struct {
 	Tag      uint32
-	HopSNRs  []float64 // real dB; may be partial if the silence window lapsed first
+	HopSNRs  []float64 // real dB; partial if the silence window lapsed first
 	PathHex  []string
 	SNR      *float64 // SNR at which we received the final returning packet
 	Elapsed  time.Duration
 	Complete bool // len(HopSNRs) >= the expected hop count before timing out
 }
 
-// RunTrace sends one trace over path/pathHashSize and blocks until the echo
-// path completes (an echo reports at least as many hops as the path implies)
-// or traceSilenceWindow elapses with no further partial echo. The waiter is
-// registered before the packet is transmitted so a fast echo can never race
-// ahead of registration. Returns a non-nil outcome with Complete=false on
-// timeout; an error is returned only for validation/send failures.
+// RunTrace blocks until the echo path completes or traceSilenceWindow elapses; it returns a non-nil outcome with Complete=false on timeout, an error only for validation/send failures.
 func (c *Companion) RunTrace(ctx context.Context, path []byte, pathHashSize uint8) (*TraceOutcome, error) {
 	if len(path) == 0 {
 		return nil, fmt.Errorf("path is required")
@@ -73,8 +66,7 @@ func (c *Companion) RunTrace(ctx context.Context, path []byte, pathHashSize uint
 	timer := time.NewTimer(traceSilenceWindow)
 	defer timer.Stop()
 
-	// Seed non-nil empty slices: nil would json-marshal as `null`, not `[]`,
-	// crashing JS consumers that .forEach() it.
+	// Non-nil empty slices: nil marshals as `null`, which JS consumers .forEach() over.
 	last := traceEcho{hopSNRs: []float64{}, pathHex: []string{}}
 	for {
 		select {
@@ -137,8 +129,7 @@ func (c *Companion) deregisterTraceWaiter(tag uint32) {
 	delete(c.traceWaiters.byTag, tag)
 }
 
-// notifyTraceWaiter is called from the RX dispatch goroutine (recv.go) for
-// every overheard trace echo. It never blocks the caller.
+// notifyTraceWaiter is called from the RX dispatch goroutine and never blocks.
 func (c *Companion) notifyTraceWaiter(tag uint32, echo traceEcho) {
 	c.traceWaiters.Lock()
 	ch, ok := c.traceWaiters.byTag[tag]

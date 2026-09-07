@@ -9,15 +9,11 @@ import {
 import { PeerAvatar } from "@/components/PeerAvatar";
 import { cn } from "@/lib/utils";
 
-// Matches an "@partial" mention being typed at the caret. The leading guard
-// (start-of-string or whitespace) keeps it from firing inside "foo@bar". The
-// query class excludes whitespace, '@' and brackets so an already-inserted
-// "@[name]" token never re-triggers the popup.
+// Guards against firing inside "foo@bar" or on an already-inserted "@[name]" token.
 const TRIGGER = /(?:^|\s)@([^\s@[\]]*)$/;
 const MAX_RESULTS = 8;
 
 // Prefix matches rank ahead of substring matches; empty query lists everyone.
-// Mirrors the prefix-first-then-substring ranking the CLI autocomplete uses.
 function rankNames(names: string[], query: string): string[] {
   if (!query) return names.slice(0, MAX_RESULTS);
   const q = query.toLowerCase();
@@ -31,14 +27,7 @@ function rankNames(names: string[], query: string): string[] {
   return [...prefix, ...substr].slice(0, MAX_RESULTS);
 }
 
-/**
- * Inline "@name" mention autocomplete for a textarea, modelled on
- * useEmojiAutocomplete. `names` is the candidate list (channel/room
- * participants) filtered locally on each keystroke — no per-keystroke fetch.
- * Selecting inserts the renderer's "@[name] " mention token. Wire handleChange
- * into onChange, handleKeyDown ahead of the textarea's own key handling, and
- * render `dropdown` inside the relatively-positioned composer container.
- */
+// Inserts the renderer's "@[name] " token; wire it up like useEmojiAutocomplete.
 export function useMentionAutocomplete({
   textareaRef,
   setText,
@@ -129,8 +118,7 @@ export function useMentionAutocomplete({
     [items, index, accept, close],
   );
 
-  // Memoized: the chat page re-renders on every WS message — the (usually
-  // empty) dropdown shouldn't be rebuilt each time.
+  // Memoized: the chat page re-renders on every WS message.
   const dropdown = useMemo(() => {
     if (items.length === 0) return null;
     return (

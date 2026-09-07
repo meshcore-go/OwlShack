@@ -12,9 +12,7 @@ import (
 	"github.com/meshcore-go/OwlShack/internal/store"
 )
 
-// SignalTester is the signal-test-runner seam. Implemented by
-// *signaltest.Service and installed via Server.SetSignalTester — same
-// process-lifetime pattern as NodePoller/SetPoller.
+// SignalTester is the signal-test-runner seam, implemented by *signaltest.Service.
 type SignalTester interface {
 	Begin(ctx context.Context, p signaltest.Params) (int64, error)
 	Cancel(id int64) error
@@ -29,8 +27,7 @@ type startSignalTestRequest struct {
 	Label        string `json:"label"`
 }
 
-// handleStartSignalTest starts a new repeatable trace test on a companion.
-// Only one test runs at a time process-wide (409 if one is already active).
+// handleStartSignalTest 409s if a test is already active: only one runs at a time process-wide.
 func (s *Server) handleStartSignalTest(w http.ResponseWriter, r *http.Request) {
 	name := r.PathValue("name")
 	tester := s.signalTesterRef()
@@ -116,8 +113,7 @@ func (s *Server) toSignalTestJSON(ctx context.Context, t store.SignalTest) signa
 	}
 }
 
-// handleListSignalTests returns every saved test (most recent first),
-// optionally filtered to one companion via ?companion=name.
+// handleListSignalTests returns saved tests newest first; ?companion=name filters to one companion.
 func (s *Server) handleListSignalTests(w http.ResponseWriter, r *http.Request) {
 	var companionID int64
 	if name := r.URL.Query().Get("companion"); name != "" {
@@ -173,8 +169,7 @@ func (s *Server) signalTestByID(w http.ResponseWriter, r *http.Request) (*store.
 	return t, true
 }
 
-// handleGetSignalTest returns a test with its full run history and computed
-// per-hop stats.
+// handleGetSignalTest returns a test with its run history and computed per-hop stats.
 func (s *Server) handleGetSignalTest(w http.ResponseWriter, r *http.Request) {
 	t, ok := s.signalTestByID(w, r)
 	if !ok {
@@ -251,8 +246,7 @@ func (s *Server) handleUpdateSignalTest(w http.ResponseWriter, r *http.Request) 
 	writeJSON(w, http.StatusOK, map[string]bool{"ok": true})
 }
 
-// handleDeleteSignalTest deletes a saved test and its runs. Refuses to delete
-// the currently running test (cancel it first).
+// handleDeleteSignalTest refuses to delete the currently running test.
 func (s *Server) handleDeleteSignalTest(w http.ResponseWriter, r *http.Request) {
 	t, ok := s.signalTestByID(w, r)
 	if !ok {

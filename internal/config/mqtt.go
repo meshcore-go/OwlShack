@@ -8,10 +8,7 @@ import (
 )
 
 type MqttConfig struct {
-	// Node names the configured node (companion) whose identity feeds the
-	// observer. Empty = the first companion. Only one node publishes to MQTT;
-	// the block lives at the top level of the config (legacy per-companion
-	// blocks are hoisted there on load).
+	// Node names the companion whose identity feeds the observer; empty = the first companion.
 	Node    *string `json:"node,omitempty" yaml:"node,omitempty" toml:"node,omitempty"`
 	Enabled *bool   `json:"enabled,omitempty" yaml:"enabled,omitempty" toml:"enabled,omitempty"` // nil = enabled
 
@@ -35,9 +32,7 @@ type BrokerConfig struct {
 	Port      int    `json:"port" yaml:"port" toml:"port"`
 	// Deprecated: folded into the topic templates by ApplyDefaults.
 	TopicPrefix string `json:"topicPrefix,omitempty" yaml:"topicPrefix,omitempty" toml:"topicPrefix,omitempty"`
-	// Topic templates. Placeholders: {iata} {pubkey} {name} —
-	// meshcoretomqtt-style uppercase tokens ({IATA}, {PUBLIC_KEY}) also work.
-	// Empty = "meshcore/{iata}/{pubkey}/packets" (resp. "/status").
+	// Placeholders {iata} {pubkey} {name}, plus meshcoretomqtt's uppercase tokens; empty = "meshcore/{iata}/{pubkey}/packets" (resp. "/status").
 	PacketTopic           string   `json:"packetTopic,omitempty" yaml:"packetTopic,omitempty" toml:"packetTopic,omitempty"`
 	StatusTopic           string   `json:"statusTopic,omitempty" yaml:"statusTopic,omitempty" toml:"statusTopic,omitempty"`
 	DisallowedPacketTypes []string `json:"disallowedPacketTypes" yaml:"disallowedPacketTypes" toml:"disallowedPacketTypes"`
@@ -80,8 +75,7 @@ func (b *BrokerConfig) Validate() error {
 	return nil
 }
 
-// TopicPlaceholders are the tokens a broker topic template may use. Both the
-// lowercase forms and meshcoretomqtt's uppercase forms are accepted.
+// TopicPlaceholders are the tokens a topic template may use, lowercase or meshcoretomqtt's uppercase.
 var TopicPlaceholders = []string{
 	"iata", "IATA",
 	"pubkey", "PUBKEY", "publicKey", "PUBLIC_KEY",
@@ -90,8 +84,7 @@ var TopicPlaceholders = []string{
 
 var topicTokenRe = regexp.MustCompile(`\{([^{}]*)\}`)
 
-// ValidateTopicTemplate rejects topic templates with unknown placeholders or
-// MQTT wildcards (publish topics may not contain + or #). Empty = default.
+// ValidateTopicTemplate rejects unknown placeholders and MQTT wildcards (publish topics may not contain + or #).
 func ValidateTopicTemplate(t string) error {
 	if t == "" {
 		return nil
@@ -107,8 +100,7 @@ func ValidateTopicTemplate(t string) error {
 	return nil
 }
 
-// migrateTopicPrefix folds the deprecated topicPrefix field into explicit
-// topic templates so feeds keep their topic paths.
+// migrateTopicPrefix folds the deprecated topicPrefix into explicit topic templates.
 func (b *BrokerConfig) migrateTopicPrefix() {
 	if b.TopicPrefix == "" {
 		return

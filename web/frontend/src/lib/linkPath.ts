@@ -1,5 +1,4 @@
-// Resolves a link monitor's saved path to "<source> → <destination>" hop
-// labels for SNR tiles/charts.
+// Resolves a link monitor's saved path to "<source> → <destination>" hop labels.
 
 export interface NamedPeer {
   pubkey: string;
@@ -28,12 +27,10 @@ export function buildPeerByHash(
   return map;
 }
 
-// Display-only toggles (collector still records both readings): the "you →
-// first node" leg is the local radio, normally rock solid and just clutter.
+// Display-only toggles; the collector still records both readings.
 export const FIRST_HOP_METRIC = "snr_hop1";
 export const LAST_SNR_METRIC = "last_snr";
 
-// Strips the first-hop/last-SNR readings per a link's ignoreFirstHop/hideLastSnr settings.
 export function filterMetrics(
   metrics: Record<string, number>,
   ignoreFirstHop: boolean,
@@ -51,7 +48,6 @@ export function filterMetrics(
   return out;
 }
 
-// Same as filterMetrics but for a name list (pages that drive charts off available names).
 export function filterMetricNames(
   names: string[],
   ignoreFirstHop: boolean,
@@ -65,8 +61,7 @@ export function filterMetricNames(
   );
 }
 
-// Resolves a 1-indexed hop number to "<source> → <destination>", falling
-// back to the hash prefix for an unresolved peer.
+// Hop numbers are 1-indexed.
 export function hopDirectionLabel(
   pathHex: string,
   hashSize: number,

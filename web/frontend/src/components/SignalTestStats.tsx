@@ -1,8 +1,6 @@
 import type { SignalTestStats as Stats } from "@/lib/signalTestApi";
 
-// Per-hop stats table shared by the live test panel, the saved-test detail
-// view, and the multi-test compare table. hopLabel lets callers resolve a hop
-// index to a repeater name (falls back to "Hop N").
+// hopLabel resolves a hop index to a repeater name; it falls back to "Hop N".
 export function SignalTestStats({
   stats,
   hopLabel,

@@ -43,13 +43,10 @@ const INTERVAL_OPTS: { value: string; label: string }[] = [
   { value: "86400", label: "24 hours" },
 ];
 
-// Mirrors internal/monitor.DefaultRetrySecs — the poller's built-in retry
-// delay when a link doesn't override it (value "0").
+// Mirrors internal/monitor.DefaultRetrySecs, used when a link doesn't override it (value "0").
 const DEFAULT_RETRY_SECS = 300;
 
-// LinkMonitorSettings is the per-link config form on the monitoring detail
-// page — the link-monitor sibling of MonitoringSettings. Fetches the link by
-// its synthetic key, since the detail page only has the key, not the DB row.
+// Fetches the link by its synthetic key: the detail page has the key, not the DB row.
 export function LinkMonitorSettings({
   linkKey,
   onSaved,
@@ -100,9 +97,7 @@ export function LinkMonitorSettings({
     load();
   }, [load]);
 
-  // A link only fast-retries a timed-out trace when Max retries is
-  // explicitly positive (internal/app.linkCollector.Collect) — 0/Default and
-  // -1/None are both no-ops here.
+  // A link fast-retries a timed-out trace only when Max retries is positive (internal/app.linkCollector.Collect).
   const noRetries = Number(maxRetries) <= 0;
 
   // Mirrors the backend's validateLinkRetry.

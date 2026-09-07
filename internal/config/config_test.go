@@ -13,8 +13,7 @@ const validSeedHex = "0102030405060708090a0b0c0d0e0f101112131415161718191a1b1c1d
 
 func strPtr(s string) *string { return &s }
 
-// validConfig returns a minimal known-good *Config that passes Validate. Tests
-// mutate one field per case and re-validate.
+// validConfig returns a minimal known-good *Config; tests mutate one field per case and re-validate.
 func validConfig(t *testing.T) *Config {
 	t.Helper()
 	conn := "serial:///dev/ttyACM0"
@@ -40,8 +39,7 @@ func validConfig(t *testing.T) *Config {
 func TestConfig_Validate(t *testing.T) {
 	t.Parallel()
 
-	// Sanity: the baseline helper must actually pass, else every negative case
-	// below is meaningless.
+	// Sanity: the baseline must pass, else every negative case below is meaningless.
 	t.Run("valid config passes", func(t *testing.T) {
 		t.Parallel()
 		if err := validConfig(t).Validate(); err != nil {
@@ -133,8 +131,7 @@ func TestConfig_Validate(t *testing.T) {
 			wantErr: true,
 		},
 		{
-			// A bad standalone channel key (not referenced by any trigger) must
-			// also be rejected — it still fails companion construction.
+			// A standalone channel key, referenced by no trigger, still fails companion construction.
 			name: "standalone channel with non-hex private key",
 			mutate: func(c *Config) {
 				(*c.Companions[0].Channels)[0].PrivateKey = "nothex!!"
@@ -384,7 +381,6 @@ func TestValidateRegionName(t *testing.T) {
 func TestChannelRef_Validate(t *testing.T) {
 	t.Parallel()
 
-	// 32 bytes (64 hex chars) is the canonical channel secret length.
 	const secret16 = "00112233445566778899aabbccddeeff" // channel PSKs are 16 bytes (NewChannelFromPSK)
 
 	tests := []struct {
@@ -740,8 +736,7 @@ func TestConfigRoundTrip(t *testing.T) {
 		if chans == nil {
 			t.Fatal("Channels = nil after round-trip")
 		}
-		// ApplyDefaults pins the Public channel at the front; the secret channel
-		// must still be present with its key intact.
+		// ApplyDefaults pins Public at the front; the secret channel must survive with its key.
 		var secret *ChannelRef
 		for i := range *chans {
 			if (*chans)[i].Name == "secret" {
@@ -829,10 +824,7 @@ func TestKeys(t *testing.T) {
 
 	t.Run("PubKeyHexFromSeed matches fixed known vector", func(t *testing.T) {
 		t.Parallel()
-		// A fixed seed -> pubkey pair (computed once with crypto/ed25519). Pinning
-		// the literal expected value guards against an accidental change to the
-		// derivation (e.g. a swap to a different key scheme), independent of the
-		// function under test.
+		// A fixed seed -> pubkey pair, computed once with crypto/ed25519.
 		const wantPub = "79b5562e8fe654f94078b112e8a98ba7901f853ae695bed7e0e3910bad049664"
 		pub, err := PubKeyHexFromSeed(validSeedHex)
 		if err != nil {
@@ -865,11 +857,7 @@ func TestKeys(t *testing.T) {
 	})
 }
 
-// TestRepeaterAdvertIntervalRange pins the firmware CommonCLI ranges: zero-hop
-// is 0 (off) or 60-240 minutes, flood is 0 or 3-168 hours, both stored in
-// seconds. Out of range must be rejected — the UI let 60 SECONDS through
-// before this, which adverts 60x more often than the firmware permits and made
-// `get advert.interval` report an unsettable 1.
+// TestRepeaterAdvertIntervalRange pins the firmware CommonCLI ranges: zero-hop 0 (off) or 60-240 minutes, flood 0 or 3-168 hours, stored in seconds.
 func TestRepeaterAdvertIntervalRange(t *testing.T) {
 	secs := func(v int) *int { return &v }
 	cases := []struct {
@@ -899,8 +887,7 @@ func TestRepeaterAdvertIntervalRange(t *testing.T) {
 	}
 }
 
-// TestPathHashSizeRange: 1-3 bytes (the firmware's `path.hash.mode` takes this
-// minus one and checks `mode < 3`), enforced globally and per node.
+// TestPathHashSizeRange: 1-3 bytes (the firmware's `path.hash.mode` takes this minus one), enforced globally and per node.
 func TestPathHashSizeRange(t *testing.T) {
 	n := func(v int) *int { return &v }
 	for _, c := range []struct {
@@ -926,8 +913,7 @@ func TestPathHashSizeRange(t *testing.T) {
 	}
 }
 
-// TestChannelRefKeyLength: a hex key of the wrong length used to pass Validate
-// and then fail companion construction on every start.
+// TestChannelRefKeyLength: a wrong-length hex key used to pass Validate and then fail companion construction on every start.
 func TestChannelRefKeyLength(t *testing.T) {
 	for _, c := range []struct {
 		key     string

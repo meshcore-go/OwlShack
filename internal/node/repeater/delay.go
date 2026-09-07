@@ -10,8 +10,7 @@ import (
 	"github.com/meshcore-go/meshcore-go/node"
 )
 
-// floodRelayDelay / directRelayDelay port MyMesh::getRetransmitDelay /
-// getDirectRetransmitDelay: rand[0, 5t] with t = airtime × factor.
+// Ports MyMesh::getRetransmitDelay / getDirectRetransmitDelay: rand[0, 5t] with t = airtime × factor.
 func (r *Repeater) floodRelayDelay(_ int, airtimeMs uint32) time.Duration {
 	cfg := r.cfgSnapshot()
 	return relayDelay(airtimeMs, cfg.TxDelayFactorOr())
@@ -27,8 +26,7 @@ func relayDelay(airtimeMs uint32, factor float64) time.Duration {
 	return time.Duration(rand.IntN(int(5*t)+1)) * time.Millisecond
 }
 
-// rxDelay ports MyMesh::calcRxDelay: (base^(0.85-score) - 1) × airtime; off
-// when rx_delay_base is 0 or the spreading factor is unknown.
+// rxDelay ports MyMesh::calcRxDelay: (base^(0.85-score) - 1) × airtime, off when base is 0 or the SF is unknown.
 func (r *Repeater) rxDelay(pkt *meshcore.Packet, packetLen int, airtimeMs uint32) time.Duration {
 	cfg := r.cfgSnapshot()
 	base := cfg.RxDelayBaseOr()

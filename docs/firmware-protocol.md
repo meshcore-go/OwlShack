@@ -249,6 +249,20 @@ segment is historical; rooms share it too) and the same page:
   with `SensorMesh.cpp` if upstream adds types. A guest (`PERM_ACL_GUEST`)
   gets no reply — the firmware requires read-only or better — so the request
   times out rather than erroring.
+- **Composite LPP types are never aggregated.** The firmware skips min/max/avg
+  for GPS, polyline and accelerometer, but still emits their full payload so the
+  stream stays aligned; the value is reported as a raw integer, not a scaled
+  reading. `lppDataSize` returning 9/8/6 for those three is the only place this
+  is visible in our code, so do not "fix" it into a decoded value.
+- **Channel numbering moved in 1.16.** Firmware <=1.15 lumps external sensors
+  onto the self channel (1) alongside the board's own readings; 1.16+ gives each
+  sensor its own channel from 2 up. The MCU emits its own telemetry first, which
+  is why `internal/telemetry` takes the *first* reading of each self-channel type
+  as the node's own and treats later ones as external.
+- **A board upgrading 1.15 -> 1.16 changes its channel keys**, so its stored
+  series gets a one-off discontinuity: the old keys stop and new ones start.
+  Accepted rather than migrated — the readings either side are the same sensor
+  but there is nothing on the wire that proves it.
 - **CLI:** CommonCLI plus `setperm` and `io` (GPIO, board-dependent — `getGpio()`
   defaults to 0). `sensor list` / `sensor get <k>` / `sensor set <k> <v>` are
   **CommonCLI**, so every role answers them (a GPS repeater exposes `gps`) —

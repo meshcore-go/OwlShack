@@ -9,17 +9,10 @@ import (
 	"strconv"
 )
 
-// maxBackupUpload bounds a restore upload. A full database export of a
-// long-running node is a few MB; 256 MB is generous and stops an unbounded
-// read into memory.
+// maxBackupUpload stops an unbounded read into memory; a full export is a few MB.
 const maxBackupUpload = 256 << 20
 
-// handleBackupExport builds a backup and streams it as a file download.
-//
-//	POST /api/backup   { companions, contacts, packetDays, ... }
-//
-// POST rather than GET because the selection is a document, not a query
-// string; the browser downloads it from a blob.
+// handleBackupExport POSTs rather than GETs because the selection is a document, not a query string.
 func (s *Server) handleBackupExport(w http.ResponseWriter, r *http.Request) {
 	b := s.backendRef()
 	if b == nil {
@@ -48,9 +41,7 @@ func (s *Server) handleBackupExport(w http.ResponseWriter, r *http.Request) {
 	_, _ = w.Write(file.Data)
 }
 
-// handleBackupEstimate reports what a selection would capture.
-//
-//	POST /api/backup/estimate   (same body as the export)
+// handleBackupEstimate reports what a selection would capture; same body as the export.
 func (s *Server) handleBackupEstimate(w http.ResponseWriter, r *http.Request) {
 	b := s.backendRef()
 	if b == nil {
@@ -70,9 +61,7 @@ func (s *Server) handleBackupEstimate(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, est)
 }
 
-// handleBackupImport restores an uploaded backup or config file.
-//
-//	POST /api/backup/import  (multipart field "file", or a raw body)
+// handleBackupImport takes a multipart field "file" or a raw body.
 func (s *Server) handleBackupImport(w http.ResponseWriter, r *http.Request) {
 	b := s.backendRef()
 	if b == nil {
@@ -94,10 +83,7 @@ func (s *Server) handleBackupImport(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, res)
 }
 
-// decodeBackupOptions reads the selection. Every field is taken as sent — no
-// defaults are filled in, because a default that means "include more" turns a
-// caller's omission into a bigger backup than they asked for. Presence of
-// companionIds is enforced in validateOptions.
+// decodeBackupOptions fills in no defaults: an omitted field must never widen the backup.
 func decodeBackupOptions(r *http.Request) (BackupOptions, error) {
 	var opts BackupOptions
 	body, err := io.ReadAll(io.LimitReader(r.Body, 1<<20))
@@ -113,9 +99,7 @@ func decodeBackupOptions(r *http.Request) (BackupOptions, error) {
 	return opts, nil
 }
 
-// readBackupUpload accepts either a multipart form (what a browser <input
-// type=file> posts) or a raw body, so curl works too. The filename is only
-// used to pick a config parser.
+// readBackupUpload accepts a multipart form or a raw body; the filename only picks a config parser.
 func readBackupUpload(r *http.Request) ([]byte, string, error) {
 	if mr, err := r.MultipartReader(); err == nil {
 		for {

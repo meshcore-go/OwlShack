@@ -4,10 +4,7 @@ import { decodeErrEvents, unknownErrBits } from "@/lib/errEvents";
 const CHIP =
   "font-mono text-[10px] uppercase tracking-widest px-1.5 py-0.5 border border-warning/40 text-warning bg-warning/5";
 
-// Renders the active flags of a repeater status `errEvents` bitmask as warning
-// chips. Use anywhere the raw _err_flags value would otherwise be shown as a
-// number. Renders null when the mask is 0 — callers decide whether to show a
-// "none" state in that case.
+// Renders null when the mask is 0 — callers decide whether to show a "none" state.
 export function ErrEventBadges({
   mask,
   className,

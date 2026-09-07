@@ -8,21 +8,12 @@ import (
 	"strings"
 )
 
-// MetricsRepo is the persistence layer for node monitoring: the generic
-// time-series table (node_metrics), per-node latest snapshots (node_state),
-// the active-monitor registry (node_monitors), and neighbour SNR topology
-// (node_neighbors). See the node_* tables in migrateV1.
-//
-// Writes are issued by the monitor poller goroutine and HTTP handlers and must
-// be wrapped by the caller in store.WriteAsync/WriteSync — these methods do the
-// raw db.Exec and are not goroutine-safe against the writer loop on their own.
-// Reads (Query*) run on the calling goroutine and are safe concurrently.
+// MetricsRepo persists node monitoring; every write method must be wrapped by the caller in store.WriteAsync/WriteSync.
 type MetricsRepo struct {
 	db *sql.DB
 }
 
-// Metric is a single time-series reading. Channel is the CayenneLPP channel for
-// sensor readings (0 for status fields that have no channel).
+// Metric is one time-series reading; Channel is the CayenneLPP channel, 0 for status fields that have none.
 type Metric struct {
 	TS      int64
 	Pubkey  []byte
@@ -31,16 +22,13 @@ type Metric struct {
 	Value   float64
 }
 
-// HistoryPoint is one bucket of a history query: the bucket's start time (unix
-// seconds) and the averaged value of all readings that fell in it.
+// HistoryPoint is one history bucket: its start time (unix seconds) and the average of the readings in it.
 type HistoryPoint struct {
 	TS    int64   `json:"ts"`
 	Value float64 `json:"value"`
 }
 
-// NodeState is the latest-known snapshot for a monitored node, for instant
-// dashboard rendering without replaying history. State is a JSON object of the
-// most recent value per metric.
+// NodeState is the latest-known snapshot for a monitored node; State is a JSON object of the most recent value per metric.
 type NodeState struct {
 	Pubkey      []byte `json:"pubkey"`
 	CompanionID string `json:"companionId"`
@@ -60,8 +48,7 @@ type Neighbor struct {
 	SNR            *float64
 }
 
-// RecordMetrics inserts a batch of readings in a single transaction. A nil/empty
-// batch is a no-op. Call inside WriteAsync/WriteSync.
+// RecordMetrics inserts a batch of readings in one transaction. Call inside WriteAsync/WriteSync.
 func (r *MetricsRepo) RecordMetrics(ctx context.Context, metrics []Metric) error {
 	if len(metrics) == 0 {
 		return nil
@@ -91,10 +78,7 @@ func (r *MetricsRepo) RecordMetrics(ctx context.Context, metrics []Metric) error
 	return nil
 }
 
-// QueryHistory returns readings for one (pubkey, metric) between from..to (unix
-// seconds, inclusive), averaged into fixed-width buckets so charts stay smooth
-// and cheap regardless of polling cadence. bucketSecs <= 0 disables bucketing
-// (raw points). Points are ordered ascending by time.
+// QueryHistory returns ascending readings for one (pubkey, metric) over from..to (unix seconds, inclusive); bucketSecs <= 0 returns raw points.
 func (r *MetricsRepo) QueryHistory(ctx context.Context, pubkey []byte, metric string, from, to, bucketSecs int64) ([]HistoryPoint, error) {
 	var (
 		rows *sql.Rows
@@ -136,8 +120,7 @@ func (r *MetricsRepo) QueryHistory(ctx context.Context, pubkey []byte, metric st
 	return points, nil
 }
 
-// ListMetricNames returns the distinct metric names recorded for a node, so the
-// frontend can populate a metric picker without hardcoding the catalogue.
+// ListMetricNames returns the distinct metric names recorded for a node.
 func (r *MetricsRepo) ListMetricNames(ctx context.Context, pubkey []byte) ([]string, error) {
 	rows, err := r.db.QueryContext(ctx, `
 		SELECT DISTINCT metric FROM node_metrics WHERE pubkey = ? ORDER BY metric ASC`, pubkey)
@@ -160,11 +143,7 @@ func (r *MetricsRepo) ListMetricNames(ctx context.Context, pubkey []byte) ([]str
 	return names, nil
 }
 
-// UpsertNodeState writes the latest snapshot for a node. The new snapshot is
-// MERGED onto the stored one (per metric), so a partial poll — e.g. status
-// succeeded but telemetry failed — keeps the last-known value of metrics it
-// didn't refresh rather than dropping them from the dashboard. Call inside
-// WriteAsync/WriteSync.
+// UpsertNodeState merges the snapshot onto the stored one per metric, so a partial poll keeps last-known values. Call inside WriteAsync/WriteSync.
 func (r *MetricsRepo) UpsertNodeState(ctx context.Context, s *NodeState) error {
 	state := s.State
 	if strings.TrimSpace(state) == "" {
@@ -193,10 +172,7 @@ func (r *MetricsRepo) UpsertNodeState(ctx context.Context, s *NodeState) error {
 	return nil
 }
 
-// mergeStateJSON returns prev overlaid with cur (cur wins on conflict), so the
-// merged snapshot retains metrics present only in the previous poll. Values are
-// kept as RawMessage to preserve their original numeric formatting. If either
-// side won't parse as a JSON object, cur is returned unchanged.
+// mergeStateJSON overlays cur on prev (cur wins), returning cur unchanged if either side is not a JSON object.
 func mergeStateJSON(prev, cur string) (string, error) {
 	pm := map[string]json.RawMessage{}
 	cm := map[string]json.RawMessage{}
@@ -216,10 +192,7 @@ func mergeStateJSON(prev, cur string) (string, error) {
 	return string(out), nil
 }
 
-// MarkPollFailure records a failed poll WITHOUT clobbering the last-known-good
-// snapshot: it updates only last_poll_ts + last_error (and companion/kind),
-// preserving name, last_ok_ts and the metric state on conflict. A transient
-// failure shouldn't blank a node's dashboard. Call inside WriteAsync/WriteSync.
+// MarkPollFailure records a failed poll without clobbering the last-known-good snapshot. Call inside WriteAsync/WriteSync.
 func (r *MetricsRepo) MarkPollFailure(ctx context.Context, s *NodeState) error {
 	if _, err := r.db.ExecContext(ctx, `
 		INSERT INTO node_state (pubkey, companion_id, kind, last_poll_ts, last_error)
@@ -260,8 +233,7 @@ func (r *MetricsRepo) ListNodeStates(ctx context.Context) ([]NodeState, error) {
 	return states, nil
 }
 
-// RecordNeighbors inserts a batch of neighbour SNR samples. Call inside
-// WriteAsync/WriteSync.
+// RecordNeighbors inserts a batch of neighbour SNR samples. Call inside WriteAsync/WriteSync.
 func (r *MetricsRepo) RecordNeighbors(ctx context.Context, neighbors []Neighbor) error {
 	if len(neighbors) == 0 {
 		return nil
@@ -291,11 +263,7 @@ func (r *MetricsRepo) RecordNeighbors(ctx context.Context, neighbors []Neighbor)
 	return nil
 }
 
-// ListLatestNeighbors returns the most recent neighbour SNR sample for every
-// (pubkey, neighbor_pubkey) pair observed since sinceTS (unix seconds). Pairs
-// whose newest sample is older than sinceTS are excluded entirely (a stale link
-// is indistinguishable from no link). MAX(ts) picks the latest row per pair;
-// SQLite's bare-column rule guarantees snr comes from that same row.
+// ListLatestNeighbors returns the newest SNR sample per (pubkey, neighbor_pubkey) pair since sinceTS (unix seconds), dropping pairs with no newer sample.
 func (r *MetricsRepo) ListLatestNeighbors(ctx context.Context, sinceTS int64) ([]Neighbor, error) {
 	rows, err := r.db.QueryContext(ctx, `
 		SELECT pubkey, neighbor_pubkey, MAX(ts) AS ts, snr
@@ -326,9 +294,7 @@ func (r *MetricsRepo) ListLatestNeighbors(ctx context.Context, sinceTS int64) ([
 	return out, nil
 }
 
-// PruneMetrics deletes time-series rows older than the given unix-seconds
-// cutoff, bounding raw storage growth. Returns the number of rows removed.
-// Call inside WriteAsync/WriteSync.
+// PruneMetrics deletes time-series rows older than the unix-seconds cutoff. Call inside WriteAsync/WriteSync.
 func (r *MetricsRepo) PruneMetrics(ctx context.Context, cutoff int64) (int64, error) {
 	res, err := r.db.ExecContext(ctx, `DELETE FROM node_metrics WHERE ts < ?`, cutoff)
 	if err != nil {

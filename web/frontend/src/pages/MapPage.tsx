@@ -73,8 +73,7 @@ function dotIcon(color: string): L.DivIcon {
   });
 }
 
-// A distinct target marker for a deep-linked coordinate (e.g. one shared in
-// chat), so it stands out from the peer dots.
+// A distinct target marker for a deep-linked coordinate, so it stands out from the peer dots.
 function focusIcon(): L.DivIcon {
   return L.divIcon({
     className: "meshcore-focus-pin",
@@ -85,8 +84,7 @@ function focusIcon(): L.DivIcon {
   });
 }
 
-// One DivIcon per peer type, built once — the markers-sync effect runs on every
-// WS peer update, so per-marker icon construction there is wasted work.
+// One DivIcon per peer type, built once — the markers-sync effect runs on every WS peer update.
 const PEER_ICONS: Record<string, L.DivIcon> = Object.fromEntries(
   Object.entries(PEER_TYPE_HEX).map(([type, color]) => [type, dotIcon(color)]),
 );
@@ -155,7 +153,6 @@ export function MapPage() {
 
   const { connected } = useWebSocket(["peers"], handleMessage);
 
-  // Initialize map once
   useEffect(() => {
     if (!containerRef.current || mapRef.current) return;
     const map = L.map(containerRef.current, {
@@ -182,9 +179,7 @@ export function MapPage() {
 
   useThemeTiles(mapRef, tileLayerRef);
 
-  // Center + drop a highlight pin when a coordinate is deep-linked via
-  // ?lat=&lon= (e.g. "Open in MeshCore Map" from a chat coordinate). Marks the
-  // view as fitted so the peer auto-fit doesn't yank it away once peers load.
+  // A ?lat=&lon= deep link marks the view fitted so the peer auto-fit can't yank it away.
   useEffect(() => {
     const map = mapRef.current;
     if (!map) return;
@@ -225,8 +220,7 @@ export function MapPage() {
   const [confirmClear, setConfirmClear] = useState(false);
   const [clearing, setClearing] = useState(false);
 
-  // Deletes exactly what's currently plotted (located + passing the type
-  // filter), so the type pills double as a scoping tool for cleanup.
+  // Deletes exactly what's plotted, so the type pills double as a cleanup scope.
   const deleteShown = useCallback(async () => {
     setClearing(true);
     try {
@@ -240,7 +234,6 @@ export function MapPage() {
     }
   }, [visible]);
 
-  // Sync markers with visible peers
   useEffect(() => {
     const map = mapRef.current;
     if (!map) return;
@@ -248,7 +241,6 @@ export function MapPage() {
     const next = new Set(visible.map((p) => p.pubkey));
     const markers = markersRef.current;
 
-    // Remove markers no longer visible
     for (const [key, marker] of markers.entries()) {
       if (!next.has(key)) {
         map.removeLayer(marker);
@@ -256,7 +248,6 @@ export function MapPage() {
       }
     }
 
-    // Add or update markers
     for (const p of visible) {
       const lat = p.lat / 1e6;
       const lon = wrapLon(p.lon / 1e6);
@@ -268,14 +259,12 @@ export function MapPage() {
         if (existing.getIcon() !== icon) existing.setIcon(icon);
       } else {
         const marker = L.marker([lat, lon], { icon }).addTo(map);
-        // Click opens the same detail sheet as the Peers page (pubkey is
-        // stable for a marker, so the closure never goes stale).
+        // pubkey is stable for a marker, so this closure never goes stale.
         marker.on("click", () => selectPeer(p.pubkey));
         markers.set(p.pubkey, marker);
       }
     }
 
-    // Auto-fit on first load
     if (!fittedRef.current && visible.length > 0) {
       const bounds = L.latLngBounds(
         visible.map((p) => [p.lat / 1e6, wrapLon(p.lon / 1e6)] as [number, number]),
@@ -287,18 +276,14 @@ export function MapPage() {
     }
   }, [visible]);
 
-  // Redraw neighbor-link lines whenever the data or the toggle changes. Full
-  // clear-and-redraw (not incremental) since links are cheap to rebuild and
-  // there's no per-link identity worth diffing against.
+  // Full clear-and-redraw: links are cheap and have no per-link identity to diff against.
   useEffect(() => {
     const layer = linksLayerRef.current;
     if (!layer) return;
     layer.clearLayers();
     if (!showLinks || !links) return;
 
-    // Three stagger positions along the line (35 / 50 / 65 %). Cycling by
-    // index means parallel lines sharing a common endpoint — the most common
-    // overlap case — get labels at visually distinct distances from that node.
+    // Cycling by index keeps labels on lines sharing an endpoint at distinct distances.
     const STAGGER = [0.35, 0.5, 0.65] as const;
 
     links.forEach((l, i) => {
@@ -309,16 +294,13 @@ export function MapPage() {
         l.snrBtoA ?? Infinity,
       );
 
-      // Mercator-corrected screen-space angle so the label aligns with the
-      // rendered line regardless of latitude.
+      // Mercator-corrected screen-space angle, so the label aligns at any latitude.
       const cosLat = Math.cos(((a[0] + b[0]) / 2) * (Math.PI / 180));
       const dxScreen = (b[1] - a[1]) * cosLat;
       const dyScreen = -(b[0] - a[0]); // screen Y is inverted vs latitude
       let angleDeg = Math.atan2(dyScreen, dxScreen) * (180 / Math.PI);
 
-      // Keep text readable: if the line runs "right to left" the label would
-      // render upside-down, so flip 180°. Track the flip so we can swap the
-      // directional arrows to stay geographically correct.
+      // A right-to-left line would render the label upside-down, so flip it 180°.
       let flipped = false;
       if (angleDeg > 90 || angleDeg < -90) {
         angleDeg += angleDeg > 0 ? -180 : 180;
@@ -485,9 +467,7 @@ export function MapPage() {
   );
 }
 
-// FilterMenu is the phone-sized form of the type pills: the same toggles, but
-// collapsed into one control so the filter row doesn't wrap to three lines
-// above the map. Below sm only — the pills stay on wider screens.
+// Phone-sized form of the type pills, below sm only — the pills stay on wider screens.
 function FilterMenu({
   hidden,
   counts,
