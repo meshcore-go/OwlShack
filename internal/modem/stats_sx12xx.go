@@ -58,13 +58,17 @@ func (p *sx12xxStatsProvider) LinkStats() LinkStats {
 		// The error handler is wired before Attach, so a radio that never came up still reports why.
 		return LinkStats{DriverErrors: &driver}
 	}
-	ls := radioLinkStats(m.Stats())
-	recoveries := m.RecvRecoveries()
-	ls.DriverErrors, ls.RecvRecoveries = &driver, &recoveries
-	return ls
+	return modemLinkStats(radioLinkStats(m.Stats()), driver, m.RecvRecoveries(), m.HandlerSlow())
 }
 
 // radioLinkStats maps the driver's counters onto the KISS-shaped fields; CRC errors keep their own field because a noisy channel is not a driver fault.
+// modemLinkStats folds in the counters only the Modem holds; HandlerSlow counts only because setupSPI sets a threshold.
+func modemLinkStats(ls LinkStats, driverErrors, recoveries, handlerSlow uint64) LinkStats {
+	ls.DriverErrors, ls.RecvRecoveries = &driverErrors, &recoveries
+	ls.HandlerSlow = handlerSlow
+	return ls
+}
+
 func radioLinkStats(s sx12xx.RadioStats) LinkStats {
 	crc := s.PacketsCRCErrors
 	return LinkStats{
