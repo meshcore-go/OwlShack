@@ -121,8 +121,18 @@ type statsBlock struct {
 	RecvErrors uint64 `json:"recv_errors"`
 	QueueLen   int    `json:"queue_len"`
 
-	// Firmware stats-core / stats-radio key names, which meshcoretomqtt forwards verbatim; BatteryMV 0 and an omitted MCUTempC mean "no reading".
-	BatteryMV  uint16   `json:"battery_mv"`
+	// Board readings, named and placed as the firmware's stats-core /
+	// stats-radio replies are: meshcoretomqtt forwards those JSON objects
+	// verbatim as this block, so a consumer looks for stats.battery_mv, not a
+	// percentage of our own invention at the top level.
+	//
+	// Both are omitted when there is nothing to measure, keeping "no sensor"
+	// distinct from a real reading of zero. That matters most for the battery:
+	// a Linux host driving an SPI radio has no cell at all, and a published
+	// 0 mV is inside the measurement's own range, so every consumer plots it as
+	// a flat dead battery. A KISS board that answers 0 still publishes it —
+	// that 0 is the firmware's own answer, not an absence.
+	BatteryMV  *uint16  `json:"battery_mv,omitempty"`
 	MCUTempC   *float64 `json:"mcu_temp_c,omitempty"`
 	NoiseFloor int16    `json:"noise_floor"`
 	LastRSSI   int16    `json:"last_rssi"`
@@ -146,6 +156,17 @@ type statsBlock struct {
 	HwErrors            uint64 `json:"hw_errors"`
 	HwDecodeErrors      uint64 `json:"hw_decode_errors"`
 	HandlerSlow         uint64 `json:"handler_slow"`
+
+	// Faults only a directly-attached SPI radio can count, omitted on a KISS
+	// modem rather than published as zeroes it never measured. crc_errors is a
+	// noisy channel; driver_errors is our own fault — SPI transaction failures,
+	// busy-line timeouts, failed IRQ reads — and is the only fault signal that
+	// path has. recv_recoveries is the receive watchdog re-arming a receiver
+	// found stuck out of receive: a node that would otherwise have gone deaf
+	// while still looking healthy, so a non-zero count is worth an alert.
+	CRCErrors      *uint64 `json:"crc_errors,omitempty"`
+	DriverErrors   *uint64 `json:"driver_errors,omitempty"`
+	RecvRecoveries *uint64 `json:"recv_recoveries,omitempty"`
 }
 
 // TxCounts mirrors node.TxStats plus the current queue depth; process-wide.
@@ -207,6 +228,10 @@ func formatStatus(status, originName, originID string, radio modem.RadioInfo, ds
 	if ds.HaveMCUTemp {
 		mcuTemp = &ds.MCUTempC
 	}
+	var batteryMV *uint16
+	if ds.HaveBattery {
+		batteryMV = &ds.BatteryMV
+	}
 
 	msg := statusMessage{
 		Status:          status,
@@ -228,7 +253,7 @@ func formatStatus(status, originName, originID string, radio modem.RadioInfo, ds
 			DirectDups:  packets.DirectDups,
 			RecvErrors:  recvErrors,
 
-			BatteryMV:  ds.BatteryMV,
+			BatteryMV:  batteryMV,
 			MCUTempC:   mcuTemp,
 			NoiseFloor: ds.NoiseFloor,
 			LastSNR:    obs.LastSNR,
@@ -253,6 +278,10 @@ func formatStatus(status, originName, originID string, radio modem.RadioInfo, ds
 			HwErrors:            link.HwErrors,
 			HwDecodeErrors:      link.HwDecodeErrors,
 			HandlerSlow:         link.HandlerSlow,
+
+			CRCErrors:      link.CRCErrors,
+			DriverErrors:   link.DriverErrors,
+			RecvRecoveries: link.RecvRecoveries,
 		},
 	}
 	return json.Marshal(msg)

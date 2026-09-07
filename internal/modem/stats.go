@@ -21,9 +21,17 @@ type RadioInfo struct {
 
 type DeviceStats struct {
 	NoiseFloor int16
-	BatteryMV  uint16
-	UptimeSecs uint32
-	// HaveMCUTemp is false when the board cannot measure one, keeping 0 °C distinguishable from unknown.
+	// BatteryMV is the board's battery voltage. HaveBattery is false when there
+	// is no battery to measure at all — a Linux host driving an SPI radio — so
+	// 0 mV stays distinguishable from a flat cell. A KISS board that answers
+	// with 0 still sets it: the firmware's getBattMilliVolts is pure virtual
+	// and cannot say "no battery", so that 0 is the board's own answer.
+	BatteryMV   uint16
+	HaveBattery bool
+	UptimeSecs  uint32
+	// MCUTempC is the modem board's MCU temperature. HaveMCUTemp is false when
+	// the board can't measure one (the modem answers HW_ERR_NO_CALLBACK), so
+	// 0 °C is distinguishable from unknown.
 	MCUTempC    float64
 	HaveMCUTemp bool
 }
@@ -41,6 +49,21 @@ type LinkStats struct {
 	HwDecodeErrors uint64
 	HwErrors       uint64 // HW_RESP_ERROR frames received
 	TxOutcomeLost  uint64 // TX_DONE waits abandoned by a reconnect
+
+	// The SPI path's own counters. Pointers because a KISS modem counts none of
+	// them and 0 would read as "measured, none happened" — the same discipline
+	// as HaveMCUTemp. Nil means this backend cannot measure it.
+	//
+	// CRCErrors is packets the chip discarded for a CRC or header error, which
+	// is a noisy channel rather than a fault. DriverErrors is faults the driver
+	// reported: SPI transaction failures, busy-line timeouts, IRQ reads that
+	// failed. RecvRecoveries is how many times the watchdog found the receiver
+	// stuck out of receive and re-armed it — a node that would otherwise have
+	// gone quietly deaf, so a non-zero count matters even though nothing is
+	// visibly wrong.
+	CRCErrors      *uint64
+	DriverErrors   *uint64
+	RecvRecoveries *uint64
 }
 
 type StatsProvider interface {
@@ -62,6 +85,7 @@ type kissStatsProvider struct {
 	mu          sync.Mutex
 	noiseFloor  int16
 	batteryMV   uint16
+	haveBattery bool
 	mcuTempC    float64
 	haveMCUTemp bool
 }
@@ -134,6 +158,7 @@ func (p *kissStatsProvider) Stats(ctx context.Context) DeviceStats {
 	ds := DeviceStats{
 		NoiseFloor:  p.noiseFloor,
 		BatteryMV:   p.batteryMV,
+		HaveBattery: p.haveBattery,
 		UptimeSecs:  uint32(time.Since(p.startTime).Seconds()),
 		MCUTempC:    p.mcuTempC,
 		HaveMCUTemp: p.haveMCUTemp,
@@ -170,5 +195,6 @@ func (p *kissStatsProvider) onBattery(_ byte, data []byte) {
 	}
 	p.mu.Lock()
 	p.batteryMV = binary.LittleEndian.Uint16(data[:2])
+	p.haveBattery = true
 	p.mu.Unlock()
 }

@@ -61,6 +61,7 @@ type Repeater struct {
 	// Cached modem readings, refreshed by deviceStatsLoop.
 	noiseFloor      atomic.Int32
 	batteryMV       atomic.Uint32
+	haveBattery     atomic.Bool
 	haveDeviceStats atomic.Bool
 	pollStats       func(ctx context.Context) DeviceStats
 	mcuTempC        atomic.Int32 // tenths of a degree C
@@ -244,6 +245,7 @@ func (r *Repeater) deviceStatsLoop(ctx context.Context) {
 		}
 		r.noiseFloor.Store(int32(ds.NoiseFloor))
 		r.batteryMV.Store(uint32(ds.BatteryMV))
+		r.haveBattery.Store(ds.HaveBattery)
 		if ds.HaveMCUTemp {
 			r.mcuTempC.Store(int32(ds.MCUTempC * 10))
 			r.haveMCUTemp.Store(true)
@@ -363,10 +365,14 @@ func (l *rateLimiter) allow() bool {
 	return true
 }
 
-// DeviceStats are the shared modem's board readings; HaveMCUTemp false means the board can't measure, not 0 °C.
+// DeviceStats are the shared modem's board readings, polled for the over-mesh
+// STATUS and telemetry replies. HaveMCUTemp is false when the board can't
+// measure a temperature, so 0 °C isn't mistaken for a reading; HaveBattery is
+// false when there is no cell at all, so 0 mV isn't mistaken for a flat one.
 type DeviceStats struct {
 	NoiseFloor  int16
 	BatteryMV   uint16
+	HaveBattery bool
 	MCUTempC    float64
 	HaveMCUTemp bool
 }

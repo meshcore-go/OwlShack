@@ -91,6 +91,7 @@ func statsPoller(stats modem.StatsProvider) func(context.Context) repeater.Devic
 		return repeater.DeviceStats{
 			NoiseFloor:  ds.NoiseFloor,
 			BatteryMV:   ds.BatteryMV,
+			HaveBattery: ds.HaveBattery,
 			MCUTempC:    ds.MCUTempC,
 			HaveMCUTemp: ds.HaveMCUTemp,
 		}

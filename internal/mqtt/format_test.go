@@ -114,7 +114,7 @@ func TestFormatStatus_BoardReadings(t *testing.T) {
 		return got
 	}
 
-	msg := read(modem.DeviceStats{BatteryMV: 3900, NoiseFloor: -120})
+	msg := read(modem.DeviceStats{BatteryMV: 3900, HaveBattery: true, NoiseFloor: -120})
 	if _, ok := msg["battery_percent"]; ok {
 		t.Error("battery_percent is not in the schema; battery_mv inside stats is")
 	}
@@ -136,6 +136,59 @@ func TestFormatStatus_BoardReadings(t *testing.T) {
 	stats, _ = read(modem.DeviceStats{MCUTempC: 31.5, HaveMCUTemp: true})["stats"].(map[string]any)
 	if got := stats["mcu_temp_c"]; got != 31.5 {
 		t.Errorf("mcu_temp_c = %v, want 31.5", got)
+	}
+
+	// A host with no cell at all must omit the key. 0 mV sits inside the
+	// measurement's own range, so publishing it plots as a flat dead battery on
+	// every consumer rather than as "this node has no battery".
+	stats, _ = read(modem.DeviceStats{NoiseFloor: -120})["stats"].(map[string]any)
+	if _, ok := stats["battery_mv"]; ok {
+		t.Errorf("battery_mv = %v, must be omitted when there is no battery to measure", stats["battery_mv"])
+	}
+}
+
+// The SPI driver's counters are the only fault signal that path has. They must
+// reach the wire, and must stay absent on a KISS modem that counts none of
+// them: a published 0 reads as "measured, none happened" on every KISS node.
+func TestFormatStatus_SPICountersAreOmittedUnlessMeasured(t *testing.T) {
+	read := func(link modem.LinkStats) map[string]any {
+		raw, err := formatStatus("online", "n", "id", modem.RadioInfo{}, modem.DeviceStats{},
+			PacketCounts{}, TxCounts{}, link, ObserverCounts{}, 0)
+		if err != nil {
+			t.Fatalf("formatStatus: %v", err)
+		}
+		var got map[string]any
+		if err := json.Unmarshal(raw, &got); err != nil {
+			t.Fatalf("unmarshal: %v", err)
+		}
+		stats, _ := got["stats"].(map[string]any)
+		return stats
+	}
+
+	stats := read(modem.LinkStats{})
+	for _, field := range []string{"crc_errors", "driver_errors", "recv_recoveries"} {
+		if _, ok := stats[field]; ok {
+			t.Errorf("%q = %v on a KISS modem, which counts none of them", field, stats[field])
+		}
+	}
+
+	// Distinct values, so a cross-wired field shows up as the wrong number.
+	crc, driver, recoveries := uint64(7), uint64(11), uint64(2)
+	stats = read(modem.LinkStats{CRCErrors: &crc, DriverErrors: &driver, RecvRecoveries: &recoveries})
+	for field, want := range map[string]float64{
+		"crc_errors": 7, "driver_errors": 11, "recv_recoveries": 2,
+	} {
+		if got, ok := stats[field]; !ok || got != want {
+			t.Errorf("stats[%q] = %v (present %v), want %v", field, got, ok, want)
+		}
+	}
+
+	// A zero that was actually measured still publishes: the point is telling
+	// "none happened" apart from "cannot measure", not hiding zeroes.
+	zero := uint64(0)
+	stats = read(modem.LinkStats{DriverErrors: &zero})
+	if got, ok := stats["driver_errors"]; !ok || got != float64(0) {
+		t.Errorf("driver_errors = %v (present %v), want a published 0", got, ok)
 	}
 }
 

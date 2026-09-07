@@ -42,6 +42,19 @@ type NeighborInfo struct {
 	SecsAgo int64   `json:"secsAgo"`
 }
 
+// batteryReading is the battery to report, nil on a host with no cell at all.
+// A published 0 mV renders as a flat battery, which reads as a node needing
+// attention rather than one working exactly as designed. The binary STATUS
+// reply keeps its 0: that field sits at a fixed offset in a firmware-defined
+// layout and cannot be omitted.
+func (r *Repeater) batteryReading() *int {
+	if !r.haveBattery.Load() {
+		return nil
+	}
+	batt := int(r.batteryMV.Load())
+	return &batt
+}
+
 func (r *Repeater) Stats() Stats {
 	r.mu.Lock()
 	started := r.startedAt
@@ -81,8 +94,7 @@ func (r *Repeater) Stats() Stats {
 	}
 	if r.haveDeviceStats.Load() {
 		nf := int(r.noiseFloor.Load())
-		batt := int(r.batteryMV.Load())
-		s.NoiseFloor, s.BatteryMV = &nf, &batt
+		s.NoiseFloor, s.BatteryMV = &nf, r.batteryReading()
 	}
 	if r.cfg.Latitude != nil {
 		s.Latitude = *r.cfg.Latitude
