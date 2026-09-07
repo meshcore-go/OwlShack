@@ -11,10 +11,15 @@ import { Button } from "@/components/ui/button";
 import { Skeleton } from "@/components/ui/skeleton";
 import { useApiObject } from "@/hooks/useApiObject";
 import { setTileKey } from "@/lib/leaflet";
-import { configApi, type Settings } from "@/lib/configApi";
+import { configApi, type Settings, type SpiBoard } from "@/lib/configApi";
 
 const BANDWIDTHS = [7.8, 10.4, 15.6, 20.8, 31.25, 41.7, 62.5, 125, 250, 500];
 const LOG_LEVELS = ["trace", "debug", "info", "warn", "error"];
+
+const CONNECTION_TYPES = [
+  { value: "kiss", label: "KISS modem (serial / TCP)" },
+  { value: "spi", label: "SPI radio hat" },
+];
 
 export function RadioPage() {
   const { item: settings, loading, error, reload } = useApiObject<Settings>(
@@ -23,8 +28,11 @@ export function RadioPage() {
   );
   const [saving, setSaving] = useState(false);
 
+  const [connectionType, setConnectionType] = useState("kiss");
   const [connection, setConnection] = useState("");
   const [baudRate, setBaudRate] = useState("115200");
+  const [spiBoard, setSpiBoard] = useState("");
+  const [boards, setBoards] = useState<SpiBoard[]>([]);
   const [freq, setFreq] = useState("");
   const [bw, setBw] = useState("");
   const [sf, setSf] = useState("");
@@ -39,8 +47,10 @@ export function RadioPage() {
 
   useEffect(() => {
     if (!settings) return;
+    setConnectionType(settings.connectionType || "kiss");
     setConnection(settings.connection ?? "");
     setBaudRate(String(settings.baudRate ?? 115200));
+    setSpiBoard(settings.spiBoard ?? "");
     setFreq(settings.freq != null ? String(settings.freq) : "");
     setBw(settings.bw != null ? String(settings.bw) : "");
     setSf(settings.sf != null ? String(settings.sf) : "");
@@ -53,15 +63,30 @@ export function RadioPage() {
     setLogLevel(settings.logLevel ?? "info");
   }, [settings]);
 
+  // Fetched once on mount: the list is compiled into the binary, so it cannot
+  // change while the page is open.
+  useEffect(() => {
+    configApi
+      .getSpiBoards()
+      .then(setBoards)
+      .catch(() => setBoards([]));
+  }, []);
+
+  const spi = connectionType === "spi";
+  const board = boards.find((b) => b.name === spiBoard);
+
   const onSave = async () => {
     if (!settings) return;
     setSaving(true);
     try {
       await configApi.putSettings({
         // Round-trip the connection type so a radio save never resets it.
-        connectionType: settings.connectionType,
+        connectionType,
         connection,
         baudRate: parseInt(baudRate, 10) || 115200,
+        // Sent only for an SPI radio. Omitted for KISS so the stored board
+        // survives a switch to serial and back.
+        ...(spi ? { spiBoard } : {}),
         freq: parseFloat(freq) || null,
         bw: parseFloat(bw) || null,
         sf: parseInt(sf, 10) || null,
@@ -122,20 +147,72 @@ export function RadioPage() {
       ) : settings ? (
         <>
           <section className="panel">
-            <SectionTitle eyebrow="kiss modem" title="Connection" />
+            <SectionTitle
+              eyebrow={spi ? "spi radio" : "kiss modem"}
+              title="Connection"
+            />
             <div className="p-4 grid grid-cols-1 sm:grid-cols-2 gap-4">
+              <SelectField
+                label="Radio backend"
+                value={connectionType}
+                options={CONNECTION_TYPES}
+                onChange={(v) => {
+                  setConnectionType(v);
+                  // The two backends take different connection strings, so
+                  // carrying one over would leave an invalid value in the box.
+                  if (v === "spi") {
+                    if (!connection.startsWith("spi://")) {
+                      setConnection(`spi://${boards[0]?.spiPort ?? "SPI0.0"}`);
+                    }
+                    if (!spiBoard && boards.length > 0) setSpiBoard(boards[0].name);
+                  } else if (connection.startsWith("spi://")) {
+                    setConnection("serial:///dev/ttyACM0");
+                  }
+                }}
+                hint={
+                  spi
+                    ? "A radio wired to this host's SPI bus. No MeshCore firmware involved."
+                    : "MeshCore firmware driving the radio, over serial or TCP."
+                }
+              />
               <TextField
-                label="Connection"
+                label={spi ? "SPI port" : "Connection"}
                 value={connection}
                 onChange={setConnection}
-                placeholder="serial:///dev/ttyACM0 or tcp://host:port"
+                placeholder={
+                  spi ? "spi://SPI0.0" : "serial:///dev/ttyACM0 or tcp://host:port"
+                }
               />
-              <TextField
-                label="Baud rate"
-                value={baudRate}
-                onChange={setBaudRate}
-                placeholder="115200"
-              />
+              {spi ? (
+                boards.length > 0 ? (
+                  <SelectField
+                    label="Radio hat"
+                    value={spiBoard}
+                    options={boards.map((b) => ({ value: b.name, label: b.label }))}
+                    onChange={setSpiBoard}
+                    hint={
+                      board
+                        ? `${board.chip}, up to ${board.maxTxPower} dBm`
+                        : "Pick the board this host has fitted."
+                    }
+                  />
+                ) : (
+                  <TextField
+                    label="Radio hat"
+                    value={spiBoard}
+                    onChange={setSpiBoard}
+                    hint="No board list available from the server."
+                    placeholder="ultrapeaterzero-e22p"
+                  />
+                )
+              ) : (
+                <TextField
+                  label="Baud rate"
+                  value={baudRate}
+                  onChange={setBaudRate}
+                  placeholder="115200"
+                />
+              )}
             </div>
           </section>
 

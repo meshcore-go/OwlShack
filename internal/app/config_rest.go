@@ -76,11 +76,13 @@ func (b *backend) SaveSettings(ctx context.Context, in api.SettingsInput) error 
 				setup = *in.SetupComplete
 			}
 			prevKey := rows.settings.MapTileKey
+			prevBoard := rows.settings.SPIBoard
 			row = store.Settings{
 				LogLevel:       in.LogLevel,
 				ConnectionType: ct,
 				Connection:     or(in.Connection, def.Connection),
 				BaudRate:       or(in.BaudRate, def.BaudRate),
+				SPIBoard:       or(in.SPIBoard, prevBoard),
 				Freq:           or(in.Freq, def.Freq),
 				BW:             or(in.BW, def.Bw),
 				SF:             or(in.SF, u8ToIntPtr(def.SF)),

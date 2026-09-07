@@ -76,8 +76,15 @@ func (cl *ChannelList) UnmarshalYAML(value *yaml.Node) error {
 type Config struct {
 	LogLevel *string `json:"logLevel" yaml:"logLevel" toml:"logLevel"`
 
-	// ConnectionType selects the radio backend; empty defaults to "kiss".
+	// ConnectionType selects the radio backend: "kiss" for MeshCore firmware
+	// over serial or TCP, "spi" for a bare SX12xx on the host's SPI bus.
+	// Empty defaults to "kiss".
 	ConnectionType *string `json:"connectionType,omitempty" yaml:"connectionType,omitempty" toml:"connectionType,omitempty"`
+
+	// SPIBoard names the radio hat when Connection is spi://. The wiring is
+	// fixed by the board's layout, so it is selected by name from
+	// modem.Boards() rather than entered pin by pin.
+	SPIBoard *string `json:"spiBoard,omitempty" yaml:"spiBoard,omitempty" toml:"spiBoard,omitempty"`
 
 	// Connection Settings (KISS modem)
 	Connection *string `json:"connection" yaml:"connection" toml:"connection"` // serial://<path> or tcp://<host:port>

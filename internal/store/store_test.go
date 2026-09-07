@@ -763,7 +763,7 @@ func TestPacketRepo_ListFilter(t *testing.T) {
 // Bump wantVersion whenever a migration is appended to the migrations slice.
 func TestStore_MigrateUserVersion(t *testing.T) {
 	t.Parallel()
-	const wantVersion = 9 // migrateV1, 2 squashed noop slots, migrateV2..migrateV7
+	const wantVersion = 10 // migrateV1, 2 squashed noop slots, migrateV2..migrateV8
 	st := newTestStore(t)
 	var v int
 	if err := st.db.QueryRowContext(t.Context(), "PRAGMA user_version").Scan(&v); err != nil {
@@ -891,37 +891,45 @@ func (r *recordingExecer) QueryContext(ctx context.Context, q string, args ...an
 // A failure means a shipped, frozen slot changed: append a new slot instead of re-pinning, unless the released set itself grew.
 func TestMigrations_ShippedSlotsFrozen(t *testing.T) {
 	t.Parallel()
-	const (
-		shippedSlots    = 7 // len(migrations) at v1.1.0
-		shippedSQLDiges = "7af51d21828cd637"
-	)
-
-	if len(migrations) < shippedSlots {
-		t.Fatalf("migrations has %d slots, fewer than the %d already released",
-			len(migrations), shippedSlots)
+	// One pin per release, each over the slots that release shipped. The v1.1.0
+	// pin is a prefix of the v1.2.0 one, so re-pinning the longer digest for a
+	// newly released slot cannot quietly cover an edit to an older one.
+	releases := []struct {
+		tag    string
+		slots  int
+		digest string
+	}{
+		{"v1.1.0", 7, "7af51d21828cd637"},
+		{"v1.2.0", 9, "e1e5fd0ea8417250"},
 	}
 
 	st := newTestStore(t)
-	tx, err := st.db.BeginTx(t.Context(), nil)
-	if err != nil {
-		t.Fatalf("begin: %v", err)
-	}
-	defer tx.Rollback()
-
-	h := sha256.New()
-	for i := range shippedSlots {
-		rec := &recordingExecer{inner: tx}
-		// Re-running a slot may fail; the SQL it attempts is what is pinned.
-		_ = migrations[i](t.Context(), rec)
-		fmt.Fprintf(h, "slot %d\n", i+1)
-		for _, q := range rec.sql {
-			fmt.Fprintln(h, strings.Join(strings.Fields(q), " "))
+	for _, rel := range releases {
+		if len(migrations) < rel.slots {
+			t.Fatalf("migrations has %d slots, fewer than the %d released in %s",
+				len(migrations), rel.slots, rel.tag)
 		}
-	}
-	if got := hex.EncodeToString(h.Sum(nil))[:16]; got != shippedSQLDiges {
-		t.Errorf("the SQL of released migration slots 1-%d changed (digest %s, want %s).\n"+
-			"A shipped slot must never be edited, renumbered or squashed — a database "+
-			"already at that version will skip it. Append a new slot instead.",
-			shippedSlots, got, shippedSQLDiges)
+		tx, err := st.db.BeginTx(t.Context(), nil)
+		if err != nil {
+			t.Fatalf("begin: %v", err)
+		}
+		h := sha256.New()
+		for i := range rel.slots {
+			rec := &recordingExecer{inner: tx}
+			// Errors are irrelevant: the schema already exists, so re-running a
+			// slot may fail. The SQL it attempts is what is being pinned.
+			_ = migrations[i](t.Context(), rec)
+			fmt.Fprintf(h, "slot %d\n", i+1)
+			for _, q := range rec.sql {
+				fmt.Fprintln(h, strings.Join(strings.Fields(q), " "))
+			}
+		}
+		tx.Rollback()
+		if got := hex.EncodeToString(h.Sum(nil))[:16]; got != rel.digest {
+			t.Errorf("the SQL of migration slots 1-%d, released in %s, changed (digest %s, want %s).\n"+
+				"A shipped slot must never be edited, renumbered or squashed — a database "+
+				"already at that version will skip it. Append a new slot instead.",
+				rel.slots, rel.tag, got, rel.digest)
+		}
 	}
 }

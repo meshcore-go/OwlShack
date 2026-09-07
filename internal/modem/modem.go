@@ -81,7 +81,10 @@ func MuxOptions(ms *State) []node.MuxOption {
 	return opts
 }
 
-// Setup connects to the modem described by cfg and returns the ready State.
+// Setup connects to the radio described by cfg and returns the ready State.
+// Two backends: a KISS modem over serial or TCP, which is MeshCore firmware
+// driving the radio for us, and a bare SX12xx wired to the host's SPI bus,
+// where there is no firmware and this process is the radio stack.
 func Setup(ctx context.Context, cfg *config.Config) (*State, error) {
 	ms := &State{
 		RecvErrors: &atomic.Uint64{},
@@ -93,6 +96,35 @@ func Setup(ctx context.Context, cfg *config.Config) (*State, error) {
 		return nil, fmt.Errorf("invalid connection string: %s", conn)
 	}
 
+	radioConfig := &hardware.RadioConfig{
+		FreqHz: uint32(*cfg.Freq * 1000000),
+		BwHz:   uint32(*cfg.Bw * 1000),
+		SF:     *cfg.SF,
+		CR:     *cfg.CR,
+	}
+	ms.radioConfig = radioConfig
+	ms.airtimeFactor = cfg.AirtimeFactorOr()
+	// The library takes an inverted factor, so log the percentage an operator
+	// actually cares about — deriving it from the factor is the exact mistake
+	// this line exists to prevent.
+	slog.Info("airtime budget",
+		"duty_cycle_pct", cfg.DutyCyclePercentOr(), "airtime_factor", ms.airtimeFactor)
+
+	var err error
+	switch connScheme {
+	case "spi":
+		err = setupSPI(ms, cfg, connAddr, radioConfig)
+	default:
+		err = setupKiss(ctx, ms, cfg, connScheme, connAddr, radioConfig)
+	}
+	if err != nil {
+		return nil, err
+	}
+	return ms, nil
+}
+
+// setupKiss connects to MeshCore firmware over KISS and configures its radio.
+func setupKiss(ctx context.Context, ms *State, cfg *config.Config, connScheme, connAddr string, radioConfig *hardware.RadioConfig) error {
 	var t hardware.Transport
 	switch connScheme {
 	case "serial":
@@ -104,13 +136,6 @@ func Setup(ctx context.Context, cfg *config.Config) (*State, error) {
 		t = kissTransport.NewTCPTransport(kissTransport.TCPConfig{
 			Address: connAddr,
 		})
-	}
-
-	radioConfig := &hardware.RadioConfig{
-		FreqHz: uint32(*cfg.Freq * 1000000),
-		BwHz:   uint32(*cfg.Bw * 1000),
-		SF:     *cfg.SF,
-		CR:     *cfg.CR,
 	}
 
 	// The firmware holds ONE pending TX slot and drops frames arriving while busy (HW_ERR_TX_BUSY), so sends wait for TX_DONE.
@@ -130,25 +155,19 @@ func Setup(ctx context.Context, cfg *config.Config) (*State, error) {
 	defer connectCancel()
 
 	if err := kissModem.Connect(connectCtx); err != nil {
-		return nil, fmt.Errorf("kiss connect: %w", err)
+		return fmt.Errorf("kiss connect: %w", err)
 	}
 	ms.closers = append(ms.closers, kissModem)
 
-	ms.radioConfig = radioConfig
-	ms.airtimeFactor = cfg.AirtimeFactorOr()
-	// The library takes an inverted factor; log the percentage an operator actually reads.
-	slog.Info("airtime budget",
-		"duty_cycle_pct", cfg.DutyCyclePercentOr(), "airtime_factor", ms.airtimeFactor)
-
 	if err := kissModem.SetRadio(radioConfig); err != nil {
 		ms.Close()
-		return nil, fmt.Errorf("SET_RADIO: %w", err)
+		return fmt.Errorf("SET_RADIO: %w", err)
 	}
 	slog.Info("SET_RADIO", "freq", *cfg.Freq, "bw", *cfg.Bw, "sf", *cfg.SF, "cr", *cfg.CR)
 
 	if err := kissModem.SetTxPower(*cfg.TX); err != nil {
 		ms.Close()
-		return nil, fmt.Errorf("SET_TX_POWER: %w", err)
+		return fmt.Errorf("SET_TX_POWER: %w", err)
 	}
 	slog.Info("SET_TX_POWER", "tx", *cfg.TX)
 
@@ -162,5 +181,5 @@ func Setup(ctx context.Context, cfg *config.Config) (*State, error) {
 
 	ms.Modem = kissModem
 
-	return ms, nil
+	return nil
 }
