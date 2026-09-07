@@ -167,3 +167,46 @@ func TestSetRelaying_BeforeStartDoesNotPublish(t *testing.T) {
 		t.Error("the value must be recorded even before Start")
 	}
 }
+
+// The per-direction caches are only useful if publishPacket SELECTS by the
+// direction it was called with. Testing dedupFor alone leaves that untested:
+// hardcoding the argument at the call site is the same bug and passes a
+// cache-level test. This exercises the real path — the same packet must publish
+// once per direction, and still dedup within each.
+func TestPublishPacket_SelectsDedupCacheByDirection(t *testing.T) {
+	o := testObserver(t)
+	bc := testBrokerClient("b", "127.0.0.1", 1, "basic")
+	bc.dedup = &meshcore.DedupCache{}
+	bc.dedupTx = &meshcore.DedupCache{}
+	o.brokers = []*brokerClient{bc}
+
+	pkt := &meshcore.Packet{
+		Header:  meshcore.PayloadTypeTxtMsg<<2 | meshcore.RouteTypeFlood,
+		Payload: []byte{0xAB, 0xCD, 0x01},
+	}
+	raw, err := pkt.ToBytes()
+	if err != nil {
+		t.Fatalf("ToBytes: %v", err)
+	}
+
+	// The publish worker isn't running, so jobs stay in the channel to count.
+	o.publishPacket(pkt, raw, "rx")
+	if got := len(bc.publishCh); got != 1 {
+		t.Fatalf("after rx: %d queued, want 1", got)
+	}
+	// Relaying that same flood: identical hash, other direction. This is the
+	// row a shared cache — or a hardcoded direction — silently swallows.
+	o.publishPacket(pkt, raw, "tx")
+	if got := len(bc.publishCh); got != 2 {
+		t.Errorf("after relaying it as tx: %d queued, want 2", got)
+	}
+	// Within a direction, dedup must still apply.
+	o.publishPacket(pkt, raw, "tx")
+	if got := len(bc.publishCh); got != 2 {
+		t.Errorf("a repeated tx queued %d, want no extra", got)
+	}
+	o.publishPacket(pkt, raw, "rx")
+	if got := len(bc.publishCh); got != 2 {
+		t.Errorf("a repeated rx queued %d, want no extra", got)
+	}
+}
