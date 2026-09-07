@@ -8,9 +8,9 @@ import (
 )
 
 type Neighbor struct {
-	PubkeyPrefix string `json:"pubkeyPrefix"`
-	SecsAgo      uint32 `json:"secsAgo"`
-	SNR          int    `json:"snr"`
+	PubkeyPrefix string  `json:"pubkeyPrefix"`
+	SecsAgo      uint32  `json:"secsAgo"`
+	SNR          float64 `json:"snr"`
 }
 
 type Neighbors struct {
@@ -54,6 +54,10 @@ type Status struct {
 	FloodDups   uint16  `json:"floodDups"`
 	RecvErrors  uint32  `json:"recvErrors"`
 	ChanUtil    float64 `json:"chanUtil"`
+	// Room servers only (ServerStats): posts stored, and pushes sent to clients.
+	// nil on repeaters.
+	Posted     *uint16 `json:"posted,omitempty"`
+	PostPushes *uint16 `json:"postPushes,omitempty"`
 }
 
 func parseRepeaterNeighbors(data []byte, prefixLen int) (*Neighbors, error) {
@@ -71,7 +75,7 @@ func parseRepeaterNeighbors(data []byte, prefixLen int) (*Neighbors, error) {
 			break
 		}
 		secsAgo := binary.LittleEndian.Uint32(data[pos+prefixLen : pos+prefixLen+4])
-		snr := int(int8(data[pos+prefixLen+4]))
+		snr := float64(int8(data[pos+prefixLen+4])) / 4
 		out.Neighbors = append(out.Neighbors, Neighbor{
 			PubkeyPrefix: hex.EncodeToString(data[pos : pos+prefixLen]),
 			SecsAgo:      secsAgo,
@@ -86,6 +90,9 @@ func parseRepeaterAccessList(data []byte) *AccessList {
 	out := &AccessList{Entries: []AccessListEntry{}}
 	const stride = 7 // 6-byte prefix + 1-byte permissions
 	for pos := 0; pos+stride <= len(data); pos += stride {
+		if data[pos+6] == 0 {
+			continue // firmware skips deleted entries; this is cipher-block zero padding
+		}
 		out.Entries = append(out.Entries, AccessListEntry{
 			PubkeyPrefix: hex.EncodeToString(data[pos : pos+6]),
 			Permissions:  data[pos+6],
@@ -108,6 +115,43 @@ func parseRepeaterOwnerInfo(data []byte) *OwnerInfo {
 		info.OwnerInfo = parts[2]
 	}
 	return info
+}
+
+// parseRoomStatus decodes a room server's ServerStats: the repeater layout for
+// the first 48 bytes, then n_posted and n_post_push (u16 each) where a
+// repeater carries rx_air_time_secs — so it must not go through
+// parseRepeaterStatus, which would read the two counters as airtime.
+func parseRoomStatus(data []byte) (*Status, error) {
+	if len(data) < 52 {
+		return nil, fmt.Errorf("room status data too short: got %d, need 52", len(data))
+	}
+	s := parseCommonStats(data)
+	posted := binary.LittleEndian.Uint16(data[48:50])
+	pushes := binary.LittleEndian.Uint16(data[50:52])
+	s.Posted, s.PostPushes = &posted, &pushes
+	return s, nil
+}
+
+// parseCommonStats decodes the 48 bytes shared by RepeaterStats and ServerStats.
+func parseCommonStats(data []byte) *Status {
+	return &Status{
+		BatteryMV:   binary.LittleEndian.Uint16(data[0:2]),
+		QueueLen:    binary.LittleEndian.Uint16(data[2:4]),
+		NoiseFloor:  int16(binary.LittleEndian.Uint16(data[4:6])),
+		LastRSSI:    int16(binary.LittleEndian.Uint16(data[6:8])),
+		PacketsRecv: binary.LittleEndian.Uint32(data[8:12]),
+		PacketsSent: binary.LittleEndian.Uint32(data[12:16]),
+		TxAirSecs:   binary.LittleEndian.Uint32(data[16:20]),
+		UptimeSecs:  binary.LittleEndian.Uint32(data[20:24]),
+		FloodTx:     binary.LittleEndian.Uint32(data[24:28]),
+		DirectTx:    binary.LittleEndian.Uint32(data[28:32]),
+		FloodRx:     binary.LittleEndian.Uint32(data[32:36]),
+		DirectRx:    binary.LittleEndian.Uint32(data[36:40]),
+		ErrEvents:   binary.LittleEndian.Uint16(data[40:42]),
+		LastSNR:     float64(int16(binary.LittleEndian.Uint16(data[42:44]))) / 4.0,
+		DirectDups:  binary.LittleEndian.Uint16(data[44:46]),
+		FloodDups:   binary.LittleEndian.Uint16(data[46:48]),
+	}
 }
 
 func parseRepeaterStatus(data []byte) (*Status, error) {

@@ -1,18 +1,19 @@
 import { useEffect, useRef, useState } from "react";
 import {
   Activity,
-  Antenna,
   AudioLines,
   Bot,
   Download,
   Gauge,
   LayoutDashboard,
   MapPinned,
+  Menu,
   MessagesSquare,
   Moon,
   Radar,
   Radio,
   Rss,
+  Settings,
   Sun,
   Users,
   Waves,
@@ -45,6 +46,7 @@ import { useApiList } from "@/hooks/useApiList";
 import { useInstallPrompt } from "@/hooks/useInstallPrompt";
 import { type ConfigCompanion } from "@/lib/configApi";
 import { useTheme } from "@/lib/theme";
+import { truncateMid } from "@/lib/format";
 import { cn } from "@/lib/utils";
 
 type IconType = React.ComponentType<React.SVGProps<SVGSVGElement>>;
@@ -88,7 +90,7 @@ const TELEMETRY: NavItem[] = [
   },
 ];
 
-const SYSTEM: NavItem[] = [
+const COMMS_EXTRA: NavItem[] = [
   {
     to: "/repeater",
     label: "Repeater",
@@ -101,11 +103,14 @@ const SYSTEM: NavItem[] = [
     icon: Rss,
     match: (p) => p === "/mqtt",
   },
+];
+
+const SYSTEM: NavItem[] = [
   {
-    to: "/radio",
-    label: "Radio",
-    icon: Antenna,
-    match: (p) => p === "/radio",
+    to: "/settings",
+    label: "Settings",
+    icon: Settings,
+    match: (p) => p === "/settings",
   },
 ];
 
@@ -288,6 +293,28 @@ function CommsSection({
               </Link>
             </SidebarMenuButton>
           </SidebarMenuItem>
+          {COMMS_EXTRA.map((item) => {
+            const active = item.match(pathname);
+            return (
+              <SidebarMenuItem key={item.to}>
+                <SidebarMenuButton
+                  asChild
+                  isActive={active}
+                  tooltip={item.label}
+                  className={cn(
+                    "rounded-sm font-mono text-[12px] uppercase tracking-[0.08em] transition-colors h-8",
+                    active &&
+                      "bg-primary/10 text-primary border-l-2 border-primary rounded-l-none data-[active=true]:bg-primary/10",
+                  )}
+                >
+                  <Link to={item.to} onClick={closeMobile}>
+                    <item.icon className="size-4" strokeWidth={1.6} />
+                    <span>{item.label}</span>
+                  </Link>
+                </SidebarMenuButton>
+              </SidebarMenuItem>
+            );
+          })}
         </SidebarMenu>
       </SidebarGroupContent>
     </SidebarGroup>
@@ -382,21 +409,23 @@ export function AppShell({ children }: { children: React.ReactNode }) {
       </Sidebar>
 
       <SidebarInset className="bg-background overflow-hidden flex flex-col">
-        <header className="shrink-0 z-30 h-14 flex items-center gap-3 border-b border-border bg-background/80 backdrop-blur supports-backdrop-filter:bg-background/60 px-4">
-          <SidebarTrigger className="size-8" />
+        <header className="shrink-0 z-30 h-14 pt-safe box-content flex items-center gap-3 border-b border-border bg-background/80 backdrop-blur supports-backdrop-filter:bg-background/60 px-4">
+          <SidebarTrigger className="size-10 md:size-8 -ml-2 md:ml-0" />
           <Separator orientation="vertical" className="h-5" />
           <div className="flex items-center gap-2 font-mono text-[11px] uppercase tracking-[0.14em] text-muted-foreground min-w-0 overflow-hidden">
             <Waves className="size-3.5 text-primary shrink-0" />
-            <span className="text-foreground truncate">{routeLabel(pathname)}</span>
+            <span className="text-foreground truncate hidden sm:inline">{routeLabel(pathname)}</span>
+            <span className="text-foreground truncate sm:hidden">{routeLabelShort(pathname)}</span>
           </div>
           <div className="ml-auto flex items-center gap-3 font-mono text-[10px] uppercase tracking-[0.12em] text-muted-foreground/70">
             <ClockBadge />
           </div>
         </header>
 
-        <main className="relative flex-1 overflow-y-auto overflow-x-hidden px-4 sm:px-6 py-6 max-w-[100vw]">
+        <main className="relative flex-1 overflow-y-auto overflow-x-hidden px-4 sm:px-6 pt-6 pb-[calc(1.5rem+var(--bottom-nav))] max-w-[100vw]">
           <div className="relative z-10">{children}</div>
         </main>
+        <BottomNav companions={companions ?? []} pathname={pathname} />
       </SidebarInset>
     </SidebarProvider>
   );
@@ -408,10 +437,90 @@ function routeLabel(pathname: string): string {
   if (seg.length === 0) return "overview";
   if (seg[0] === "companions" && seg[1] && seg[2] === "repeaters")
     return `companions / ${seg[1]} / repeater`;
+  if (seg[0] === "companions" && seg[1] && seg[2] === "sensors")
+    return `companions / ${seg[1]} / sensor`;
+  if (seg[0] === "companions" && seg[1] && seg[2] === "rooms")
+    return `companions / ${seg[1]} / room`;
   if (seg[0] === "companions" && seg[1] && seg[2])
     return `companions / ${seg[1]} / ${seg[2]}`;
   if (seg[0] === "companions" && seg[1]) return `companions / ${seg[1]}`;
+  if (seg[0] === "monitoring" && seg[1]) return `monitoring / ${truncateMid(seg[1], 8, 4)}`;
   return seg.join(" / ");
+}
+
+// The phone header has room for one segment: the current page, with the
+// companion name when that is what distinguishes it.
+function routeLabelShort(pathname: string): string {
+  if (pathname === "/") return "overview";
+  const seg = pathname.split("/").filter(Boolean).map(decodeURIComponent);
+  if (seg[0] === "companions" && seg[1] && seg[2] === "repeaters") return "repeater";
+  if (seg[0] === "companions" && seg[1] && seg[2] === "sensors") return "sensor";
+  if (seg[0] === "companions" && seg[1] && seg[2] === "rooms") return "room";
+  if (seg[0] === "companions" && seg[1] && seg[2]) return seg[2];
+  if (seg[0] === "companions" && seg[1]) return seg[1];
+  if (seg[0] === "monitoring" && seg[1]) return "monitoring";
+  return seg[seg.length - 1] ?? "overview";
+}
+
+// BottomNav is the phone-only primary navigation: the four places people go
+// most, one tap away, plus "More" which opens the full sidebar sheet. Hidden
+// from md up, where the sidebar itself is visible; --bottom-nav (index.css)
+// reserves its height so content never hides behind it.
+function BottomNav({
+  companions,
+  pathname,
+}: {
+  companions: ConfigCompanion[];
+  pathname: string;
+}) {
+  const { setOpenMobile } = useSidebar();
+  const messagesTo =
+    companions.length === 1
+      ? `/companions/${encodeURIComponent(companions[0].name)}`
+      : "/companions";
+  const items: NavItem[] = [
+    PRIMARY[0],
+    {
+      to: messagesTo,
+      label: "Messages",
+      icon: MessagesSquare,
+      match: (p) => p.startsWith("/companions"),
+    },
+    PRIMARY[1],
+    PRIMARY[2],
+  ];
+  const itemClass =
+    "flex flex-1 flex-col items-center justify-center gap-1 h-14 font-mono text-[10px] uppercase tracking-[0.08em] text-muted-foreground transition-colors";
+  return (
+    <nav
+      aria-label="Primary"
+      className="md:hidden fixed inset-x-0 bottom-0 z-30 flex border-t border-border bg-background/95 backdrop-blur supports-backdrop-filter:bg-background/80 pb-safe"
+    >
+      {items.map((item) => {
+        const active = item.match(pathname);
+        return (
+          <Link
+            key={item.label}
+            to={item.to}
+            aria-current={active ? "page" : undefined}
+            className={cn(itemClass, active && "text-primary")}
+          >
+            <item.icon className="size-5" />
+            {item.label}
+          </Link>
+        );
+      })}
+      <button
+        type="button"
+        onClick={() => setOpenMobile(true)}
+        className={itemClass}
+        aria-label="More navigation"
+      >
+        <Menu className="size-5" />
+        More
+      </button>
+    </nav>
+  );
 }
 
 function ClockBadge() {

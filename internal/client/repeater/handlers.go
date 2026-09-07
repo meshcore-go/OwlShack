@@ -28,64 +28,41 @@ func (rm *Client) HandlePathPacket(pkt *meshcore.Packet) bool {
 				"expected", fmt.Sprintf("%02x", pl.peerPubKeyByte))
 			continue
 		}
-		if !path.VerifyMAC(pl.sharedSecret) {
+		plaintext := path.Decrypt(pl.sharedSecret)
+		if plaintext == nil {
 			rm.log.Debug("HandlePathPacket: MAC verify failed")
 			continue
 		}
-		plaintext := path.Decrypt(pl.sharedSecret)
+		pp, err := meshcore.ParsePathPayload(plaintext)
+		if err != nil {
+			rm.log.Debug("HandlePathPacket: bad path payload", "error", err)
+			continue
+		}
+		if pp.ExtraType != meshcore.PayloadTypeResponse || !isLoginReply(pp.Extra) {
+			continue
+		}
 		rm.pendingLogins = append(rm.pendingLogins[:i], rm.pendingLogins[i+1:]...)
 		rm.loginMu.Unlock()
 
 		rm.log.Debug("HandlePathPacket: login path decrypted",
 			"plaintextLen", len(plaintext),
 			"plaintextHex", hex.EncodeToString(plaintext))
-
-		if len(plaintext) < 2 {
-			rm.log.Debug("HandlePathPacket: plaintext too short")
-			return true
-		}
-
-		pathLenByte := plaintext[0]
-		pathHashSize := int((pathLenByte>>6)&3) + 1
-		hopCount := int(pathLenByte & 63)
-		pathDataLen := hopCount * pathHashSize
-
-		if len(plaintext) < 1+pathDataLen+1 {
-			rm.log.Debug("HandlePathPacket: plaintext too short for path+extra",
-				"need", 1+pathDataLen+1, "have", len(plaintext))
-			return true
-		}
-
-		returnPath := plaintext[1 : 1+pathDataLen]
-		extraType := plaintext[1+pathDataLen]
-		extraData := plaintext[1+pathDataLen+1:]
+		returnPath, extraType, extraData := pp.Path, pp.ExtraType, pp.Extra
+		pathHashSize := int(pp.PathHashSize())
 
 		rm.log.Debug("HandlePathPacket: parsed path return",
-			"hops", hopCount, "hashSize", pathHashSize,
+			"hops", pp.PathHashCount(), "hashSize", pathHashSize,
 			"pathHex", hex.EncodeToString(returnPath),
 			"extraType", fmt.Sprintf("%02x", extraType),
 			"extraDataLen", len(extraData))
 
-		if len(returnPath) > 0 {
-			rm.log.Debug("path return received", "hops", hopCount, "hashSize", pathHashSize, "pathHex", hex.EncodeToString(returnPath))
-			rm.node.Peers().SetOutPath(pl.peerPubKey, returnPath, uint8(pathHashSize))
-		} else {
-			rm.log.Debug("path return received: direct neighbor (0 hops)")
-			rm.node.Peers().SetOutPath(pl.peerPubKey, []byte{}, uint8(pathHashSize))
-		}
+		rm.node.Peers().SetOutPath(pl.peerPubKey, returnPath, uint8(pathHashSize))
 		rm.persistOutPath(pl.peerPubKey[:], returnPath, uint8(pathHashSize))
 
-		if extraType == meshcore.PayloadTypeResponse && len(extraData) > 0 {
-			rm.log.Debug("HandlePathPacket: delivering response to login channel", "extraDataLen", len(extraData))
-			select {
-			case pl.ch <- extraData:
-			default:
-				rm.log.Debug("HandlePathPacket: login channel full, dropped response")
-			}
-		} else {
-			rm.log.Debug("HandlePathPacket: no response extra data",
-				"extraType", fmt.Sprintf("%02x", extraType),
-				"wantType", fmt.Sprintf("%02x", meshcore.PayloadTypeResponse))
+		select {
+		case pl.ch <- extraData:
+		default:
+			rm.log.Debug("HandlePathPacket: login channel full, dropped response")
 		}
 		return true
 	}
@@ -105,33 +82,19 @@ func (rm *Client) HandlePathPacket(pkt *meshcore.Packet) bool {
 		if !path.VerifyMAC(sess.sharedSecret) {
 			continue
 		}
-		plaintext := path.Decrypt(sess.sharedSecret)
-		if len(plaintext) < 2 {
+		pp, err := meshcore.ParsePathPayload(path.Decrypt(sess.sharedSecret))
+		if err != nil {
 			return true
 		}
+		returnPath, extraType, extraData := pp.Path, pp.ExtraType, pp.Extra
+		pathHashSize := int(pp.PathHashSize())
 
-		pathLenByte := plaintext[0]
-		pathHashSize := int((pathLenByte>>6)&3) + 1
-		hopCount := int(pathLenByte & 63)
-		pathDataLen := hopCount * pathHashSize
-
-		if len(plaintext) < 1+pathDataLen+1 {
-			return true
-		}
-
-		returnPath := plaintext[1 : 1+pathDataLen]
-		extraType := plaintext[1+pathDataLen]
-		extraData := plaintext[1+pathDataLen+1:]
-
-		if len(returnPath) > 0 {
-			rm.log.Debug("path return received (session)", "hops", hopCount, "hashSize", pathHashSize, "pathHex", hex.EncodeToString(returnPath))
-			pubkeyBytes, _ := hex.DecodeString(sess.PubKeyHex)
-			if len(pubkeyBytes) == 32 {
-				var pubkey [32]byte
-				copy(pubkey[:], pubkeyBytes)
-				rm.node.Peers().SetOutPath(pubkey, returnPath, uint8(pathHashSize))
-				rm.persistOutPath(pubkeyBytes, returnPath, uint8(pathHashSize))
-			}
+		rm.log.Debug("path return received (session)", "hops", pp.PathHashCount(), "hashSize", pathHashSize, "pathHex", hex.EncodeToString(returnPath))
+		if pubkeyBytes, derr := hex.DecodeString(sess.PubKeyHex); derr == nil && len(pubkeyBytes) == 32 {
+			var pubkey [32]byte
+			copy(pubkey[:], pubkeyBytes)
+			rm.node.Peers().SetOutPath(pubkey, returnPath, uint8(pathHashSize))
+			rm.persistOutPath(pubkeyBytes, returnPath, uint8(pathHashSize))
 		}
 
 		if extraType == meshcore.PayloadTypeResponse && len(extraData) >= 4 {
@@ -169,27 +132,14 @@ func (rm *Client) HandlePathPacket(pkt *meshcore.Packet) bool {
 		if !path.VerifyMAC(pr.sharedSecret) {
 			continue
 		}
-		plaintext := path.Decrypt(pr.sharedSecret)
-		if len(plaintext) < 2 {
+		pp, err := meshcore.ParsePathPayload(path.Decrypt(pr.sharedSecret))
+		if err != nil {
 			return true
 		}
+		returnPath, extraType, extraData := pp.Path, pp.ExtraType, pp.Extra
 
-		pathLenByte := plaintext[0]
-		pathHashSize := int((pathLenByte>>6)&3) + 1
-		hopCount := int(pathLenByte & 63)
-		pathDataLen := hopCount * pathHashSize
-		if len(plaintext) < 1+pathDataLen+1 {
-			return true
-		}
-
-		returnPath := plaintext[1 : 1+pathDataLen]
-		extraType := plaintext[1+pathDataLen]
-		extraData := plaintext[1+pathDataLen+1:]
-
-		if len(returnPath) > 0 {
-			rm.node.Peers().SetOutPath(pr.peerPubKey, returnPath, uint8(pathHashSize))
-			rm.persistOutPath(pr.peerPubKey[:], returnPath, uint8(pathHashSize))
-		}
+		rm.node.Peers().SetOutPath(pr.peerPubKey, returnPath, pp.PathHashSize())
+		rm.persistOutPath(pr.peerPubKey[:], returnPath, pp.PathHashSize())
 
 		if extraType == meshcore.PayloadTypeResponse && len(extraData) >= 4 {
 			tag := binary.LittleEndian.Uint32(extraData[:4])
@@ -222,17 +172,15 @@ func (rm *Client) HandleResponsePacket(pkt *meshcore.Packet) {
 		if resp.Source != pl.peerPubKeyByte {
 			continue
 		}
-		if !resp.VerifyMAC(pl.sharedSecret) {
+		plaintext := resp.Decrypt(pl.sharedSecret)
+		if !isLoginReply(plaintext) {
 			continue
 		}
-		plaintext := resp.Decrypt(pl.sharedSecret)
 		rm.pendingLogins = append(rm.pendingLogins[:i], rm.pendingLogins[i+1:]...)
 		rm.loginMu.Unlock()
-		if plaintext != nil {
-			select {
-			case pl.ch <- plaintext:
-			default:
-			}
+		select {
+		case pl.ch <- plaintext:
+		default:
 		}
 		return
 	}
@@ -269,7 +217,7 @@ func (rm *Client) HandleResponsePacket(pkt *meshcore.Packet) {
 	rm.mu.Unlock()
 
 	for _, sess := range sessions {
-		if resp.Source != sess.localPubKey[0] && resp.Destination != sess.localPubKey[0] {
+		if resp.Destination != sess.localPubKey[0] {
 			continue
 		}
 		if !resp.VerifyMAC(sess.sharedSecret) {

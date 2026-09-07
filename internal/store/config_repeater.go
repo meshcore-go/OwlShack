@@ -31,8 +31,13 @@ type Repeater struct {
 	FloodMaxUnscoped    *int
 	FloodMaxAdvert      *int
 	LoopDetect          *string
-	PathHashMode        *int
+	PathHashSize        *int
+	TxDelayFactor       *float64
+	DirectTxDelayFactor *float64
+	RxDelayBase         *float64
+	MultiAcks           *int
 	DefaultRegion       string
+	HomeRegion          string
 	AdminPassword       string
 	GuestPassword       string
 	OwnerInfo           string
@@ -48,11 +53,12 @@ func (r *RepeaterRepo) Get(ctx context.Context) (*Repeater, error) {
 	err := r.db.QueryRowContext(ctx, `
 		SELECT name, private_key, pubkey, latitude, longitude, advert_interval,
 		       flood_advert_interval, disable_fwd, flood_max, flood_max_unscoped, flood_max_advert,
-		       loop_detect, path_hash_mode, default_region, admin_password, guest_password, owner_info, regions
+		       loop_detect, path_hash_size, tx_delay_factor, direct_tx_delay_factor, rx_delay_base, multi_acks,
+		       default_region, home_region, admin_password, guest_password, owner_info, regions
 		FROM repeater WHERE id = 1`).Scan(
 		&rep.Name, &rep.PrivateKey, &rep.PubKey, &rep.Latitude, &rep.Longitude, &rep.AdvertInterval,
 		&rep.FloodAdvertInterval, &rep.DisableFwd, &rep.FloodMax, &rep.FloodMaxUnscoped, &rep.FloodMaxAdvert,
-		&rep.LoopDetect, &rep.PathHashMode, &rep.DefaultRegion, &rep.AdminPassword, &rep.GuestPassword, &rep.OwnerInfo, &regionsJSON)
+		&rep.LoopDetect, &rep.PathHashSize, &rep.TxDelayFactor, &rep.DirectTxDelayFactor, &rep.RxDelayBase, &rep.MultiAcks, &rep.DefaultRegion, &rep.HomeRegion, &rep.AdminPassword, &rep.GuestPassword, &rep.OwnerInfo, &regionsJSON)
 	if err != nil {
 		return nil, err // includes sql.ErrNoRows for "no repeater configured"
 	}
@@ -78,11 +84,12 @@ func (r *RepeaterRepo) Set(ctx context.Context, rep *Repeater) error {
 		INSERT OR REPLACE INTO repeater
 			(id, name, private_key, pubkey, latitude, longitude, advert_interval,
 			 flood_advert_interval, disable_fwd, flood_max, flood_max_unscoped, flood_max_advert,
-			 loop_detect, path_hash_mode, default_region, admin_password, guest_password, owner_info, regions)
-		VALUES (1, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+			 loop_detect, path_hash_size, tx_delay_factor, direct_tx_delay_factor, rx_delay_base, multi_acks,
+			 default_region, home_region, admin_password, guest_password, owner_info, regions)
+		VALUES (1, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
 		rep.Name, rep.PrivateKey, rep.PubKey, rep.Latitude, rep.Longitude, rep.AdvertInterval,
 		rep.FloodAdvertInterval, rep.DisableFwd, rep.FloodMax, rep.FloodMaxUnscoped, rep.FloodMaxAdvert,
-		rep.LoopDetect, rep.PathHashMode, rep.DefaultRegion, rep.AdminPassword, rep.GuestPassword, rep.OwnerInfo, string(regionsJSON))
+		rep.LoopDetect, rep.PathHashSize, rep.TxDelayFactor, rep.DirectTxDelayFactor, rep.RxDelayBase, rep.MultiAcks, rep.DefaultRegion, rep.HomeRegion, rep.AdminPassword, rep.GuestPassword, rep.OwnerInfo, string(regionsJSON))
 	if err != nil {
 		return fmt.Errorf("upserting repeater: %w", err)
 	}

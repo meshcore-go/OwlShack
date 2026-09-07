@@ -199,37 +199,37 @@ function ContactRow({
     contact.type?.toUpperCase() === "REPEATER",
   );
   return (
-    <div className="flex items-center gap-3 px-4 py-3 hover:bg-muted/40 transition-colors">
+    <div className="flex items-center gap-2 sm:gap-4 px-3 sm:px-4 py-3 hover:bg-muted/40 transition-colors">
       <Link to={detailTo} className="flex items-center gap-3 min-w-0 flex-1">
         <PeerAvatar name={displayName} size="md" />
 
-        <div className="min-w-0 flex-1 space-y-1">
-          <div className="flex items-center gap-2">
+        <div className="min-w-0 flex-1">
+          <div className="flex items-center gap-2 min-w-0">
             <span className="text-sm font-medium truncate">
               {contact.name || (
                 <span className="text-muted-foreground italic">unknown</span>
               )}
             </span>
-            {contact.type && <PeerTypePill type={contact.type} />}
+            {contact.type && (
+              <span className="shrink-0">
+                <PeerTypePill type={contact.type} />
+              </span>
+            )}
           </div>
-          <div className="flex items-center gap-3 text-mono-xs text-muted-foreground">
-            <code className="font-mono text-xs text-muted-foreground">
-              {truncateMid(contact.peerPubkey, 8, 6)}
-            </code>
-            <span className="text-muted-foreground/50">·</span>
-            <span className="tabular-nums">
-              added {timeAgo(contact.addedAt)}
-            </span>
-          </div>
+          <code className="font-mono text-xs text-muted-foreground block truncate tabular-nums">
+            {truncateMid(contact.peerPubkey, 8, 6)} · added {timeAgo(contact.addedAt)}
+          </code>
         </div>
       </Link>
 
-      <div className="shrink-0">
+      <div className="flex items-center shrink-0">
         <InlineConfirm
           confirming={confirming}
           onAskRemove={onAskRemove}
           onCancel={onCancel}
           onConfirm={onConfirm}
+          iconOnly
+          ariaLabel="Remove contact"
         />
       </div>
     </div>

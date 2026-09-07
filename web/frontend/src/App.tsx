@@ -1,13 +1,15 @@
 import { lazy, Suspense } from "react";
-import { Route, Routes } from "react-router-dom";
+import { Navigate, Route, Routes } from "react-router-dom";
 import { AppShell } from "@/components/AppShell";
 import { useApiList } from "@/hooks/useApiList";
 import { useApiObject } from "@/hooks/useApiObject";
 import { type ConfigCompanion, type Settings } from "@/lib/configApi";
 import { DashboardPage } from "@/pages/DashboardPage";
 import { PeersPage } from "@/pages/PeersPage";
-import { CompanionsPage } from "@/pages/CompanionsPage";
 
+const CompanionsPage = lazy(() =>
+  import("@/pages/CompanionsPage").then((m) => ({ default: m.CompanionsPage })),
+);
 const MapPage = lazy(() =>
   import("@/pages/MapPage").then((m) => ({ default: m.MapPage })),
 );
@@ -124,7 +126,8 @@ export function App() {
           <Route path="/monitoring/:pubkey" element={<MonitoringDetailPage />} />
           <Route path="/bots" element={<BotsPage />} />
           <Route path="/mqtt" element={<MqttPage />} />
-          <Route path="/radio" element={<RadioPage />} />
+          <Route path="/settings" element={<RadioPage />} />
+          <Route path="/radio" element={<Navigate to="/settings" replace />} />
           <Route path="/repeater" element={<RepeaterNodePage />} />
           <Route path="/companions" element={<CompanionsPage />} />
           <Route path="/companions/:name" element={<CompanionDetailPage />} />
@@ -147,6 +150,14 @@ export function App() {
           <Route
             path="/companions/:name/repeaters/:pubkey"
             element={<RepeaterDetailPage />}
+          />
+          <Route
+            path="/companions/:name/sensors/:pubkey"
+            element={<RepeaterDetailPage kind="sensor" />}
+          />
+          <Route
+            path="/companions/:name/rooms/:pubkey"
+            element={<RepeaterDetailPage kind="room" />}
           />
         </Routes>
       </Suspense>

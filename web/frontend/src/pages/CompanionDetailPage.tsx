@@ -27,6 +27,7 @@ import {
   ExternalLink,
   Hash,
   Antenna,
+  Pencil,
   Loader2,
   LogIn,
   Megaphone,
@@ -115,6 +116,7 @@ interface Conversation {
   };
   unreadCount: number;
   lastActive?: string;
+  lastMessageId?: number;
   peerType?: string;
   isRepeater?: boolean;
   pubkey?: string;
@@ -307,7 +309,7 @@ const SORT_KEY = "companion-sort";
 // Shared style for the page-header action chips (contacts/channels/repeaters
 // links + the advert trigger), so the one styling stays in a single place.
 const HEADER_ACTION_CLASS =
-  "inline-flex items-center font-mono text-[10px] uppercase tracking-[0.12em] text-muted-foreground hover:text-primary px-2.5 py-1.5 sm:py-0.5 border border-border";
+  "inline-flex items-center font-mono text-[10px] uppercase tracking-[0.12em] text-muted-foreground hover:text-primary px-2.5 py-1.5 sm:py-0.5 border border-border relative before:absolute before:inset-x-0 before:-inset-y-2 before:content-[''] sm:before:hidden";
 
 // The companion's management/nav targets — sub-pages reachable from the chat
 // header. Rendered as inline chips on desktop and as menu items in the mobile
@@ -404,6 +406,7 @@ function CompanionActions({ companion }: { companion: string }) {
   const { busy, send } = useAdvert(companion);
   const path = (seg: string) =>
     `/companions/${encodeURIComponent(companion)}/${seg}`;
+  const editPath = `/companions?edit=${encodeURIComponent(companion)}`;
 
   return (
     <>
@@ -413,6 +416,9 @@ function CompanionActions({ companion }: { companion: string }) {
             <Icon className="size-3 mr-1.5" /> {label}
           </Link>
         ))}
+        <Link to={editPath} className={HEADER_ACTION_CLASS} title="Edit name, position, advert interval">
+          <Pencil className="size-3 mr-1.5" /> edit
+        </Link>
         <DropdownMenu>
           <DropdownMenuTrigger asChild>
             <button
@@ -461,6 +467,14 @@ function CompanionActions({ companion }: { companion: string }) {
               </Link>
             </DropdownMenuItem>
           ))}
+          <DropdownMenuItem asChild className="gap-2">
+            <Link to={editPath}>
+              <Pencil className="size-3.5 text-muted-foreground" />
+              <span className="font-mono text-xs uppercase tracking-[0.12em]">
+                edit companion
+              </span>
+            </Link>
+          </DropdownMenuItem>
           <DropdownMenuSeparator />
           <AdvertItems busy={busy} onSend={send} />
         </DropdownMenuContent>
@@ -487,9 +501,11 @@ export function CompanionDetailPage() {
   const [listError, setListError] = useState<string | null>(null);
   const [search, setSearch] = useState("");
   const [sort, setSort] = useState<SortMode>(() => {
-    if (typeof window === "undefined") return "recent";
-    const stored = window.localStorage.getItem(SORT_KEY) as SortMode | null;
-    return stored ?? "recent";
+    try {
+      return (window.localStorage.getItem(SORT_KEY) as SortMode | null) ?? "recent";
+    } catch {
+      return "recent";
+    }
   });
   const [composer, setComposer] = useState("");
   const [sending, setSending] = useState(false);
@@ -614,10 +630,19 @@ export function CompanionDetailPage() {
   const roomLoggedIn =
     !!roomSession && roomSession.loggedIn !== false && !!roomSession.pubkeyHex;
   const roomReadOnly = roomLoggedIn && roomSession?.role === "read-only";
+  // A sensor's thread only ever carries its alerts to us; anything we typed
+  // back would be run as a CLI command (admin) or dropped. Manage it instead.
+  const isSensorThread = activeConversation?.peerType === "SENSOR";
+  const composerLocked = roomReadOnly || isSensorThread;
+  const lockedHint = isSensorThread
+    ? "sensor alerts only — sensors don't accept chat"
+    : "read-only access";
 
   useEffect(() => {
-    if (typeof window !== "undefined") {
+    try {
       window.localStorage.setItem(SORT_KEY, sort);
+    } catch {
+      /* best-effort */
     }
   }, [sort]);
 
@@ -984,6 +1009,7 @@ export function CompanionDetailPage() {
           timestamp: incoming.timestamp,
         };
         target.lastActive = incoming.timestamp;
+        if (typeof incoming.id === "number") target.lastMessageId = incoming.id;
         if (
           incoming.direction === "rx" &&
           incoming.channel !== activeChannel
@@ -1068,6 +1094,14 @@ export function CompanionDetailPage() {
     };
   }, [contextMsg]);
 
+  // Repeater threads are managed on the Repeaters page, so they count as
+  // neither listed nor "threads" here; the search filter must not change the
+  // header total.
+  const threadCount = useMemo(
+    () => conversations.filter((c) => !c.isRepeater).length,
+    [conversations],
+  );
+
   const filteredConversations = useMemo(() => {
     const q = search.trim().toLowerCase();
     let arr = conversations.filter((c) => !c.isRepeater);
@@ -1093,12 +1127,10 @@ export function CompanionDetailPage() {
         if (p !== 0) return p;
         if (a.unreadCount !== b.unreadCount)
           return b.unreadCount - a.unreadCount;
-        return tsValue(b.lastActive) - tsValue(a.lastActive);
+        return convRecency(a, b);
       });
     } else {
-      arr.sort(
-        (a, b) => pinPublic(a, b) || tsValue(b.lastActive) - tsValue(a.lastActive),
-      );
+      arr.sort((a, b) => pinPublic(a, b) || convRecency(a, b));
     }
     return arr;
   }, [conversations, search, sort]);
@@ -1365,14 +1397,14 @@ export function CompanionDetailPage() {
   const overLimit = composerLen > charLimit;
 
   return (
-    <div className={cn("h-[calc(100dvh-3.5rem)] -my-6 -mx-4 sm:-mx-6 flex flex-col overflow-hidden", activeChannel && "max-lg:*:first:hidden")}>
+    <div className={cn("h-[calc(100dvh-3.5rem-env(safe-area-inset-top,0px)-var(--bottom-nav))] -mt-6 -mb-[calc(1.5rem+var(--bottom-nav))] -mx-4 sm:-mx-6 flex flex-col overflow-hidden", activeChannel && "max-lg:*:first:hidden")}>
       <div className="shrink-0 px-4 sm:px-6 pt-6">
         <PageHeader
           title="Messages"
           meta={
             <span className="font-mono text-sm text-muted-foreground tabular-nums">
-              {conversations.length} thread
-              {conversations.length === 1 ? "" : "s"}
+              {threadCount} thread
+              {threadCount === 1 ? "" : "s"}
             </span>
           }
           trailing={<ConnectionPill connected={connected} />}
@@ -1455,7 +1487,7 @@ export function CompanionDetailPage() {
                   setSearch(e.target.value)
                 }
                 placeholder="search"
-                className="pl-8 h-8 font-mono text-xs rounded-none border-border bg-background"
+                className="pl-8 h-8 font-mono text-base md:text-xs rounded-none border-border bg-background"
               />
             </div>
           </div>
@@ -1492,7 +1524,7 @@ export function CompanionDetailPage() {
                 <button
                   type="button"
                   onClick={closeChat}
-                  className="lg:hidden p-1 -ml-1 text-muted-foreground hover:text-foreground"
+                  className="lg:hidden p-3 -m-2 text-muted-foreground hover:text-foreground"
                 >
                   <ChevronLeft className="size-4" />
                 </button>
@@ -1544,7 +1576,7 @@ export function CompanionDetailPage() {
                     value={msgSearch}
                     onChange={(e) => setMsgSearch(e.target.value)}
                     placeholder="Search messages..."
-                    className="h-7 font-mono text-xs rounded-none border-border bg-background"
+                    className="h-7 font-mono text-base md:text-xs rounded-none border-border bg-background"
                     autoFocus
                   />
                   <button
@@ -1643,17 +1675,15 @@ export function CompanionDetailPage() {
                       emojiAC.close();
                       mentionAC.close();
                     }}
-                    placeholder={
-                      roomReadOnly ? "read-only access" : "transmit…"
-                    }
-                    disabled={roomReadOnly}
-                    className="resize-none rounded-none border-border font-mono text-sm min-h-9 max-h-25 bg-background"
+                    placeholder={composerLocked ? lockedHint : "transmit…"}
+                    disabled={composerLocked}
+                    className="resize-none rounded-none border-border font-mono text-base md:text-sm min-h-9 max-h-25 bg-background"
                     style={{ height: "auto" }}
                   />
                   <Button
                     onClick={send}
                     disabled={
-                      sending || !composer.trim() || overLimit || roomReadOnly
+                      sending || !composer.trim() || overLimit || composerLocked
                     }
                     size="sm"
                     className="rounded-none h-9 font-mono text-[11px] uppercase tracking-[0.12em]"
@@ -1664,9 +1694,11 @@ export function CompanionDetailPage() {
                 </div>
                 <div className="px-3 pb-2 flex items-center justify-between">
                   <span className="text-mono-xs text-muted-foreground/60 hidden sm:inline">
-                    {roomReadOnly
-                      ? "read-only access — posting disabled"
-                      : "Enter sends · Shift+Enter newline"}
+                    {isSensorThread
+                      ? "alerts from this sensor — use Manage to configure it"
+                      : roomReadOnly
+                        ? "read-only access — posting disabled"
+                        : "Enter sends · Shift+Enter newline"}
                   </span>
                   <span
                     className={cn(
@@ -1795,7 +1827,7 @@ export function CompanionDetailPage() {
               )}
             </DialogDescription>
           </DialogHeader>
-          <div className="max-h-[60vh] overflow-y-auto">
+          <div className="max-h-[60dvh] overflow-y-auto">
             {modalLoading ? (
               <div className="space-y-2">
                 <Skeleton className="h-8 w-full" />
@@ -1817,6 +1849,14 @@ export function CompanionDetailPage() {
       </Dialog>
     </div>
   );
+}
+
+// Thread recency: the newest message's row id when both threads have one — a
+// remote node (a room stamps posts with its own RTC) can report a wrong time,
+// which would otherwise sink a just-active thread to the bottom.
+function convRecency(a: Conversation, b: Conversation): number {
+  if (a.lastMessageId && b.lastMessageId) return b.lastMessageId - a.lastMessageId;
+  return tsValue(b.lastActive) - tsValue(a.lastActive);
 }
 
 function tsValue(iso?: string): number {
@@ -1852,13 +1892,15 @@ function mergeMessages(existing: Message[], incoming: Message[]): Message[] {
     else byKey.set(k, out.length - 1);
   }
   if (appended) {
+    // Order by row id (the order we learned of a message), not by timestamp: a
+    // room stamps each post with its own RTC, so a node with a wrong clock would
+    // otherwise drop its posts into the middle of the thread. Messages with no
+    // id yet sort last — they are the newest.
     out.sort((a, b) => {
-      const ta = tsValue(a.timestamp);
-      const tb = tsValue(b.timestamp);
-      if (ta !== tb) return ta - tb;
-      const ia = typeof a.id === "number" ? a.id : 0;
-      const ib = typeof b.id === "number" ? b.id : 0;
-      return ia - ib;
+      const ia = typeof a.id === "number" && a.id > 0 ? a.id : Number.MAX_SAFE_INTEGER;
+      const ib = typeof b.id === "number" && b.id > 0 ? b.id : Number.MAX_SAFE_INTEGER;
+      if (ia !== ib) return ia - ib;
+      return tsValue(a.timestamp) - tsValue(b.timestamp);
     });
   }
   return out;
@@ -2647,7 +2689,7 @@ function CtxItem({
       type="button"
       onClick={onClick}
       className={cn(
-        "w-full text-left px-3 py-1.5 flex items-center gap-2 font-mono text-xs uppercase tracking-[0.08em] hover:bg-muted/60",
+        "w-full text-left px-3 py-1.5 min-h-10 sm:min-h-0 flex items-center gap-2 font-mono text-xs uppercase tracking-[0.08em] hover:bg-muted/60",
         variant === "destructive" && "text-destructive",
       )}
     >

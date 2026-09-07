@@ -82,7 +82,7 @@ export function ChatHeaderMenu({
         <DropdownMenuTrigger asChild>
           <button
             type="button"
-            className="size-8 grid place-items-center text-muted-foreground hover:text-foreground hover:bg-muted/60 border border-transparent hover:border-border rounded-sm"
+            className="relative size-8 grid place-items-center text-muted-foreground hover:text-foreground hover:bg-muted/60 border border-transparent hover:border-border rounded-sm before:absolute before:-inset-1 before:content-[''] sm:before:hidden"
             aria-label="Chat options"
           >
             <MoreVertical className="size-4" strokeWidth={1.6} />
@@ -241,7 +241,9 @@ function ShareDialog({
           width: 200,
           margin: 2,
           color: { dark: "#000000", light: "#ffffff" },
-        }).then(setQrDataUrl);
+        })
+          .then(setQrDataUrl)
+          .catch(() => setQrDataUrl(null));
       } else {
         setQrDataUrl(null);
       }
@@ -533,7 +535,7 @@ function ParticipantsDialog({
             Senders seen in this channel
           </DialogDescription>
         </DialogHeader>
-        <div className="max-h-[50vh] overflow-y-auto space-y-1">
+        <div className="max-h-[50dvh] overflow-y-auto space-y-1">
           {loading ? (
             <p className="font-mono text-xs text-muted-foreground/60 p-2">
               Loading...
@@ -629,7 +631,7 @@ function BlockedSendersDialog({
             Messages from blocked senders are hidden
           </DialogDescription>
         </DialogHeader>
-        <div className="max-h-[50vh] overflow-y-auto space-y-1">
+        <div className="max-h-[50dvh] overflow-y-auto space-y-1">
           {loading ? (
             <p className="font-mono text-xs text-muted-foreground/60 p-2">
               Loading...

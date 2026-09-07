@@ -131,6 +131,9 @@ func assembleFromRows(rows *configRows) *config.Config {
 		CR:             intToU8Ptr(s.CR),
 		TX:             intToU8Ptr(s.TX),
 		ListenAddr:     s.ListenAddr,
+		MapTileKey:     s.MapTileKey,
+		PathHashSize:   s.PathHashSize,
+		DutyCycle:      s.DutyCyclePct,
 		SetupComplete:  boolPtr(s.SetupComplete),
 	}
 
@@ -155,6 +158,7 @@ func assembleFromRows(rows *configRows) *config.Config {
 			Latitude:       c.Latitude,
 			Longitude:      c.Longitude,
 			AdvertInterval: c.AdvertInterval,
+			PathHashSize:   c.PathHashSize,
 		}
 		if chs := chansByComp[c.ID]; len(chs) > 0 {
 			list := make(config.ChannelList, 0, len(chs))
@@ -206,8 +210,13 @@ func assembleFromRows(rows *configRows) *config.Config {
 			FloodMaxUnscoped:    r.FloodMaxUnscoped,
 			FloodMaxAdvert:      r.FloodMaxAdvert,
 			LoopDetect:          r.LoopDetect,
-			PathHashMode:        r.PathHashMode,
+			PathHashSize:        r.PathHashSize,
+			TxDelayFactor:       r.TxDelayFactor,
+			DirectTxDelayFactor: r.DirectTxDelayFactor,
+			RxDelayBase:         r.RxDelayBase,
+			MultiAcks:           r.MultiAcks,
 			DefaultRegion:       r.DefaultRegion,
+			HomeRegion:          r.HomeRegion,
 			AdminPassword:       r.AdminPassword,
 			GuestPassword:       r.GuestPassword,
 			OwnerInfo:           r.OwnerInfo,
@@ -295,6 +304,9 @@ func writeConfigToTables(ctx context.Context, st *store.Store, cfg *config.Confi
 		CR:             u8ToIntPtr(cfg.CR),
 		TX:             u8ToIntPtr(cfg.TX),
 		ListenAddr:     cfg.ListenAddr,
+		MapTileKey:     cfg.MapTileKey,
+		PathHashSize:   cfg.PathHashSize,
+		DutyCyclePct:   cfg.DutyCycle,
 		SetupComplete:  cfg.SetupComplete != nil && *cfg.SetupComplete,
 	}); err != nil {
 		return err
@@ -320,6 +332,7 @@ func writeConfigToTables(ctx context.Context, st *store.Store, cfg *config.Confi
 			Latitude:       cc.Latitude,
 			Longitude:      cc.Longitude,
 			AdvertInterval: cc.AdvertInterval,
+			PathHashSize:   cc.PathHashSize,
 		}
 		if prev, ok := byName[cc.Name]; ok {
 			row.ID = prev.ID
@@ -376,8 +389,13 @@ func writeRepeater(ctx context.Context, st *store.Store, cfg *config.Config) err
 		FloodMaxUnscoped:    r.FloodMaxUnscoped,
 		FloodMaxAdvert:      r.FloodMaxAdvert,
 		LoopDetect:          r.LoopDetect,
-		PathHashMode:        r.PathHashMode,
+		PathHashSize:        r.PathHashSize,
+		TxDelayFactor:       r.TxDelayFactor,
+		DirectTxDelayFactor: r.DirectTxDelayFactor,
+		RxDelayBase:         r.RxDelayBase,
+		MultiAcks:           r.MultiAcks,
 		DefaultRegion:       r.DefaultRegion,
+		HomeRegion:          r.HomeRegion,
 		AdminPassword:       r.AdminPassword,
 		GuestPassword:       r.GuestPassword,
 		OwnerInfo:           r.OwnerInfo,

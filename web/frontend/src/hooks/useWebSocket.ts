@@ -127,6 +127,8 @@ export function useWebSocket(topics: string[], onMessage?: MessageHandler) {
       window.removeEventListener("pageshow", resume);
       if (reconnectRef.current) clearTimeout(reconnectRef.current);
       if (probeRef.current) clearTimeout(probeRef.current);
+      reconnectRef.current = null;
+      probeRef.current = null;
       wsRef.current?.close();
     };
     // eslint-disable-next-line react-hooks/exhaustive-deps

@@ -85,6 +85,7 @@ func (b *backend) SaveSettings(ctx context.Context, in api.SettingsInput) error 
 			if in.SetupComplete != nil {
 				setup = *in.SetupComplete
 			}
+			prevKey := rows.settings.MapTileKey
 			row = store.Settings{
 				LogLevel:       in.LogLevel,
 				ConnectionType: ct,
@@ -96,6 +97,9 @@ func (b *backend) SaveSettings(ctx context.Context, in api.SettingsInput) error 
 				CR:             or(in.CR, u8ToIntPtr(def.CR)),
 				TX:             or(in.TX, u8ToIntPtr(def.TX)),
 				ListenAddr:     in.ListenAddr,
+				MapTileKey:     or(in.MapTileKey, prevKey),
+				PathHashSize:   in.PathHashSize,
+				DutyCyclePct:   in.DutyCycle,
 				SetupComplete:  setup,
 			}
 			rows.settings = &row
@@ -191,6 +195,7 @@ func (b *backend) SaveCompanion(ctx context.Context, in api.CompanionInput) (int
 			row = store.Companion{
 				ID: in.ID, Name: in.Name,
 				Latitude: in.Latitude, Longitude: in.Longitude, AdvertInterval: in.AdvertInterval,
+				PathHashSize: in.PathHashSize,
 			}
 			row.PrivateKey = key
 			if row.PrivateKey == "" && in.ID != 0 { // update without a key change → keep existing
@@ -402,7 +407,11 @@ func (b *backend) UpdateRepeaterRelay(ctx context.Context, in api.RepeaterRelayI
 		r.FloodMaxUnscoped = in.FloodMaxUnscoped
 		r.FloodMaxAdvert = in.FloodMaxAdvert
 		r.LoopDetect = in.LoopDetect
-		r.PathHashMode = in.PathHashMode
+		r.PathHashSize = in.PathHashSize
+		r.TxDelayFactor = in.TxDelayFactor
+		r.DirectTxDelayFactor = in.DirectTxDelayFactor
+		r.RxDelayBase = in.RxDelayBase
+		r.MultiAcks = in.MultiAcks
 		r.DefaultRegion = in.DefaultRegion
 		r.AdvertInterval = in.AdvertInterval
 		r.FloodAdvertInterval = in.FloodAdvertInterval
@@ -446,12 +455,16 @@ func (b *backend) SetRepeaterRegionFlood(ctx context.Context, name string, denyF
 
 // RemoveRepeaterRegion deletes a region. Removing "*" stops relaying unscoped
 // flood (see regionsFromConfig); removing the default advert scope clears it,
-// keeping DefaultRegion pointing at a configured region (Validate enforces it).
+// keeping DefaultRegion / HomeRegion pointing at a configured region (Validate
+// enforces it).
 func (b *backend) RemoveRepeaterRegion(ctx context.Context, name string) error {
 	return b.mutateRepeater(ctx, func(r *store.Repeater) {
 		r.Regions = slices.DeleteFunc(r.Regions, func(rg store.RepeaterRegion) bool { return rg.Name == name })
 		if r.DefaultRegion == name {
 			r.DefaultRegion = ""
+		}
+		if r.HomeRegion == name {
+			r.HomeRegion = ""
 		}
 	})
 }

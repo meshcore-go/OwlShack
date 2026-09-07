@@ -91,8 +91,14 @@ func (cr *ChannelRef) Validate() error {
 		return fmt.Errorf("channel name is required")
 	}
 	if cr.PrivateKey != "" {
-		if _, err := hex.DecodeString(cr.PrivateKey); err != nil {
+		psk, err := hex.DecodeString(cr.PrivateKey)
+		if err != nil {
 			return fmt.Errorf("channel %q: privateKey must be hex: %w", cr.Name, err)
+		}
+		// NewChannelFromPSK rejects any other length at companion construction,
+		// which exits the process — so it has to be caught here.
+		if len(psk) != 16 {
+			return fmt.Errorf("channel %q: privateKey must be 16 bytes (32 hex chars), got %d bytes", cr.Name, len(psk))
 		}
 	}
 	return nil

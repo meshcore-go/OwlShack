@@ -67,6 +67,19 @@ func (r *companionRegistry) set(companions []*companion.Companion) {
 	r.mu.Unlock()
 }
 
+// all returns every registered companion. Used by feeds that must reach the
+// CURRENT set through the registry rather than capturing instances, since a
+// reload replaces them.
+func (r *companionRegistry) all() []*companion.Companion {
+	r.mu.RLock()
+	defer r.mu.RUnlock()
+	out := make([]*companion.Companion, 0, len(r.byName))
+	for _, c := range r.byName {
+		out = append(out, c)
+	}
+	return out
+}
+
 func (r *companionRegistry) find(name string) (*companion.Companion, bool) {
 	r.mu.RLock()
 	defer r.mu.RUnlock()
@@ -141,13 +154,23 @@ func monitorKind(c *companion.Companion, ct store.Contact) string {
 			}
 		}
 	}
+	if peerType == "" {
+		// Advert not heard yet (or a manually added contact): the contact row
+		// caches the type the operator or a past advert gave it.
+		peerType = strings.ToUpper(ct.Type)
+	}
 	switch peerType {
 	case "REPEATER":
 		return "repeater"
 	case "SENSOR":
-		return "sensor"
+		// Sensor firmware answers GET_TELEMETRY_DATA for any client in its ACL
+		// with the static-identity ECDH secret — the same sessionless request the
+		// companion collector already sends. No status/neighbours to collect.
+		return "companion"
 	case "ROOM", "ROOM_SERVER":
-		return "room"
+		// Rooms answer GET_TELEMETRY_DATA for any ACL client — same sessionless
+		// request the companion collector sends. No status collector for them.
+		return "companion"
 	case "CHAT", "COMPANION":
 		return "companion"
 	}
@@ -227,7 +250,7 @@ func (rc *repeaterCollector) Collect(ctx context.Context, t monitor.Target) (*mo
 		}); terr == nil {
 			res.Readings = append(res.Readings, telemetryReadings(tel)...)
 		} else {
-			rc.log.Debug("telemetry poll failed", "pubkey", pubkeyHex[:12], "error", terr)
+			rc.log.Debug("telemetry poll failed", "pubkey", pubkeyHex, "error", terr)
 		}
 		first = false
 	}
@@ -242,7 +265,7 @@ func (rc *repeaterCollector) Collect(ctx context.Context, t monitor.Target) (*mo
 			res.Readings = append(res.Readings, monitor.Reading{Metric: "neighbor_count", Value: float64(nb.TotalCount)})
 			res.Neighbors = neighborSamples(nb)
 		} else {
-			rc.log.Debug("neighbors poll failed", "pubkey", pubkeyHex[:12], "error", nerr)
+			rc.log.Debug("neighbors poll failed", "pubkey", pubkeyHex, "error", nerr)
 		}
 	}
 
@@ -265,7 +288,7 @@ func retryProbe[T any](ctx context.Context, log *slog.Logger, label, pubkeyHex s
 		}
 		last = err
 		if attempt < monitorProbeAttempts {
-			log.Debug(label+" probe failed, retrying", "pubkey", pubkeyHex[:12], "attempt", attempt, "error", err)
+			log.Debug(label+" probe failed, retrying", "pubkey", pubkeyHex, "attempt", attempt, "error", err)
 			gap(ctx)
 			if ctx.Err() != nil {
 				return zero, ctx.Err()
@@ -362,7 +385,7 @@ func neighborSamples(nb *repeater.Neighbors) []monitor.NeighborSample {
 		if err != nil {
 			continue
 		}
-		snr := float64(n.SNR) / 4.0
+		snr := n.SNR
 		out = append(out, monitor.NeighborSample{Pubkey: prefix, SNR: &snr})
 	}
 	return out
@@ -376,7 +399,6 @@ func neighborSamples(nb *repeater.Neighbors) []monitor.NeighborSample {
 // in the same series shape as a repeater's.
 type companionCollector struct {
 	reg *companionRegistry
-	db  *store.Store
 	log *slog.Logger
 }
 

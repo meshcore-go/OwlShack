@@ -42,11 +42,23 @@ type RepeaterConfig struct {
 	// firmware behaviour. Must name a configured non-wildcard region when set.
 	DefaultRegion string `json:"defaultRegion,omitempty" yaml:"defaultRegion,omitempty" toml:"defaultRegion,omitempty"`
 
-	// PathHashMode is the field-width selector for path hashes in the flood
-	// adverts this node originates (firmware `path_hash.mode`): 0=1 byte,
-	// 1=2 bytes, 3=4 bytes. nil == default (0 / 1 byte). The stored value is
-	// (hashSize-1), so the advert PathLength top 2 bits are set to it directly.
-	PathHashMode *int `json:"pathHashMode,omitempty" yaml:"pathHashMode,omitempty" toml:"pathHashMode,omitempty"`
+	// HomeRegion labels one region as this node's home (firmware home_id). The
+	// firmware stores and reports it but never routes on it; so do we. Must
+	// name a configured region when set.
+	HomeRegion string `json:"homeRegion,omitempty" yaml:"homeRegion,omitempty" toml:"homeRegion,omitempty"`
+
+	// PathHashSize overrides the global Config.PathHashSize for this repeater:
+	// the per-hop path hash width in BYTES for the flood packets it originates.
+	// nil == inherit (resolved at startup). The firmware's `path.hash.mode` is
+	// this minus one — convert only at that CLI boundary.
+	PathHashSize *int `json:"pathHashSize,omitempty" yaml:"pathHashSize,omitempty" toml:"pathHashSize,omitempty"`
+
+	// Relay timing (firmware NodePrefs tx_delay_factor / direct_tx_delay_factor /
+	// rx_delay_base / multi_acks). nil == firmware default.
+	TxDelayFactor       *float64 `json:"txDelayFactor,omitempty" yaml:"txDelayFactor,omitempty" toml:"txDelayFactor,omitempty"`
+	DirectTxDelayFactor *float64 `json:"directTxDelayFactor,omitempty" yaml:"directTxDelayFactor,omitempty" toml:"directTxDelayFactor,omitempty"`
+	RxDelayBase         *float64 `json:"rxDelayBase,omitempty" yaml:"rxDelayBase,omitempty" toml:"rxDelayBase,omitempty"`
+	MultiAcks           *int     `json:"multiAcks,omitempty" yaml:"multiAcks,omitempty" toml:"multiAcks,omitempty"`
 
 	// Admin surface (Phase 2: login / CLI). Blank admin password is allowed
 	// (some repeaters have none). OwnerInfo is advertised in owner-info replies.
@@ -113,6 +125,29 @@ const (
 	// always configured. Kept here so the advert loop and the over-mesh
 	// `get flood.advert.interval` report the same effective value.
 	DefaultFloodAdvertIntervalSecs = 47 * 60 * 60
+
+	// Advert interval bounds, in seconds, mirroring the firmware CommonCLI
+	// ranges: zero-hop is 0 (off) or 60-240 minutes (MIN_LOCAL_ADVERT_INTERVAL),
+	// flood is 0 (off) or 3-168 hours. Stored in seconds because that is what
+	// the advert loop schedules on; the CLI converts to the firmware's units.
+	MinAdvertIntervalSecs      = 60 * 60
+	MaxAdvertIntervalSecs      = 240 * 60
+	MinFloodAdvertIntervalSecs = 3 * 60 * 60
+	MaxFloodAdvertIntervalSecs = 168 * 60 * 60
+
+	// Path hash width bounds in bytes. The firmware's `set path.hash.mode`
+	// accepts 0-2 (it checks `mode < 3`) and uses `path_hash_mode + 1` as the
+	// width, so 1-3 bytes. The wire field could carry 4, but nothing in the
+	// ecosystem selects it.
+	DefaultPathHashSize = 1
+	MinPathHashSize     = 1
+	MaxPathHashSize     = 3
+
+	// Firmware simple_repeater defaults and CommonCLI set-ranges for the timing knobs.
+	DefaultTxDelayFactor       = 0.5
+	DefaultDirectTxDelayFactor = 0.3
+	MaxTxDelayFactor           = 2.0
+	MaxRxDelayBase             = 20.0
 )
 
 // Valid loop-detect levels, matching the firmware's LOOP_DETECT_* enum.
@@ -163,12 +198,41 @@ func (c *RepeaterConfig) IsFwdDisabled() bool {
 	return c.DisableFwd != nil && *c.DisableFwd
 }
 
-// PathHashModeOr resolves the effective path-hash-mode (0 = 1 byte by default).
-func (c *RepeaterConfig) PathHashModeOr() int {
-	if c.PathHashMode == nil {
+// PathHashSizeOr resolves the effective path hash width in bytes (1 by default).
+func (c *RepeaterConfig) PathHashSizeOr() int {
+	if c.PathHashSize == nil {
+		return DefaultPathHashSize
+	}
+	return *c.PathHashSize
+}
+
+func (c *RepeaterConfig) TxDelayFactorOr() float64 {
+	if c.TxDelayFactor == nil {
+		return DefaultTxDelayFactor
+	}
+	return *c.TxDelayFactor
+}
+
+func (c *RepeaterConfig) DirectTxDelayFactorOr() float64 {
+	if c.DirectTxDelayFactor == nil {
+		return DefaultDirectTxDelayFactor
+	}
+	return *c.DirectTxDelayFactor
+}
+
+// RxDelayBaseOr is the firmware rx_delay_base; 0 (the default) disables the receive delay.
+func (c *RepeaterConfig) RxDelayBaseOr() float64 {
+	if c.RxDelayBase == nil {
 		return 0
 	}
-	return *c.PathHashMode
+	return *c.RxDelayBase
+}
+
+func (c *RepeaterConfig) MultiAcksOr() int {
+	if c.MultiAcks == nil {
+		return 0
+	}
+	return *c.MultiAcks
 }
 
 // AdvertIntervalOr / FloodAdvertIntervalOr resolve the effective self-advert

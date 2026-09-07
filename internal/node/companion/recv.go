@@ -1,6 +1,7 @@
 package companion
 
 import (
+	"context"
 	"crypto/rand"
 	"encoding/binary"
 	"encoding/hex"
@@ -34,13 +35,9 @@ const txtTypeSignedPlain = 2
 // path to us. For direct-routed messages, it sends a plain ACK packet using
 // the peer's known out_path (or floods if no path known).
 //
-// ackHashKey is the pubkey hashed into the ACK CRC — the sender's for DMs,
-// OUR own for room post pushes.
-func (c *Companion) sendDMAck(pkt *meshcore.Packet, senderPubKey []byte, sharedSecret []byte, ackPlaintext []byte, ackHashKey []byte, attemptByte byte) {
-	var randomByte [1]byte
-	rand.Read(randomByte[:])
-	ackPayload := meshcore.BuildAckPayload(ackPlaintext, ackHashKey, attemptByte, randomByte[0])
-
+// ackPayload is the firmware's ack bytes: 6 ([crc][attempt][random]) for a
+// plain DM, a bare 4-byte CRC for a room post push.
+func (c *Companion) sendDMAck(pkt *meshcore.Packet, senderPubKey []byte, sharedSecret []byte, ackPayload []byte) {
 	if pkt.IsRouteFlood() {
 		// Build PathReturn with ACK as extra data — tells the sender the path to us
 		pathReturn, err := c.buildPathReturn(senderPubKey, sharedSecret, pkt.Path, pkt.PathLength, meshcore.PayloadTypeAck, ackPayload)
@@ -66,13 +63,13 @@ func (c *Companion) sendDMAck(pkt *meshcore.Packet, senderPubKey []byte, sharedS
 			copy(pubkey[:], senderPubKey)
 			peer := c.node.Peers().Lookup(pubkey)
 			if peer != nil && peer.OutPath != nil {
+				hs := max(peer.OutPathHashSize, 1)
 				ackPkt.Header = meshcore.MakeHeader(meshcore.RouteTypeDirect, meshcore.PayloadTypeAck, 0)
 				ackPkt.Path = peer.OutPath
-				ackPkt.PathLength = byte(len(peer.OutPath) / int(meshcore.PathHashSize))
+				ackPkt.PathLength = (hs-1)<<6 | byte(len(peer.OutPath)/int(hs))
 			}
 		}
 
-		ackPkt.PathLength |= (meshcore.PathHashSize - 1) << 6
 		if err := c.node.SendPacketDelayed(ackPkt, node.PriorityFloodRelay, dmAckDelay); err != nil {
 			c.log.Debug("failed to send DM ACK", "error", err)
 		}
@@ -133,9 +130,12 @@ func (c *Companion) handleRoomPush(pkt *meshcore.Packet, roomPubKey []byte, room
 	text := strings.TrimRight(string(plaintext[9:]), "\x00")
 
 	// ACK even duplicates — each retry carries a fresh attempt byte, so a
-	// previous ACK can't satisfy it.
+	// previous ACK can't satisfy it. Firmware: a bare 4-byte CRC over
+	// [ts][flags][author][text] + OUR pubkey (BaseChatMesh TXT_TYPE_SIGNED_PLAIN).
 	selfPubKey := c.node.Identity().PublicKey()
-	c.sendDMAck(pkt, roomPubKey, sharedSecret, plaintext[:9+len(text)], selfPubKey[:], 0)
+	ack := make([]byte, 4)
+	binary.LittleEndian.PutUint32(ack, meshcore.CalcAckHash(plaintext[:9+len(text)], selfPubKey[:]))
+	c.sendDMAck(pkt, roomPubKey, sharedSecret, ack)
 
 	channelKey := "dm:" + roomPubKeyHex
 
@@ -173,7 +173,7 @@ func (c *Companion) handleRoomPush(pkt *meshcore.Packet, roomPubKey []byte, room
 	}
 
 	c.store.WriteAsync(func() {
-		if insertErr := c.store.Messages.Insert(c.runCtx, msg); insertErr != nil {
+		if insertErr := c.store.Messages.Insert(context.Background(), msg); insertErr != nil {
 			c.log.Error("failed to persist room post", "error", insertErr)
 		}
 
@@ -233,41 +233,23 @@ func (c *Companion) handleDMPathReturn(pkt *meshcore.Packet) {
 		if !path.VerifyMAC(secret) {
 			continue
 		}
-		plaintext := path.Decrypt(secret)
-		if len(plaintext) < 2 {
+		pp, perr := meshcore.ParsePathPayload(path.Decrypt(secret))
+		if perr != nil {
 			return
 		}
+		returnPath, extraType, extraData := pp.Path, pp.ExtraType, pp.Extra
 
-		pathLenByte := plaintext[0]
-		pathHashSize := int((pathLenByte>>6)&3) + 1
-		hopCount := int(pathLenByte & 63)
-		pathDataLen := hopCount * pathHashSize
-
-		if len(plaintext) < 1+pathDataLen+1 {
-			return
-		}
-
-		returnPath := plaintext[1 : 1+pathDataLen]
-		extraType := plaintext[1+pathDataLen]
-		extraData := plaintext[1+pathDataLen+1:]
-
-		// Update the peer's out_path so future sends can use direct routing
-		if len(returnPath) > 0 {
-			c.log.Debug("DM path return received",
-				"peer", hex.EncodeToString(ct.PeerPubKey[:6]),
-				"hops", hopCount,
-				"pathHex", hex.EncodeToString(returnPath))
-			var pubkey [32]byte
-			copy(pubkey[:], ct.PeerPubKey)
-			c.node.Peers().SetOutPath(pubkey, returnPath, uint8(pathHashSize))
-			hs := uint8(pathHashSize)
-			c.store.WriteAsync(func() {
-				_ = c.store.Peers.UpdateOutPath(c.runCtx, ct.PeerPubKey, returnPath, hs)
-				// The contact owns its path, scoped to this companion — DMs route
-				// from it. Companions never share a route to a peer.
-				_ = c.store.Contacts.UpdateOutPath(c.runCtx, c.cfg.ID, ct.PeerPubKey, returnPath, hs)
-			})
-		}
+		c.log.Debug("DM path return received",
+			"peer", hex.EncodeToString(ct.PeerPubKey[:6]),
+			"hops", pp.PathHashCount(),
+			"pathHex", hex.EncodeToString(returnPath))
+		var pubkey [32]byte
+		copy(pubkey[:], ct.PeerPubKey)
+		c.node.Peers().SetOutPath(pubkey, returnPath, pp.PathHashSize())
+		hs := pp.PathHashSize()
+		c.store.WriteAsync(func() {
+			_ = c.store.Contacts.UpdateOutPath(context.Background(), c.cfg.ID, ct.PeerPubKey, returnPath, hs)
+		})
 
 		// Extract embedded ACK and feed it into the ack tracker
 		if extraType == meshcore.PayloadTypeAck && len(extraData) >= 4 {
@@ -291,6 +273,14 @@ func (c *Companion) registerPacketHandlers() {
 	})
 
 	radio.AddOutboundHandler(func(data []byte) {
+		if c.echoTracker == nil {
+			return
+		}
+		pkt, err := meshcore.PacketFromBytes(data)
+		if err != nil || pkt.PayloadType() != meshcore.PayloadTypeGrpTxt {
+			return
+		}
+
 		c.pendingOutbound.Lock()
 		msgID := c.pendingOutbound.msgID
 		channel := c.pendingOutbound.channel
@@ -298,12 +288,7 @@ func (c *Companion) registerPacketHandlers() {
 		c.pendingOutbound.channel = ""
 		c.pendingOutbound.Unlock()
 
-		if msgID == 0 || c.echoTracker == nil {
-			return
-		}
-
-		pkt, err := meshcore.PacketFromBytes(data)
-		if err != nil {
+		if msgID == 0 {
 			return
 		}
 		c.echoTracker.Track(pkt.PacketHash(), msgID, c.cfg.Name, channel)
@@ -339,7 +324,7 @@ func (c *Companion) registerPacketHandlers() {
 		}
 
 		c.store.WriteAsync(func() {
-			if err := c.store.Peers.Upsert(c.runCtx, p); err != nil {
+			if err := c.store.Peers.Upsert(context.Background(), p); err != nil {
 				c.log.Error("failed to persist peer", "error", err)
 				return
 			}
@@ -351,7 +336,7 @@ func (c *Companion) registerPacketHandlers() {
 			// over a hand-set location, but a no-GPS advert leaves it alone).
 			hasLoc := p.HasLocation()
 			if err := c.store.Contacts.RefreshFromAdvert(
-				c.runCtx, p.PubKey, appData.Name, appData.Type,
+				context.Background(), p.PubKey, appData.Name, appData.Type,
 				p.Lat, p.Lon, p.Feat1, p.Feat2, p.LastSeen, p.LastAdvertTS, hasLoc,
 			); err != nil {
 				c.log.Error("failed to refresh contact from advert", "error", err)
@@ -449,7 +434,7 @@ func (c *Companion) registerPacketHandlers() {
 		}
 
 		c.store.WriteAsync(func() {
-			if err := c.store.Messages.Insert(c.runCtx, msg); err != nil {
+			if err := c.store.Messages.Insert(context.Background(), msg); err != nil {
 				c.log.Error("failed to persist message", "error", err)
 				return
 			}
@@ -573,26 +558,37 @@ func (c *Companion) registerPacketHandlers() {
 		flags := plaintext[4] >> 2
 		text := strings.TrimRight(string(plaintext[5:]), "\x00")
 
-		if flags == txtTypeCliData {
+		switch flags {
+		case txtTypeCliData:
 			var senderKey [32]byte
-			pubBytes, _ := hex.DecodeString(senderPubKeyHex)
-			copy(senderKey[:], pubBytes)
+			copy(senderKey[:], senderPubKey)
 			c.repeaters.HandleCLIResponse(senderKey, text)
+			if pkt.IsRouteFlood() { // firmware: teach the sender our path (no ACK as extra)
+				if pr, err := c.buildPathReturn(senderPubKey, sharedSecret, pkt.Path, pkt.PathLength, 0, nil); err == nil {
+					if err := c.node.SendPacketDelayed(pr, node.PriorityFloodRelay, 0); err != nil {
+						c.log.Debug("failed to send CLI path return", "error", err)
+					}
+				}
+			}
 			return
-		}
-
-		if flags == txtTypeSignedPlain {
+		case txtTypeSignedPlain:
 			c.handleRoomPush(pkt, senderPubKey, senderPubKeyHex, sharedSecret, plaintext)
 			return
+		case txtTypePlain:
+		default:
+			c.log.Debug("unsupported DM text type", "flags", flags)
+			return
 		}
 
-		// Send ACK for plain text DMs
+		// Send ACK for plain text DMs: [crc:4][attempt][random]
 		ackPlaintext := plaintext[:5+len(text)]
 		var attemptByte byte
 		if 5+len(text)+1 < len(plaintext) {
 			attemptByte = plaintext[5+len(text)+1]
 		}
-		c.sendDMAck(pkt, senderPubKey, sharedSecret, ackPlaintext, senderPubKey, attemptByte)
+		var randomByte [1]byte
+		rand.Read(randomByte[:])
+		c.sendDMAck(pkt, senderPubKey, sharedSecret, meshcore.BuildAckPayload(ackPlaintext, senderPubKey, attemptByte, randomByte[0]))
 
 		channelKey := "dm:" + senderPubKeyHex
 
@@ -613,7 +609,7 @@ func (c *Companion) registerPacketHandlers() {
 		}
 
 		c.store.WriteAsync(func() {
-			if insertErr := c.store.Messages.Insert(c.runCtx, msg); insertErr != nil {
+			if insertErr := c.store.Messages.Insert(context.Background(), msg); insertErr != nil {
 				c.log.Error("failed to persist incoming DM", "error", insertErr)
 			}
 

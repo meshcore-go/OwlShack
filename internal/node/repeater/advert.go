@@ -75,8 +75,12 @@ func (r *Repeater) SendAdvert(flood bool) error { return r.sendAdvert(flood) }
 // self-advert build. Flood adverts are scoped through the configured default
 // region (firmware default_scope) when one is set.
 func (r *Repeater) sendAdvert(flood bool) error {
-	return advert.SendSelf(r.node, r.log, "REPEATER", r.cfg.Name,
-		r.cfg.Latitude, r.cfg.Longitude, flood, r.cfg.PathHashModeOr(), r.defaultRegionScope())
+	err := advert.SendSelf(r.node, r.log, "REPEATER", r.cfg.Name,
+		r.cfg.Latitude, r.cfg.Longitude, flood, r.cfg.PathHashSizeOr(), r.defaultRegionScope())
+	if err == nil {
+		r.countTx(flood)
+	}
+	return err
 }
 
 // defaultRegionScope resolves the configured default advert scope to the live

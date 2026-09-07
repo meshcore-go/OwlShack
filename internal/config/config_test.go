@@ -385,7 +385,7 @@ func TestChannelRef_Validate(t *testing.T) {
 	t.Parallel()
 
 	// 32 bytes (64 hex chars) is the canonical channel secret length.
-	const secret32 = "00112233445566778899aabbccddeeff00112233445566778899aabbccddeeff"
+	const secret16 = "00112233445566778899aabbccddeeff" // channel PSKs are 16 bytes (NewChannelFromPSK)
 
 	tests := []struct {
 		name    string
@@ -397,8 +397,8 @@ func TestChannelRef_Validate(t *testing.T) {
 			ref:  ChannelRef{Name: "Public"},
 		},
 		{
-			name: "valid 32-byte hex secret",
-			ref:  ChannelRef{Name: "secret", PrivateKey: secret32},
+			name: "valid 16-byte hex secret",
+			ref:  ChannelRef{Name: "secret", PrivateKey: secret16},
 		},
 		{
 			name:    "empty name",
@@ -863,4 +863,85 @@ func TestKeys(t *testing.T) {
 			t.Error("PubKeyHexFromSeed(short) = nil error, want error")
 		}
 	})
+}
+
+// TestRepeaterAdvertIntervalRange pins the firmware CommonCLI ranges: zero-hop
+// is 0 (off) or 60-240 minutes, flood is 0 or 3-168 hours, both stored in
+// seconds. Out of range must be rejected — the UI let 60 SECONDS through
+// before this, which adverts 60x more often than the firmware permits and made
+// `get advert.interval` report an unsettable 1.
+func TestRepeaterAdvertIntervalRange(t *testing.T) {
+	secs := func(v int) *int { return &v }
+	cases := []struct {
+		name          string
+		advert, flood *int
+		wantErr       bool
+	}{
+		{"nil = default", nil, nil, false},
+		{"both off", secs(0), secs(0), false},
+		{"at minimums", secs(60 * 60), secs(3 * 3600), false},
+		{"at maximums", secs(240 * 60), secs(168 * 3600), false},
+		{"advert 60 seconds", secs(60), nil, true},
+		{"advert below minimum", secs(59 * 60), nil, true},
+		{"advert above maximum", secs(241 * 60), nil, true},
+		{"flood below minimum", nil, secs(2 * 3600), true},
+		{"flood above maximum", nil, secs(169 * 3600), true},
+	}
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			cfg := &Config{Repeater: &RepeaterConfig{
+				Name: "rp", AdvertInterval: c.advert, FloodAdvertInterval: c.flood,
+			}}
+			if err := cfg.Validate(); (err != nil) != c.wantErr {
+				t.Errorf("Validate() = %v, wantErr %v", err, c.wantErr)
+			}
+		})
+	}
+}
+
+// TestPathHashSizeRange: 1-3 bytes (the firmware's `path.hash.mode` takes this
+// minus one and checks `mode < 3`), enforced globally and per node.
+func TestPathHashSizeRange(t *testing.T) {
+	n := func(v int) *int { return &v }
+	for _, c := range []struct {
+		name    string
+		cfg     *Config
+		wantErr bool
+	}{
+		{"global unset", &Config{}, false},
+		{"global 1", &Config{PathHashSize: n(1)}, false},
+		{"global 3", &Config{PathHashSize: n(3)}, false},
+		{"global 0", &Config{PathHashSize: n(0)}, true},
+		{"global 4", &Config{PathHashSize: n(4)}, true},
+		{"companion 2", &Config{Companions: []CompanionConfig{{Name: "a", PathHashSize: n(2)}}}, false},
+		{"companion 5", &Config{Companions: []CompanionConfig{{Name: "a", PathHashSize: n(5)}}}, true},
+		{"repeater 2", &Config{Repeater: &RepeaterConfig{Name: "rp", PathHashSize: n(2)}}, false},
+		{"repeater 0", &Config{Repeater: &RepeaterConfig{Name: "rp", PathHashSize: n(0)}}, true},
+	} {
+		t.Run(c.name, func(t *testing.T) {
+			if err := c.cfg.Validate(); (err != nil) != c.wantErr {
+				t.Errorf("Validate() = %v, wantErr %v", err, c.wantErr)
+			}
+		})
+	}
+}
+
+// TestChannelRefKeyLength: a hex key of the wrong length used to pass Validate
+// and then fail companion construction on every start.
+func TestChannelRefKeyLength(t *testing.T) {
+	for _, c := range []struct {
+		key     string
+		wantErr bool
+	}{
+		{"", false},
+		{"00112233445566778899aabbccddeeff", false},  // 16 bytes
+		{"00112233445566778899aabbccddee", true},     // 15 bytes
+		{"00112233445566778899aabbccddeeff00", true}, // 17 bytes
+		{"zz112233445566778899aabbccddeeff", true},   // not hex
+	} {
+		err := (&ChannelRef{Name: "ch", PrivateKey: c.key}).Validate()
+		if (err != nil) != c.wantErr {
+			t.Errorf("key %q: err = %v, wantErr %v", c.key, err, c.wantErr)
+		}
+	}
 }

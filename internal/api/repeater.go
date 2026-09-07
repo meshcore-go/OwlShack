@@ -83,6 +83,50 @@ func (s *Server) handleRoomLogin(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, result)
 }
 
+func (s *Server) handleRoomStatus(w http.ResponseWriter, r *http.Request) {
+	ops, ok := s.repeaterOps(r.PathValue("name"))
+	if !ok {
+		writeError(w, http.StatusNotFound, "companion not found")
+		return
+	}
+	res, err := ops.RoomStatusReq(r.PathValue("pubkey"))
+	if err != nil {
+		s.log.Error("room status request", "error", err)
+		writeError(w, http.StatusInternalServerError, err.Error())
+		return
+	}
+	writeJSON(w, http.StatusOK, res)
+}
+
+// handleRoomKeepAlive: body {since?} (unix secs; omit = the room's own cursor).
+// The room answers with a direct ACK and resumes its push stream; the posts
+// then arrive through the normal DM path, so there is nothing to return here.
+func (s *Server) handleRoomKeepAlive(w http.ResponseWriter, r *http.Request) {
+	ops, ok := s.repeaterOps(r.PathValue("name"))
+	if !ok {
+		writeError(w, http.StatusNotFound, "companion not found")
+		return
+	}
+	var body struct {
+		Since *int64 `json:"since"`
+	}
+	if r.ContentLength != 0 {
+		if err := readJSON(r, &body); err != nil {
+			writeError(w, http.StatusBadRequest, "invalid request body")
+			return
+		}
+	}
+	var since uint32
+	if body.Since != nil && *body.Since > 0 {
+		since = uint32(*body.Since)
+	}
+	if err := ops.RoomKeepAlive(r.PathValue("pubkey"), since); err != nil {
+		writeError(w, http.StatusBadGateway, err.Error())
+		return
+	}
+	w.WriteHeader(http.StatusNoContent)
+}
+
 func (s *Server) handleRepeaterStatus(w http.ResponseWriter, r *http.Request) {
 	ops, ok := s.repeaterOps(r.PathValue("name"))
 	if !ok {
@@ -338,6 +382,45 @@ func (s *Server) handleRepeaterTelemetry(w http.ResponseWriter, r *http.Request)
 		return
 	}
 
+	writeJSON(w, http.StatusOK, res)
+}
+
+// handleRepeaterSeries: ?from= and ?to= are seconds before now (from is the
+// older edge; default the last 24 h). Sensor firmware answers only for
+// read-only or better, so a guest session gets a timeout here.
+func (s *Server) handleRepeaterSeries(w http.ResponseWriter, r *http.Request) {
+	ops, ok := s.repeaterOps(r.PathValue("name"))
+	if !ok {
+		writeError(w, http.StatusNotFound, "companion not found")
+		return
+	}
+	from, to := uint32(86400), uint32(0)
+	if v := r.URL.Query().Get("from"); v != "" {
+		n, err := strconv.ParseUint(v, 10, 32)
+		if err != nil {
+			writeError(w, http.StatusBadRequest, "from must be seconds before now")
+			return
+		}
+		from = uint32(n)
+	}
+	if v := r.URL.Query().Get("to"); v != "" {
+		n, err := strconv.ParseUint(v, 10, 32)
+		if err != nil {
+			writeError(w, http.StatusBadRequest, "to must be seconds before now")
+			return
+		}
+		to = uint32(n)
+	}
+	if to >= from {
+		writeError(w, http.StatusBadRequest, "from must be further back than to")
+		return
+	}
+	res, err := ops.SeriesReq(r.PathValue("pubkey"), from, to)
+	if err != nil {
+		s.log.Error("sensor series request", "error", err)
+		writeError(w, http.StatusInternalServerError, err.Error())
+		return
+	}
 	writeJSON(w, http.StatusOK, res)
 }
 

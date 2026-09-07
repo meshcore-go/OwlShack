@@ -55,7 +55,7 @@ self.addEventListener("fetch", (event) => {
   if (request.mode === "navigate") {
     event.respondWith(
       fetch(request)
-        .then((res) => cachePut(SHELL, res))
+        .then((res) => (res.ok ? cachePut(SHELL, res) : res))
         .catch(() => caches.match(SHELL).then((r) => r || Response.error())),
     );
     return;
@@ -65,7 +65,9 @@ self.addEventListener("fetch", (event) => {
   if (url.pathname.startsWith("/assets/")) {
     event.respondWith(
       caches.match(request).then(
-        (hit) => hit || fetch(request).then((res) => cachePut(request, res)),
+        (hit) =>
+          hit ||
+          fetch(request).then((res) => (res.ok ? cachePut(request, res) : res)),
       ),
     );
     return;

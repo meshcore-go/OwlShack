@@ -1,10 +1,8 @@
 package repeater
 
 import (
-	"context"
 	"encoding/binary"
 	"encoding/hex"
-	"math"
 	"sort"
 	"time"
 
@@ -21,6 +19,12 @@ const (
 	reqTypeGetAccessList    = 0x05
 	reqTypeGetNeighbours    = 0x06
 	reqTypeGetOwnerInfo     = 0x07
+
+	telemChannelSelf = 1   // firmware TELEM_CHANNEL_SELF
+	maxPacketPayload = 184 // firmware MAX_PACKET_PAYLOAD (sizeof reply_data)
+	// neighboursMaxBody caps the neighbour entries in one reply, matching the
+	// firmware's results_buffer so the response still fits a packet.
+	neighboursMaxBody = 130
 )
 
 // handleReq answers a REQ (status / neighbours / access-list / owner-info) from
@@ -39,12 +43,13 @@ func (r *Repeater) handleReq(pkt *meshcore.Packet) {
 		return
 	}
 	plain := req.Decrypt(secret)
-	if plain == nil || len(plain) < 5 {
+	if len(plain) < 5 {
 		return
 	}
+	pkt.MarkDoNotRetransmit()
 	tag := binary.LittleEndian.Uint32(plain[:4]) // client timestamp, reflected back
-	if tag < client.LastTimestamp {
-		return // stale/replayed (all REQs are read-only, so this only advances the guard)
+	if tag <= client.LastTimestamp {
+		return // firmware: `timestamp > client->last_timestamp` or it's a replay
 	}
 	reqType := plain[4]
 	params := plain[5:]
@@ -78,6 +83,9 @@ func (r *Repeater) buildReqResponse(client *store.RepeaterACLEntry, reqType byte
 	case reqTypeGetStatus:
 		return r.statusBody(), true
 	case reqTypeGetNeighbours:
+		if len(params) >= 1 && params[0] != 0 {
+			return nil, false // unknown request version
+		}
 		return r.neighboursBody(params), true
 	case reqTypeGetOwnerInfo:
 		return r.ownerInfoBody(), true
@@ -85,12 +93,20 @@ func (r *Repeater) buildReqResponse(client *store.RepeaterACLEntry, reqType byte
 		if client.Permissions&permRoleMask != permAdmin {
 			return nil, false // admin-only
 		}
+		if len(params) >= 2 && (params[0] != 0 || params[1] != 0) {
+			return nil, false // reserved query params
+		}
 		return r.accessListBody(), true
 	case reqTypeGetTelemetryData:
-		// Base telemetry: battery voltage on the self channel (ch1), from the
-		// modem's reading (0 until the first poll / if the radio has no battery).
+		// Base telemetry on the self channel (ch1): battery voltage then MCU
+		// temperature, both read from the KISS modem board. The firmware adds
+		// the temperature only when the board can measure one (its isnan
+		// check), so a modem answering HW_ERR_NO_CALLBACK omits it too.
 		enc := meshcore.NewLPPEncoder()
-		enc.AddVoltage(1, float64(r.batteryMV.Load())/1000)
+		enc.AddVoltage(telemChannelSelf, float64(r.batteryMV.Load())/1000)
+		if r.haveMCUTemp.Load() {
+			enc.AddTemperature(telemChannelSelf, float64(r.mcuTempC.Load())/10)
+		}
 		return enc.Bytes(), true
 	default:
 		return nil, false
@@ -101,6 +117,7 @@ func (r *Repeater) buildReqResponse(client *store.RepeaterACLEntry, reqType byte
 // Emits the full 56-byte form (incl. rx_air_time + recv_errors, which the
 // client parses when present). Counters we don't track are left zero.
 func (r *Repeater) statusBody() []byte {
+	rc := r.routeCounters()
 	r.mu.Lock()
 	started := r.startedAt
 	r.mu.Unlock()
@@ -114,16 +131,24 @@ func (r *Repeater) statusBody() []byte {
 		binary.LittleEndian.PutUint16(b[0:2], uint16(r.batteryMV.Load()))         // batt_milli_volts
 		binary.LittleEndian.PutUint16(b[4:6], uint16(int16(r.noiseFloor.Load()))) // noise_floor (radio getNoiseFloor)
 	}
-	binary.LittleEndian.PutUint16(b[2:4], uint16(r.node.TxQueueLen())) // curr_tx_queue_len
+	if r.node != nil {
+		binary.LittleEndian.PutUint16(b[2:4], uint16(r.node.TxQueueLen())) // curr_tx_queue_len
+	}
 	if r.haveSignal.Load() {
 		binary.LittleEndian.PutUint16(b[6:8], uint16(int16(r.lastRSSI.Load())))    // last_rssi
 		binary.LittleEndian.PutUint16(b[42:44], uint16(int16(r.lastSNRx4.Load()))) // last_snr (quarter-dB)
 	}
-	binary.LittleEndian.PutUint32(b[8:12], uint32(r.recvCount.Load()))         // n_packets_recv
-	binary.LittleEndian.PutUint32(b[12:16], uint32(r.fwdCount.Load()))         // n_packets_sent (relayed)
-	binary.LittleEndian.PutUint32(b[16:20], uint32(r.txAirtimeMs.Load()/1000)) // total_air_time_secs (tx)
-	binary.LittleEndian.PutUint32(b[20:24], uptime)                            // total_up_time_secs
-	binary.LittleEndian.PutUint32(b[48:52], uint32(r.rxAirtimeMs.Load()/1000)) // rx_air_time_secs
+	binary.LittleEndian.PutUint32(b[8:12], uint32(r.recvCount.Load()))                      // n_packets_recv
+	binary.LittleEndian.PutUint32(b[12:16], uint32(r.sentFlood.Load()+r.sentDirect.Load())) // n_packets_sent (radio getPacketsSent: every TX)
+	binary.LittleEndian.PutUint32(b[16:20], uint32(r.txAirtimeMs.Load()/1000))              // total_air_time_secs (tx)
+	binary.LittleEndian.PutUint32(b[20:24], uptime)                                         // total_up_time_secs
+	binary.LittleEndian.PutUint32(b[24:28], uint32(r.sentFlood.Load()))                     // n_sent_flood
+	binary.LittleEndian.PutUint32(b[28:32], uint32(r.sentDirect.Load()))                    // n_sent_direct
+	binary.LittleEndian.PutUint32(b[32:36], uint32(rc.FloodReceived))                       // n_recv_flood
+	binary.LittleEndian.PutUint32(b[36:40], uint32(rc.DirectReceived))                      // n_recv_direct
+	binary.LittleEndian.PutUint16(b[44:46], uint16(rc.DirectDuplicates))                    // n_direct_dups
+	binary.LittleEndian.PutUint16(b[46:48], uint16(rc.FloodDuplicates))                     // n_flood_dups
+	binary.LittleEndian.PutUint32(b[48:52], uint32(r.rxAirtimeMs.Load()/1000))              // rx_air_time_secs
 	return b
 }
 
@@ -140,9 +165,7 @@ func (r *Repeater) neighboursBody(params []byte) []byte {
 		count = int(params[1])
 		offset = int(binary.LittleEndian.Uint16(params[2:4]))
 		orderBy = params[4]
-		if p := int(params[5]); p >= 1 && p <= 32 {
-			prefixLen = p
-		}
+		prefixLen = min(int(params[5]), 32) // firmware clamps to PUB_KEY_SIZE; 0 is allowed
 	}
 
 	now := time.Now()
@@ -158,6 +181,10 @@ func (r *Repeater) neighboursBody(params []byte) []byte {
 		page = page[:count]
 	}
 
+	if fit := neighboursMaxBody / (prefixLen + 5); len(page) > fit {
+		page = page[:fit]
+	}
+
 	body := make([]byte, 4, 4+len(page)*(prefixLen+5))
 	binary.LittleEndian.PutUint16(body[0:2], uint16(total))
 	binary.LittleEndian.PutUint16(body[2:4], uint16(len(page)))
@@ -166,7 +193,7 @@ func (r *Repeater) neighboursBody(params []byte) []byte {
 		var secs [4]byte
 		binary.LittleEndian.PutUint32(secs[:], uint32(now.Sub(n.heard).Seconds()))
 		body = append(body, secs[:]...)
-		body = append(body, byte(int8(math.Round(n.snr*4)))) // firmware SNR is quarter-dB
+		body = append(body, byte(int8(n.snr*4))) // firmware (int8_t)(snr*4): quarter-dB, truncated
 	}
 	return body
 }
@@ -186,24 +213,30 @@ func sortNeighbours(list []neighbor, orderBy byte) {
 }
 
 // accessListBody builds the ACL response: [pubkey-prefix:6][permissions:1] per
-// non-guest client (firmware returns 6-byte prefixes only).
+// non-guest client (firmware returns 6-byte prefixes only), capped like the
+// firmware's `ofs + 7 <= sizeof(reply_data) - 4` loop bound.
 func (r *Repeater) accessListBody() []byte {
-	entries, err := r.store.RepeaterACL.List(context.Background())
-	if err != nil {
-		r.log.Error("acl list failed", "error", err)
-		return nil
+	r.acl.RLock()
+	keys := make([]string, 0, len(r.acl.m))
+	perms := make(map[string]int, len(r.acl.m))
+	for k, e := range r.acl.m {
+		keys = append(keys, k)
+		perms[k] = e.Permissions
 	}
-	body := make([]byte, 0, len(entries)*7)
-	for _, e := range entries {
-		if e.Permissions == 0 {
-			continue // guest / deleted
+	r.acl.RUnlock()
+	sort.Strings(keys)
+
+	body := make([]byte, 0, len(keys)*7)
+	for _, k := range keys {
+		if perms[k] == 0 || len(body)+4+7 > maxPacketPayload-4 {
+			continue // guest / deleted, or no room left
 		}
-		pub, err := hex.DecodeString(e.PubKey)
+		pub, err := hex.DecodeString(k)
 		if err != nil || len(pub) < 6 {
 			continue
 		}
 		body = append(body, pub[:6]...)
-		body = append(body, byte(e.Permissions))
+		body = append(body, byte(perms[k]))
 	}
 	return body
 }

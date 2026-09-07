@@ -23,6 +23,78 @@ func (rm *Client) SendStatusReq(pubkeyHex string, timeout time.Duration) (*Statu
 	return parseRepeaterStatus(data)
 }
 
+// SendRoomKeepAlive sends REQ_TYPE_KEEP_ALIVE to a room server so it resumes
+// pushing posts (newer than since; 0 keeps its stored cursor). The firmware
+// only honours a DIRECT keep-alive and answers with a direct ACK carrying its
+// unsynced-post count, then streams the posts through the normal DM path — so
+// this is fire-and-forget: success means "sent along a known route". A flood
+// login learns the route.
+func (rm *Client) SendRoomKeepAlive(pubkeyHex string, since uint32) error {
+	pubkeyBytes, err := hex.DecodeString(pubkeyHex)
+	if err != nil {
+		return fmt.Errorf("invalid pubkey hex: %w", err)
+	}
+	peerIdentity, err := meshcore.NewIdentityFromBytes(pubkeyBytes)
+	if err != nil {
+		return fmt.Errorf("invalid pubkey: %w", err)
+	}
+	peer := rm.node.Peers().Lookup(peerIdentity.PublicKey())
+	if peer == nil {
+		return fmt.Errorf("peer not found in peer table")
+	}
+	rm.mu.Lock()
+	sess := rm.sessions[pubkeyHex]
+	rm.mu.Unlock()
+	if sess == nil || sess.sharedSecret == nil {
+		return fmt.Errorf("not logged in to this room")
+	}
+	routeType, pathLen := routeForPeer(peer)
+	if routeType != meshcore.RouteTypeDirect {
+		return fmt.Errorf("no direct route to the room yet — it ignores flooded keep-alives; log in (flood) to learn one")
+	}
+
+	// [tag:4][0x02][since:4] — exactly the 9 bytes the room hashes for its ACK.
+	plaintext := make([]byte, 9)
+	binary.LittleEndian.PutUint32(plaintext[:4], rm.UniqueTimestamp())
+	plaintext[4] = reqTypeKeepAlive
+	binary.LittleEndian.PutUint32(plaintext[5:9], since)
+
+	encrypted, err := meshcore.EncryptThenMAC(sess.sharedSecret, plaintext)
+	if err != nil {
+		return fmt.Errorf("encrypting keep-alive: %w", err)
+	}
+	var mac [2]byte
+	copy(mac[:], encrypted[:2])
+	peerPub := peerIdentity.PublicKey()
+	reqBytes, err := (&meshcore.Request{
+		Destination:      peerPub[0],
+		Source:           sess.localPubKey[0],
+		MAC:              mac,
+		EncryptedPayload: encrypted[2:],
+	}).ToBytes()
+	if err != nil {
+		return fmt.Errorf("encoding keep-alive: %w", err)
+	}
+	return rm.node.SendPacket(&meshcore.Packet{
+		Header:     meshcore.MakeHeader(routeType, meshcore.PayloadTypeReq, 0),
+		PathLength: pathLen,
+		Path:       peer.OutPath,
+		Payload:    reqBytes,
+	})
+}
+
+// SendRoomStatusReq is SendStatusReq for a room server, whose ServerStats
+// trailer differs (see parseRoomStatus).
+func (rm *Client) SendRoomStatusReq(pubkeyHex string, timeout time.Duration) (*Status, error) {
+	body := make([]byte, 5)
+	body[0] = reqTypeGetStatus
+	data, err := rm.sendBinaryRequest(pubkeyHex, body, timeout, "room status")
+	if err != nil {
+		return nil, err
+	}
+	return parseRoomStatus(data)
+}
+
 func (rm *Client) SendNeighborsReq(pubkeyHex string, count uint8, offset uint16, timeout time.Duration) (*Neighbors, error) {
 	// payload: type(1) request_version(1) count(1) offset(2) order_by(1) prefix_len(1) random(4)
 	body := make([]byte, 11)
@@ -68,7 +140,7 @@ func (rm *Client) SendAccessListReq(pubkeyHex string, timeout time.Duration) (*A
 
 // SetAccessPerm changes the ACL permission byte for a pubkey on the repeater.
 // Sets perms=0 to remove. Requires admin session. The pubkey is the full
-// 32-byte hex (firmware setperm command requires it).
+// A prefix is enough to revoke (perms 0); granting a role needs the full key.
 func (rm *Client) SetAccessPerm(pubkeyHex, targetPubkeyHex string, perms uint8, timeout time.Duration) error {
 	cmd := fmt.Sprintf("setperm %s %d", targetPubkeyHex, perms)
 	resp, err := rm.SendCLI(pubkeyHex, cmd, timeout)
@@ -81,6 +153,22 @@ func (rm *Client) SetAccessPerm(pubkeyHex, targetPubkeyHex string, perms uint8, 
 		return fmt.Errorf("setperm rejected: %s", resp)
 	}
 	return nil
+}
+
+// SendSeriesReq asks a sensor for min/max/avg per channel over a window
+// (REQ_TYPE_GET_AVG_MIN_MAX 0x04; read-only role or above). Bounds are seconds
+// before the sensor's now: start is the older edge.
+func (rm *Client) SendSeriesReq(pubkeyHex string, startSecsAgo, endSecsAgo uint32, timeout time.Duration) (*telemetry.Series, error) {
+	// payload: type(1) start(4) end(4) reserved(2)
+	body := make([]byte, 11)
+	body[0] = reqTypeGetAvgMinMax
+	binary.LittleEndian.PutUint32(body[1:5], startSecsAgo)
+	binary.LittleEndian.PutUint32(body[5:9], endSecsAgo)
+	data, err := rm.sendBinaryRequest(pubkeyHex, body, timeout, "series")
+	if err != nil {
+		return nil, err
+	}
+	return telemetry.ParseSeries(data)
 }
 
 // telemetryReqBody builds the GET_TELEMETRY_DATA payload: type(1) mask(1)
@@ -162,16 +250,30 @@ func (rm *Client) SendCLI(pubkeyHex, command string, timeout time.Duration) (str
 	if sess == nil || sess.sharedSecret == nil {
 		return "", fmt.Errorf("not logged in to this repeater")
 	}
-
-	var prefixBytes [1]byte
-	rand.Read(prefixBytes[:])
-	prefix := fmt.Sprintf("%02X", prefixBytes[0])
-	framedCommand := prefix + "|" + command
+	if !sess.IsAdmin {
+		return "", fmt.Errorf("CLI requires an admin session; the node ignores commands from other roles")
+	}
 
 	resultCh := make(chan string, 1)
+	var prefix string
 	rm.cliMu.Lock()
+	// The prefix is one hex byte, so a full map has no free slot and the
+	// random search below would spin forever holding cliMu.
+	if len(rm.cliPending) >= 256 {
+		rm.cliMu.Unlock()
+		return "", fmt.Errorf("too many CLI commands in flight")
+	}
+	for {
+		var b [1]byte
+		rand.Read(b[:])
+		prefix = fmt.Sprintf("%02X", b[0])
+		if _, taken := rm.cliPending[prefix]; !taken {
+			break
+		}
+	}
 	rm.cliPending[prefix] = resultCh
 	rm.cliMu.Unlock()
+	framedCommand := prefix + "|" + command
 
 	defer func() {
 		rm.cliMu.Lock()
@@ -179,7 +281,7 @@ func (rm *Client) SendCLI(pubkeyHex, command string, timeout time.Duration) (str
 		rm.cliMu.Unlock()
 	}()
 
-	plaintext := meshcore.BuildTextPlaintext(time.Now(), txtTypeCliData<<2, []byte(framedCommand))
+	plaintext := meshcore.BuildTextPlaintext(time.Unix(int64(rm.UniqueTimestamp()), 0), txtTypeCliData<<2, []byte(framedCommand))
 
 	encrypted, err := meshcore.EncryptThenMAC(sess.sharedSecret, plaintext)
 	if err != nil {

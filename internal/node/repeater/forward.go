@@ -57,6 +57,7 @@ func (r *Repeater) allowForward(pkt *meshcore.Packet) bool {
 		r.txAirtimeMs.Add(uint64(r.airtime(2 + len(pkt.Path) + len(pkt.Payload))))
 	}
 	r.fwdCount.Add(1)
+	r.countTx(pkt.IsRouteFlood())
 	return true
 }
 

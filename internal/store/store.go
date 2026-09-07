@@ -40,6 +40,7 @@ type Store struct {
 
 	writerCh   chan func()
 	writerDone chan struct{}
+	closing    chan struct{}
 	closeOnce  sync.Once
 	dropped    atomic.Uint64
 }
@@ -86,6 +87,7 @@ func Open(ctx context.Context, path string) (*Store, error) {
 		RepeaterACL:    &RepeaterACLRepo{db: db},
 		writerCh:       make(chan func(), writerQueueDepth),
 		writerDone:     make(chan struct{}),
+		closing:        make(chan struct{}),
 	}
 
 	if err := s.migrate(ctx); err != nil {
@@ -106,6 +108,9 @@ func Open(ctx context.Context, path string) (*Store, error) {
 // fn typically performs an Insert/Update plus any follow-up work (WS
 // broadcast, dependent inserts) that needs to run after the write commits.
 func (s *Store) WriteAsync(fn func()) bool {
+	if s.closed() {
+		return false
+	}
 	select {
 	case s.writerCh <- fn:
 		return true
@@ -121,14 +126,35 @@ func (s *Store) WriteAsync(fn func()) bool {
 // WriteSync runs fn on the writer goroutine and blocks until it returns.
 // Use when the caller needs side effects (e.g. an Insert's auto-generated ID)
 // before continuing. Do NOT call from the modem RX dispatch thread or from
-// within another writer-loop closure — both will deadlock.
+// within another writer-loop closure — both will deadlock. After Close fn is
+// not run.
 func (s *Store) WriteSync(fn func()) {
+	if s.closed() {
+		return
+	}
 	done := make(chan struct{})
-	s.writerCh <- func() {
+	select {
+	case <-s.closing:
+		return
+	case s.writerCh <- func() {
 		defer close(done)
 		fn()
+	}:
 	}
-	<-done
+	select {
+	case <-done:
+	case <-s.closing:
+		<-s.writerDone // drain finished: fn has either run or never will
+	}
+}
+
+func (s *Store) closed() bool {
+	select {
+	case <-s.closing:
+		return true
+	default:
+		return false
+	}
 }
 
 // QueueLen returns the current depth of the writer queue, for stats/diagnostics.
@@ -141,16 +167,29 @@ func (s *Store) Dropped() uint64 {
 	return s.dropped.Load()
 }
 
+// writerLoop runs queued closures until Close, then drains the queue; writerCh is never closed (many senders).
 func (s *Store) writerLoop() {
 	defer close(s.writerDone)
-	for fn := range s.writerCh {
-		fn()
+	for {
+		select {
+		case <-s.closing:
+			for {
+				select {
+				case fn := <-s.writerCh:
+					fn()
+				default:
+					return
+				}
+			}
+		case fn := <-s.writerCh:
+			fn()
+		}
 	}
 }
 
 func (s *Store) Close() error {
 	s.closeOnce.Do(func() {
-		close(s.writerCh)
+		close(s.closing)
 		<-s.writerDone
 	})
 	return s.db.Close()
@@ -168,25 +207,59 @@ func (s *Store) migrate(ctx context.Context) error {
 	// migration must therefore be appended past that gap (version > 3) so it
 	// runs exactly once on both old and fresh DBs; migrateNoop fills the
 	// squashed-away slots that pre-squash DBs already counted.
-	migrations := []func(context.Context, *sql.DB) error{
-		migrateV1,   // user_version 1
-		migrateNoop, // 2 — squashed into migrateV1
-		migrateNoop, // 3 — squashed into migrateV1
-		migrateV2,   // 4 — indexed packet_hash/path columns
-		migrateV3,   // 5 — signal_tests, signal_test_runs, link_monitors
-		migrateV4,   // 6 — repeater node tables (config + ACL)
-		migrateV5,   // 7 — repeater flood_max_unscoped + default_region columns
-	}
-
+	//
+	// Squashing is only ever safe for migrations that have NOT shipped: a
+	// released DB has already stamped its version and would skip the squashed
+	// slot. migrateV6 collapses five development-only migrations for that
+	// reason (the release before it stops at 7). Once a version has shipped,
+	// append — never merge, never renumber, and never edit it in place.
+	//
+	// A dev DB left at the pre-squash numbering (8-12) is skipped by the loop,
+	// not upgraded: recreate it rather than trying to migrate it.
 	for i := version; i < len(migrations); i++ {
-		if err := migrations[i](ctx, s.db); err != nil {
-			return fmt.Errorf("migration %d: %w", i+1, err)
-		}
-		if _, err := s.db.ExecContext(ctx, fmt.Sprintf("PRAGMA user_version = %d", i+1)); err != nil {
-			return fmt.Errorf("setting schema version %d: %w", i+1, err)
+		if err := s.runMigration(ctx, i+1, migrations[i]); err != nil {
+			return err
 		}
 	}
 
+	return nil
+}
+
+var migrations = []func(context.Context, dbExecer) error{
+	migrateV1,   // user_version 1
+	migrateNoop, // 2 — squashed into migrateV1
+	migrateNoop, // 3 — squashed into migrateV1
+	migrateV2,   // 4 — indexed packet_hash/path columns
+	migrateV3,   // 5 — signal_tests, signal_test_runs, link_monitors
+	migrateV4,   // 6 — repeater node tables (config + ACL)
+	migrateV5,   // 7 — repeater flood_max_unscoped + default_region columns
+	migrateV6,   // 8 — map tile key, home region, advert clamp, path hash size, relay timing
+	migrateV7,   // 9 — settings.duty_cycle_pct (TX airtime budget)
+}
+
+// dbExecer is the subset of *sql.DB / *sql.Tx a migration needs.
+type dbExecer interface {
+	ExecContext(ctx context.Context, query string, args ...any) (sql.Result, error)
+	QueryContext(ctx context.Context, query string, args ...any) (*sql.Rows, error)
+}
+
+// runMigration applies one migration and its user_version bump atomically, so a crash mid-way can't leave a half-applied schema.
+func (s *Store) runMigration(ctx context.Context, version int, fn func(context.Context, dbExecer) error) error {
+	tx, err := s.db.BeginTx(ctx, nil)
+	if err != nil {
+		return fmt.Errorf("migration %d: begin: %w", version, err)
+	}
+	defer tx.Rollback()
+
+	if err := fn(ctx, tx); err != nil {
+		return fmt.Errorf("migration %d: %w", version, err)
+	}
+	if _, err := tx.ExecContext(ctx, fmt.Sprintf("PRAGMA user_version = %d", version)); err != nil {
+		return fmt.Errorf("setting schema version %d: %w", version, err)
+	}
+	if err := tx.Commit(); err != nil {
+		return fmt.Errorf("migration %d: commit: %w", version, err)
+	}
 	return nil
 }
 
@@ -197,7 +270,7 @@ func (s *Store) migrate(ctx context.Context) error {
 // decibels (REAL); rssi is whole dBm (INTEGER). companion_contacts is a
 // self-contained address-book record (its own name/type/location/path/feat/
 // last-seen, no discovered_peers FK), so deleting a peer never touches a contact.
-func migrateV1(ctx context.Context, db *sql.DB) error {
+func migrateV1(ctx context.Context, db dbExecer) error {
 	_, err := db.ExecContext(ctx, `
 		CREATE TABLE IF NOT EXISTS discovered_peers (
 			pubkey             BLOB PRIMARY KEY,
@@ -423,21 +496,12 @@ func migrateV1(ctx context.Context, db *sql.DB) error {
 // migrateNoop is a placeholder for a migration slot that migrateV1 already
 // covers (see the squash note in migrate). It keeps later migrations at the
 // version index pre-squash DBs expect.
-func migrateNoop(context.Context, *sql.DB) error { return nil }
+func migrateNoop(context.Context, dbExecer) error { return nil }
 
 // migrateV2 adds the indexed packet_hash and path columns so the Packets page
 // can filter/search across all stored history server-side, and backfills them
 // for rows inserted before the columns existed.
-func migrateV2(ctx context.Context, db *sql.DB) error {
-	// Everything runs in one transaction (SQLite DDL is transactional) so a
-	// failure mid-backfill rolls back the ADD COLUMNs too, keeping the
-	// migration atomic and safe to re-run.
-	tx, err := db.BeginTx(ctx, nil)
-	if err != nil {
-		return fmt.Errorf("begin migration: %w", err)
-	}
-	defer tx.Rollback()
-
+func migrateV2(ctx context.Context, tx dbExecer) error {
 	if _, err := tx.ExecContext(ctx, `
 		ALTER TABLE packets ADD COLUMN packet_hash TEXT NOT NULL DEFAULT '';
 		ALTER TABLE packets ADD COLUMN path TEXT NOT NULL DEFAULT '';
@@ -485,16 +549,12 @@ func migrateV2(ctx context.Context, db *sql.DB) error {
 	`); err != nil {
 		return fmt.Errorf("indexing packet columns: %w", err)
 	}
-
-	if err := tx.Commit(); err != nil {
-		return fmt.Errorf("commit backfill: %w", err)
-	}
 	return nil
 }
 
 // migrateV3 adds storage for the signal-test runner and for link monitors (a
 // monitored path polled under a synthetic pubkey — see LinkMonitorRepo).
-func migrateV3(ctx context.Context, db *sql.DB) error {
+func migrateV3(ctx context.Context, db dbExecer) error {
 	_, err := db.ExecContext(ctx, `
 		CREATE TABLE IF NOT EXISTS signal_tests (
 			id             INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -561,7 +621,7 @@ func migrateV3(ctx context.Context, db *sql.DB) error {
 // that change stored no regions but was relaying unscoped flood, so seed "*" to
 // preserve behaviour. Idempotent and a no-op on a fresh DB (no repeater row yet;
 // new repeaters get "*" seeded on create).
-func migrateV4(ctx context.Context, db *sql.DB) error {
+func migrateV4(ctx context.Context, db dbExecer) error {
 	_, err := db.ExecContext(ctx, `
 		CREATE TABLE IF NOT EXISTS repeater (
 			id                    INTEGER PRIMARY KEY CHECK (id = 1),
@@ -598,10 +658,70 @@ func migrateV4(ctx context.Context, db *sql.DB) error {
 // repeater table: flood_max_unscoped (the extra hop cap for plain/unscoped
 // floods, firmware NodePrefs) and default_region (the region our own flood
 // adverts are scoped to, ” = unscoped).
-func migrateV5(ctx context.Context, db *sql.DB) error {
+func migrateV5(ctx context.Context, db dbExecer) error {
 	_, err := db.ExecContext(ctx, `
 		ALTER TABLE repeater ADD COLUMN flood_max_unscoped INTEGER;
 		ALTER TABLE repeater ADD COLUMN default_region TEXT NOT NULL DEFAULT '';
 	`)
 	return err
+}
+
+// migrateV6 adds the CARTO basemap API key (https://carto.com/basemaps/apikey/).
+// migrateV6 is the v1.1.0 -> next release step, squashed from what were five
+// separate migrations during development. Safe to squash because none of them
+// ever shipped: the released tag stops at user_version 7. The statements keep
+// their original order — the path_hash_size conversion has to read
+// path_hash_mode before dropping it — and all of them commit as one
+// transaction via runMigration, so a failure part-way leaves the DB at 7.
+// migrateV7 adds the TX duty-cycle cap. Stored as a PERCENTAGE, the unit the
+// firmware's `set dutycycle` uses; the library's inverted airtime factor is
+// derived at the edge. NULL = library default (50%).
+func migrateV7(ctx context.Context, db dbExecer) error {
+	_, err := db.ExecContext(ctx, `ALTER TABLE settings ADD COLUMN duty_cycle_pct REAL`)
+	return err
+}
+
+func migrateV6(ctx context.Context, db dbExecer) error {
+	for _, q := range []string{
+		// CARTO basemap API key.
+		`ALTER TABLE settings ADD COLUMN map_tile_key TEXT`,
+
+		// Repeater home region (stored and reported, never routed on).
+		`ALTER TABLE repeater ADD COLUMN home_region TEXT NOT NULL DEFAULT ''`,
+
+		// Clamp advert intervals into the firmware's legal ranges. Anything
+		// below the minimum becomes 0 (off), matching savePrefs. Lossy on
+		// purpose: an out-of-range row would now fail Config.Validate() and
+		// stop startup.
+		`UPDATE repeater SET
+			advert_interval = CASE
+				WHEN advert_interval > 0 AND advert_interval < 3600 THEN 0
+				WHEN advert_interval > 14400 THEN 14400
+				ELSE advert_interval END,
+			flood_advert_interval = CASE
+				WHEN flood_advert_interval > 0 AND flood_advert_interval < 10800 THEN 0
+				WHEN flood_advert_interval > 604800 THEN 604800
+				ELSE flood_advert_interval END`,
+
+		// Path hash width in BYTES everywhere internally. The repeater column
+		// was the firmware's mode (bytes-1), so it converts and the old column
+		// goes; migrateV4 created path_hash_mode and has shipped, so it cannot
+		// be edited to create path_hash_size directly.
+		`ALTER TABLE settings ADD COLUMN path_hash_size INTEGER`,
+		`ALTER TABLE companions ADD COLUMN path_hash_size INTEGER`,
+		`ALTER TABLE repeater ADD COLUMN path_hash_size INTEGER`,
+		`UPDATE repeater SET path_hash_size = path_hash_mode + 1 WHERE path_hash_mode IS NOT NULL`,
+		`ALTER TABLE repeater DROP COLUMN path_hash_mode`,
+
+		// Relay timing (firmware txdelay / direct.txdelay / rxdelay / multi.acks).
+		`ALTER TABLE repeater ADD COLUMN tx_delay_factor REAL`,
+		`ALTER TABLE repeater ADD COLUMN direct_tx_delay_factor REAL`,
+		`ALTER TABLE repeater ADD COLUMN rx_delay_base REAL`,
+		`ALTER TABLE repeater ADD COLUMN multi_acks INTEGER`,
+	} {
+		if _, err := db.ExecContext(ctx, q); err != nil {
+			return err
+		}
+	}
+	return nil
 }

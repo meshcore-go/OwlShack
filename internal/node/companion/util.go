@@ -29,9 +29,9 @@ func channelFromRef(ref config.ChannelRef) (*meshcore.ChannelEntry, error) {
 	return meshcore.NewChannelFromHashtag(nCh), nil
 }
 
-func resolvePathHashSize(configured *uint8, evt trigger.Event) uint8 {
+func resolvePathHashSize(configured *uint8, evt trigger.Event, def uint8) uint8 {
 	if configured == nil {
-		return 1
+		return def
 	}
 	if *configured >= 1 && *configured <= 4 {
 		return *configured
@@ -39,5 +39,5 @@ func resolvePathHashSize(configured *uint8, evt trigger.Event) uint8 {
 	if incoming, ok := evt.Data["PathHashSize"].(uint8); ok && incoming >= 1 && incoming <= 4 {
 		return incoming
 	}
-	return 1
+	return def
 }

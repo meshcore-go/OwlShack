@@ -1,7 +1,7 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { useSearchParams } from "react-router-dom";
 import L from "leaflet";
-import { MapPin, RefreshCw } from "lucide-react";
+import { ChevronDown, MapPin, RefreshCw } from "lucide-react";
 import { toast } from "sonner";
 import { useWebSocket } from "@/hooks/useWebSocket";
 import { useApiList } from "@/hooks/useApiList";
@@ -13,6 +13,13 @@ import { LoadErrorAlert } from "@/components/LoadErrorAlert";
 import { PageHeader } from "@/components/PageHeader";
 import { ConnectionPill, PEER_TYPE_HEX } from "@/components/StatusIndicator";
 import { InlineConfirm } from "@/components/InlineConfirm";
+import {
+  DropdownMenu,
+  DropdownMenuCheckboxItem,
+  DropdownMenuContent,
+  DropdownMenuSeparator,
+  DropdownMenuTrigger,
+} from "@/components/ui/dropdown-menu";
 import { PeerDetailSheet } from "@/components/PeerDetailSheet";
 import { deletePeers, deletedPeersMessage } from "@/lib/peerApi";
 import { themeTileLayer, useThemeTiles } from "@/lib/leaflet";
@@ -59,10 +66,10 @@ function wrapLon(lon: number): number {
 function dotIcon(color: string): L.DivIcon {
   return L.divIcon({
     className: "meshcore-peer-dot",
-    html: `<span style="display:block; width:10px; height:10px; border-radius:9999px; background:${color}; box-shadow: 0 0 0 2px rgba(0,0,0,0.55), 0 0 6px ${color};"></span>`,
-    iconSize: [10, 10],
-    iconAnchor: [5, 5],
-    popupAnchor: [0, -6],
+    html: `<span style="display:grid; place-items:center; width:24px; height:24px;"><span style="display:block; width:10px; height:10px; border-radius:9999px; background:${color}; box-shadow: 0 0 0 2px rgba(0,0,0,0.55), 0 0 6px ${color};"></span></span>`,
+    iconSize: [24, 24],
+    iconAnchor: [12, 12],
+    popupAnchor: [0, -8],
   });
 }
 
@@ -399,6 +406,13 @@ export function MapPage() {
       <section className="panel overflow-hidden">
         <div className="flex flex-wrap items-center gap-2 px-4 py-3 border-b border-border">
           <span className="label-overline mr-2">Filter</span>
+          <FilterMenu
+            hidden={hidden}
+            counts={typeCounts}
+            onToggleType={toggleType}
+            showLinks={showLinks}
+            onToggleLinks={() => setShowLinks((v) => !v)}
+          />
           {TYPE_FILTERS.map((t) => {
             const isHidden = hidden.has(t);
             const color = PEER_TYPE_HEX[t] || PEER_TYPE_HEX.NONE;
@@ -409,7 +423,7 @@ export function MapPage() {
                 type="button"
                 onClick={() => toggleType(t)}
                 className={cn(
-                  "inline-flex items-center gap-1.5 px-2 py-1 border border-border bg-card font-mono text-[10px] uppercase tracking-[0.12em] transition-all hover:border-foreground/40",
+                  "hidden sm:inline-flex items-center gap-1.5 px-2 py-1 border border-border bg-card font-mono text-[10px] uppercase tracking-[0.12em] transition-all hover:border-foreground/40",
                   isHidden && "opacity-40 line-through",
                 )}
               >
@@ -429,7 +443,7 @@ export function MapPage() {
             type="button"
             onClick={() => setShowLinks((v) => !v)}
             className={cn(
-              "ml-1 inline-flex items-center gap-1.5 border border-border bg-card px-2 py-1 pl-3 font-mono text-[10px] uppercase tracking-[0.12em] transition-all hover:border-foreground/40 border-l-2",
+              "ml-1 hidden sm:inline-flex items-center gap-1.5 border border-border bg-card px-2 py-1 pl-3 font-mono text-[10px] uppercase tracking-[0.12em] transition-all hover:border-foreground/40 border-l-2",
               showLinks ? "border-primary/60 text-primary" : "text-muted-foreground",
             )}
           >
@@ -462,11 +476,77 @@ export function MapPage() {
 
         <div
           ref={containerRef}
-          className="h-[calc(100vh-260px)] min-h-105 w-full"
+          className="h-[calc(100dvh-260px-var(--bottom-nav))] min-h-105 w-full"
         />
       </section>
 
       <PeerDetailSheet {...sheetProps} companions={companions} />
     </div>
+  );
+}
+
+// FilterMenu is the phone-sized form of the type pills: the same toggles, but
+// collapsed into one control so the filter row doesn't wrap to three lines
+// above the map. Below sm only — the pills stay on wider screens.
+function FilterMenu({
+  hidden,
+  counts,
+  onToggleType,
+  showLinks,
+  onToggleLinks,
+}: {
+  hidden: Set<string>;
+  counts: Record<string, number>;
+  onToggleType: (type: string) => void;
+  showLinks: boolean;
+  onToggleLinks: () => void;
+}) {
+  const shown = TYPE_FILTERS.filter((t) => !hidden.has(t)).length;
+  return (
+    <DropdownMenu>
+      <DropdownMenuTrigger asChild>
+        <button
+          type="button"
+          className="sm:hidden relative inline-flex items-center gap-1.5 border border-border bg-card px-2 py-1 font-mono text-[10px] uppercase tracking-[0.12em] text-muted-foreground before:absolute before:inset-x-0 before:-inset-y-2 before:content-['']"
+        >
+          types
+          <span className="tabular-nums text-foreground">
+            {shown}/{TYPE_FILTERS.length}
+          </span>
+          {showLinks && <span className="text-primary">· links</span>}
+          <ChevronDown className="size-3" />
+        </button>
+      </DropdownMenuTrigger>
+      <DropdownMenuContent align="start" className="rounded-sm">
+        {TYPE_FILTERS.map((t) => (
+          <DropdownMenuCheckboxItem
+            key={t}
+            checked={!hidden.has(t)}
+            onCheckedChange={() => onToggleType(t)}
+            onSelect={(e) => e.preventDefault()}
+            className="font-mono text-[11px] uppercase tracking-[0.08em]"
+          >
+            <span
+              className="size-2 rounded-full"
+              style={{ background: PEER_TYPE_HEX[t] || PEER_TYPE_HEX.NONE }}
+              aria-hidden
+            />
+            {t}
+            <span className="ml-auto pl-3 tabular-nums text-muted-foreground/70">
+              {counts[t] || 0}
+            </span>
+          </DropdownMenuCheckboxItem>
+        ))}
+        <DropdownMenuSeparator />
+        <DropdownMenuCheckboxItem
+          checked={showLinks}
+          onCheckedChange={onToggleLinks}
+          onSelect={(e) => e.preventDefault()}
+          className="font-mono text-[11px] uppercase tracking-[0.08em]"
+        >
+          Neighbour links
+        </DropdownMenuCheckboxItem>
+      </DropdownMenuContent>
+    </DropdownMenu>
   );
 }

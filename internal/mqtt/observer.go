@@ -1,6 +1,7 @@
 package mqtt
 
 import (
+	"cmp"
 	"context"
 	"crypto/tls"
 	"encoding/hex"
@@ -42,6 +43,15 @@ const (
 	connectWaitTimeout = 10 * time.Second
 )
 
+// Initial-connect retry backoff. paho's SetAutoReconnect only covers a client
+// that has connected at least once, so a broker that is down at startup needs
+// our own loop or it stays down until the process restarts. Vars, not consts,
+// so tests can shrink them.
+var (
+	connectRetryMin = 5 * time.Second
+	connectRetryMax = 5 * time.Minute
+)
+
 type brokerClient struct {
 	cfg      config.BrokerConfig
 	clientMu sync.RWMutex
@@ -54,12 +64,20 @@ type brokerClient struct {
 	statusTopicStr string
 
 	disallowed map[byte]bool
-	dedup      *meshcore.DedupCache // nil when dedup disabled for this broker
+	dedup      *meshcore.DedupCache // rx; nil when dedup disabled for this broker
+	// dedupTx is separate because DedupCache keys on the packet hash alone:
+	// relaying a flood we already published as rx carries the SAME hash, so one
+	// shared cache would drop every relay we transmit.
+	dedupTx *meshcore.DedupCache
 
 	publishCh  chan publishJob
 	stop       chan struct{} // closed by Observer.Stop to halt the worker + senders
 	workerDone chan struct{}
 	dropped    atomic.Uint64
+	published  atomic.Uint64
+	// retrying guards retryConnect so the two call sites (startup failure and
+	// a failed token refresh) can never run two loops for one broker.
+	retrying atomic.Bool
 }
 
 func (b *brokerClient) currentClient() paho.Client {
@@ -109,6 +127,9 @@ func (b *brokerClient) isAllowed(payloadType byte) bool {
 
 type Observer struct {
 	radio node.MuxRadio
+	// mux is retained for TxStats, which is not on the MuxRadio interface.
+	// Its counters are process-wide: one mux serves every node here.
+	mux   *node.RadioMux
 	id    meshcore.LocalIdentity
 	stats modem.StatsProvider
 	log   *slog.Logger
@@ -120,12 +141,138 @@ type Observer struct {
 	packetsReceived atomic.Uint64
 	floodRx         atomic.Uint64
 	directRx        atomic.Uint64
-	floodDups       atomic.Uint64
-	directDups      atomic.Uint64
-	recvErrors      *atomic.Uint64
+	// Airtime is accumulated per packet from the radio's own estimate, the way
+	// the firmware accumulates rx_air_time / total_air_time. TX is fed by NoteTx
+	// from the modem's outbound handler, so it covers every transmission this
+	// process makes — companion and repeater alike, like sent and queue_len.
+	rxAirMs  atomic.Uint64
+	txAirMs  atomic.Uint64
+	floodTx  atomic.Uint64
+	directTx atomic.Uint64
+	// relaying is the repeater's `repeat` setting, published as the top-level
+	// `repeat` flag firmware 1.16 introduced. False when no repeater runs here,
+	// which is accurate rather than unknown.
+	relaying   atomic.Bool
+	lastSNR    atomic.Int64 // quarter-dB, so the float survives an atomic
+	lastRSSI   atomic.Int32
+	floodDups  atomic.Uint64
+	directDups atomic.Uint64
+	recvErrors *atomic.Uint64
 
 	mu     sync.Mutex
 	cancel context.CancelFunc
+	// runCtx is the started context, kept so SetRelaying can publish a status
+	// out of band. Guarded by mu with cancel.
+	runCtx   context.Context
+	stopOnce sync.Once
+
+	// brokersMu guards the brokers slice: Start publishes it while the API
+	// server is already serving BrokerStatuses.
+	brokersMu sync.RWMutex
+
+	// health carries per-broker connection state keyed by broker name. It is
+	// keyed by name rather than held on brokerClient so a configured broker
+	// still reports its last error after a reload drops its brokerClient.
+	healthMu sync.Mutex
+	health   map[string]*brokerHealth
+}
+
+// brokerHealth is the connection history we report for one broker.
+type brokerHealth struct {
+	lastErr     string
+	lastErrAt   time.Time
+	connectedAt time.Time
+}
+
+// BrokerStatus is a snapshot of one configured broker's connection state.
+type BrokerStatus struct {
+	Name        string
+	Host        string
+	Port        int
+	Transport   string
+	TLS         bool
+	AuthType    string
+	Enabled     bool
+	Connected   bool
+	LastError   string
+	LastErrorAt time.Time
+	ConnectedAt time.Time
+	Published   uint64
+	Dropped     uint64
+	StatusTopic string
+}
+
+func (o *Observer) brokerList() []*brokerClient {
+	o.brokersMu.RLock()
+	defer o.brokersMu.RUnlock()
+	return o.brokers
+}
+
+func (o *Observer) recordConnected(name string) {
+	o.healthMu.Lock()
+	defer o.healthMu.Unlock()
+	h := o.brokerHealthLocked(name)
+	h.connectedAt = time.Now()
+}
+
+func (o *Observer) recordBrokerErr(name string, err error) {
+	if err == nil {
+		return
+	}
+	o.healthMu.Lock()
+	defer o.healthMu.Unlock()
+	h := o.brokerHealthLocked(name)
+	h.lastErr = err.Error()
+	h.lastErrAt = time.Now()
+}
+
+func (o *Observer) brokerHealthLocked(name string) *brokerHealth {
+	if o.health == nil {
+		o.health = make(map[string]*brokerHealth)
+	}
+	h := o.health[name]
+	if h == nil {
+		h = &brokerHealth{}
+		o.health[name] = h
+	}
+	return h
+}
+
+// BrokerStatuses reports every configured broker, connected or not. Liveness
+// comes from paho's own IsConnected so an auto-reconnect is reflected without
+// us tracking it.
+func (o *Observer) BrokerStatuses() []BrokerStatus {
+	live := make(map[string]*brokerClient)
+	for _, bc := range o.brokerList() {
+		live[bc.cfg.Name] = bc
+	}
+	out := make([]BrokerStatus, 0, len(o.cfg.Brokers))
+	for _, bcfg := range o.cfg.Brokers {
+		st := BrokerStatus{
+			Name:      bcfg.Name,
+			Host:      bcfg.Host,
+			Port:      bcfg.Port,
+			Transport: cmp.Or(bcfg.Transport, "tcp"),
+			TLS:       bcfg.TlsEnabled,
+			AuthType:  cmp.Or(bcfg.AuthType, "none"),
+			Enabled:   bcfg.Enabled,
+		}
+		if bc := live[bcfg.Name]; bc != nil {
+			if c := bc.currentClient(); c != nil {
+				st.Connected = c.IsConnected()
+			}
+			st.Published = bc.published.Load()
+			st.Dropped = bc.dropped.Load()
+			st.StatusTopic = bc.statusTopic()
+		}
+		o.healthMu.Lock()
+		if h := o.health[bcfg.Name]; h != nil {
+			st.LastError, st.LastErrorAt, st.ConnectedAt = h.lastErr, h.lastErrAt, h.connectedAt
+		}
+		o.healthMu.Unlock()
+		out = append(out, st)
+	}
+	return out
 }
 
 func NewObserver(cfg config.MqttConfig, name string, mux *node.RadioMux, id meshcore.LocalIdentity, stats modem.StatsProvider, recvErrors *atomic.Uint64) (*Observer, error) {
@@ -134,6 +281,7 @@ func NewObserver(cfg config.MqttConfig, name string, mux *node.RadioMux, id mesh
 
 	obs := &Observer{
 		radio:      radio,
+		mux:        mux,
 		id:         id,
 		cfg:        cfg,
 		stats:      stats,
@@ -150,6 +298,7 @@ func (o *Observer) Start(ctx context.Context) error {
 	ctx, cancel := context.WithCancel(ctx)
 	o.mu.Lock()
 	o.cancel = cancel
+	o.runCtx = ctx
 	o.mu.Unlock()
 
 	iata := "test"
@@ -162,18 +311,11 @@ func (o *Observer) Start(ctx context.Context) error {
 			continue
 		}
 
-		client, err := o.connectBroker(bcfg, iata)
-		if err != nil {
-			o.log.Error("broker connect failed", "broker", bcfg.Name, "error", err)
-			continue
-		}
-
 		disallowed := parseDisallowed(bcfg.DisallowedPacketTypes)
 		packetTopic, statusTopic := resolveTopics(bcfg, iata, o.pubKeyHx, o.originName)
 
 		bc := &brokerClient{
 			cfg:            bcfg,
-			client:         client,
 			pubKeyHx:       o.pubKeyHx,
 			iata:           iata,
 			packetTopicStr: packetTopic,
@@ -185,12 +327,29 @@ func (o *Observer) Start(ctx context.Context) error {
 		}
 		if bcfg.Dedup {
 			bc.dedup = &meshcore.DedupCache{}
+			bc.dedupTx = &meshcore.DedupCache{}
 		}
 
 		go o.publishWorker(bc)
 
-		o.publishStatus(ctx, bc, "online")
+		// The broker is registered whether or not it connects: a configured
+		// broker that is unreachable must stay visible and keep retrying, not
+		// disappear until restart.
+		o.brokersMu.Lock()
 		o.brokers = append(o.brokers, bc)
+		o.brokersMu.Unlock()
+
+		client, err := o.connectBroker(bcfg, iata)
+		if err != nil {
+			o.log.Error("broker connect failed, retrying in background",
+				"broker", bcfg.Name, "error", err, "retry_in", connectRetryMin)
+			o.recordBrokerErr(bcfg.Name, err)
+			go o.retryConnect(ctx, bc)
+			continue
+		}
+		bc.swapClient(client)
+		o.recordConnected(bcfg.Name)
+		o.publishStatus(ctx, bc, "online")
 		o.log.Info("connected", "broker", bcfg.Name)
 	}
 
@@ -204,6 +363,10 @@ func (o *Observer) Start(ctx context.Context) error {
 }
 
 func (o *Observer) Stop() {
+	o.stopOnce.Do(o.stop)
+}
+
+func (o *Observer) stop() {
 	o.mu.Lock()
 	if o.cancel != nil {
 		o.cancel()
@@ -221,7 +384,7 @@ func (o *Observer) Stop() {
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()
 
-	for _, bc := range o.brokers {
+	for _, bc := range o.brokerList() {
 		o.publishStatus(ctx, bc, "offline")
 		close(bc.stop)
 		select {
@@ -229,9 +392,10 @@ func (o *Observer) Stop() {
 		case <-time.After(publishWaitTimeout):
 			o.log.Warn("publish worker did not exit cleanly", "broker", bc.cfg.Name)
 		}
-		bc.currentClient().Disconnect(500)
+		if c := bc.currentClient(); c != nil {
+			c.Disconnect(500)
+		}
 	}
-	o.brokers = nil
 }
 
 // publishWorker drains a broker's publish channel serially. token.Wait() is
@@ -260,17 +424,26 @@ func (o *Observer) publishWorker(bc *brokerClient) {
 
 func (o *Observer) doPublish(bc *brokerClient, job publishJob) {
 	client := bc.currentClient()
-	if client == nil {
+	if client == nil || !client.IsConnected() {
+		// Publishing to a disconnected client would block for the full
+		// publishWaitTimeout per job and stall the worker. Count it as a drop:
+		// from the operator's side the message did not go out, and the broker
+		// already shows as offline.
+		bc.dropped.Add(1)
 		return
 	}
 	token := client.Publish(job.topic, job.qos, job.retain, job.payload)
 	if !token.WaitTimeout(publishWaitTimeout) {
 		o.log.Warn("publish timed out", "broker", bc.cfg.Name, "topic", job.topic)
+		o.recordBrokerErr(bc.cfg.Name, fmt.Errorf("publish to %s timed out", job.topic))
 		return
 	}
 	if err := token.Error(); err != nil {
 		o.log.Error("publish error", "broker", bc.cfg.Name, "error", err)
+		o.recordBrokerErr(bc.cfg.Name, err)
+		return
 	}
+	bc.published.Add(1)
 }
 
 // enqueuePublish hands a job to the broker's worker without blocking. If the
@@ -307,6 +480,9 @@ func (o *Observer) onData(data []byte, snr float32, rssi int8, hasSignalInfo boo
 	pkt.HasSignalInfo = hasSignalInfo
 
 	o.packetsReceived.Add(1)
+	o.lastSNR.Store(int64(snr * 4))
+	o.lastRSSI.Store(int32(rssi))
+	o.addAir(&o.rxAirMs, len(data))
 	if pkt.IsRouteDirect() {
 		o.directRx.Add(1)
 	} else {
@@ -315,24 +491,62 @@ func (o *Observer) onData(data []byte, snr float32, rssi int8, hasSignalInfo boo
 	o.publishPacket(pkt, data, "rx")
 }
 
+// NoteTx publishes one transmitted packet and folds it into the TX counters.
+// Registered on the modem's outbound handler, which fires once per actual
+// transmission for every virtual radio — the same hook the packet logger uses.
+func (o *Observer) NoteTx(data []byte) {
+	pkt, err := meshcore.PacketFromBytes(data)
+	if err != nil {
+		return
+	}
+	o.addAir(&o.txAirMs, len(data))
+	if pkt.IsRouteDirect() {
+		o.directTx.Add(1)
+	} else {
+		o.floodTx.Add(1)
+	}
+	o.publishPacket(pkt, data, "tx")
+}
+
+// SetRelaying records whether this node relays, for the `repeat` flag, and
+// publishes a status straight away when the value changed on a running
+// observer. Without that, a `set repeat` would not reach consumers until the
+// next heartbeat — up to StatusIntervalSeconds (300s default) of advertising a
+// relay state we no longer have. Consumers act on this flag, so the lag is not
+// cosmetic.
+func (o *Observer) SetRelaying(v bool) {
+	if o.relaying.Swap(v) == v {
+		return
+	}
+	o.mu.Lock()
+	ctx := o.runCtx
+	o.mu.Unlock()
+	if ctx == nil || ctx.Err() != nil {
+		return // not started yet: Start publishes the first status itself
+	}
+	for _, bc := range o.brokerList() {
+		o.publishStatus(ctx, bc, "online")
+	}
+}
+
 func (o *Observer) publishPacket(pkt *meshcore.Packet, rawBytes []byte, direction string) {
 	o.log.Log(context.Background(), logging.LevelTrace, "new packet accepted",
 		"direction", direction, "type", pkt.PayloadType(),
 		"payload_len", len(pkt.Payload))
 
-	payload, err := formatPacket(pkt, rawBytes, o.originName, o.pubKeyHx, direction)
+	payload, err := formatPacket(pkt, rawBytes, o.originName, o.pubKeyHx, direction, o.stats)
 	if err != nil {
 		o.log.Error("format error", "error", err)
 		return
 	}
 
-	for _, bc := range o.brokers {
+	for _, bc := range o.brokerList() {
 		if !bc.isAllowed(pkt.PayloadType()) {
 			o.log.Log(context.Background(), logging.LevelTrace, "packet type filtered",
 				"broker", bc.cfg.Name, "type", pkt.PayloadType())
 			continue
 		}
-		if bc.dedup != nil && bc.dedup.HasSeen(pkt) {
+		if d := bc.dedupFor(direction); d != nil && d.HasSeen(pkt) {
 			o.log.Log(context.Background(), logging.LevelTrace, "dedup hit, skipping",
 				"broker", bc.cfg.Name, "type", pkt.PayloadType())
 			if pkt.IsRouteDirect() {
@@ -363,10 +577,53 @@ func (o *Observer) heartbeatLoop(ctx context.Context) {
 		case <-ctx.Done():
 			return
 		case <-ticker.C:
-			for _, bc := range o.brokers {
+			for _, bc := range o.brokerList() {
 				o.publishStatus(ctx, bc, "online")
 			}
 		}
+	}
+}
+
+// retryConnect reconnects a broker that has no working client, with capped
+// exponential backoff, until it succeeds or the observer stops. It covers the
+// two cases paho's own auto-reconnect does not: a broker that was unreachable
+// at startup, and a token refresh whose reconnect failed.
+func (o *Observer) retryConnect(ctx context.Context, bc *brokerClient) {
+	if !bc.retrying.CompareAndSwap(false, true) {
+		return // a loop is already running for this broker
+	}
+	defer bc.retrying.Store(false)
+
+	delay := connectRetryMin
+	for {
+		select {
+		case <-ctx.Done():
+			return
+		case <-bc.stop:
+			return
+		case <-time.After(delay):
+		}
+
+		if c := bc.currentClient(); c != nil && c.IsConnected() {
+			return // paho's auto-reconnect got there first
+		}
+
+		client, err := o.connectBroker(bc.cfg, bc.iata)
+		if err != nil {
+			o.recordBrokerErr(bc.cfg.Name, err)
+			delay = min(delay*2, connectRetryMax)
+			o.log.Debug("broker connect retry failed",
+				"broker", bc.cfg.Name, "error", err, "retry_in", delay)
+			continue
+		}
+		if old := bc.currentClient(); old != nil {
+			old.Disconnect(0)
+		}
+		bc.swapClient(client)
+		o.recordConnected(bc.cfg.Name)
+		o.publishStatus(ctx, bc, "online")
+		o.log.Info("connected", "broker", bc.cfg.Name)
+		return
 	}
 }
 
@@ -380,24 +637,104 @@ func (o *Observer) tokenRefreshLoop(ctx context.Context) {
 		case <-ctx.Done():
 			return
 		case <-ticker.C:
-			for _, bc := range o.brokers {
-				if !strings.EqualFold(bc.cfg.AuthType, "token") {
-					continue
-				}
-				o.log.Debug("refreshing token", "broker", bc.cfg.Name)
-				bc.currentClient().Disconnect(250)
-
-				newClient, err := o.connectBroker(bc.cfg, bc.iata)
-				if err != nil {
-					o.log.Error("token refresh reconnect failed", "broker", bc.cfg.Name, "error", err)
-					continue
-				}
-				bc.swapClient(newClient)
-				o.publishStatus(ctx, bc, "online")
-				o.log.Info("token refreshed", "broker", bc.cfg.Name)
+			for _, bc := range o.brokerList() {
+				o.refreshToken(ctx, bc)
 			}
 		}
 	}
+}
+
+// refreshToken re-mints a token broker's credentials by reconnecting it. It
+// reports whether it reconnected.
+func (o *Observer) refreshToken(ctx context.Context, bc *brokerClient) bool {
+	if !strings.EqualFold(bc.cfg.AuthType, "token") {
+		return false
+	}
+	// retryConnect owns the client while it runs, and a broker that never
+	// connected has none: either way this would orphan a live client or panic.
+	if bc.retrying.Load() {
+		return false
+	}
+	c := bc.currentClient()
+	if c == nil {
+		return false
+	}
+	o.log.Debug("refreshing token", "broker", bc.cfg.Name)
+	// Disconnect before connecting: the new client reuses the ClientID, so the
+	// broker would kick this one and its auto-reconnect would kick the new one.
+	c.Disconnect(250)
+
+	newClient, err := o.connectBroker(bc.cfg, bc.iata)
+	if err != nil {
+		o.log.Error("token refresh reconnect failed, retrying in background",
+			"broker", bc.cfg.Name, "error", err)
+		o.recordBrokerErr(bc.cfg.Name, err)
+		// Without this the broker sits disconnected until the next refresh
+		// tick (0.8 x token lifetime away).
+		go o.retryConnect(ctx, bc)
+		return false
+	}
+	bc.swapClient(newClient)
+	o.publishStatus(ctx, bc, "online")
+	o.log.Info("token refreshed", "broker", bc.cfg.Name)
+	return true
+}
+
+// txCounts reads the shared mux's transmit counters. Zero when no mux is
+// wired (tests), rather than panicking on a status publish.
+func (o *Observer) txCounts() TxCounts {
+	if o.mux == nil {
+		return TxCounts{}
+	}
+	s := o.mux.TxStats()
+	out := TxCounts{
+		Sent:          s.Sent,
+		BusyRequeued:  s.BusyRequeued,
+		BusyDropped:   s.BusyDropped,
+		QueueRejected: s.QueueRejected,
+		Failed:        s.Failed,
+	}
+	if o.radio != nil {
+		out.QueueLen = o.radio.TxQueueLen()
+	}
+	return out
+}
+
+// addAir accumulates one packet's estimated airtime. Cheap arithmetic, so it
+// runs on the RX path rather than being sampled.
+func (o *Observer) addAir(dst *atomic.Uint64, packetLen int) {
+	if o.stats == nil {
+		return
+	}
+	if ms := o.stats.EstAirtimeMs(packetLen); ms > 0 {
+		dst.Add(uint64(ms))
+	}
+}
+
+func (bc *brokerClient) dedupFor(direction string) *meshcore.DedupCache {
+	if direction == "tx" {
+		return bc.dedupTx
+	}
+	return bc.dedup
+}
+
+func (o *Observer) observerCounts() ObserverCounts {
+	return ObserverCounts{
+		RxMs:     o.rxAirMs.Load(),
+		TxMs:     o.txAirMs.Load(),
+		FloodTx:  o.floodTx.Load(),
+		DirectTx: o.directTx.Load(),
+		Relaying: o.relaying.Load(),
+		LastSNR:  float64(o.lastSNR.Load()) / 4,
+		LastRSSI: int16(o.lastRSSI.Load()),
+	}
+}
+
+func (o *Observer) linkStats() modem.LinkStats {
+	if o.stats == nil {
+		return modem.LinkStats{}
+	}
+	return o.stats.LinkStats()
 }
 
 func (o *Observer) publishStatus(ctx context.Context, bc *brokerClient, status string) {
@@ -416,7 +753,8 @@ func (o *Observer) publishStatus(ctx context.Context, bc *brokerClient, status s
 		DirectDups: o.directDups.Load(),
 	}
 
-	payload, err := formatStatus(status, o.originName, o.pubKeyHx, radio, ds, packets, o.recvErrors.Load())
+	payload, err := formatStatus(status, o.originName, o.pubKeyHx, radio, ds, packets,
+		o.txCounts(), o.linkStats(), o.observerCounts(), o.recvErrors.Load())
 	if err != nil {
 		o.log.Error("status format error", "error", err)
 		return
@@ -470,16 +808,20 @@ func (o *Observer) connectBroker(bcfg config.BrokerConfig, iata string) (paho.Cl
 
 	switch strings.ToLower(bcfg.AuthType) {
 	case "token":
-		audience := bcfg.Audience
-		if audience == "" {
-			audience = bcfg.Host
-		}
-		token, _, err := generateToken(o.id, audience, derefStr(o.cfg.Email), derefStr(o.cfg.Owner))
-		if err != nil {
-			return nil, fmt.Errorf("generating auth token: %w", err)
-		}
-		opts.SetUsername(tokenUsername(o.id))
-		opts.SetPassword(token)
+		audience := cmp.Or(bcfg.Audience, bcfg.Host)
+		username := tokenUsername(o.id)
+		email, owner := derefStr(o.cfg.Email), derefStr(o.cfg.Owner)
+		// Minted per connect attempt so paho's auto-reconnect never presents an expired token.
+		opts.SetCredentialsProvider(func() (string, string) {
+			token, _, err := generateToken(o.id, audience, email, owner)
+			if err != nil {
+				// The provider cannot fail, so surface it here or the operator
+				// only ever sees the broker's auth rejection.
+				o.log.Error("generating auth token", "broker", bcfg.Name, "error", err)
+				o.recordBrokerErr(bcfg.Name, fmt.Errorf("generating auth token: %w", err))
+			}
+			return username, token
+		})
 	case "basic":
 		opts.SetUsername(bcfg.Username)
 		opts.SetPassword(bcfg.Password)
@@ -488,8 +830,15 @@ func (o *Observer) connectBroker(bcfg config.BrokerConfig, iata string) (paho.Cl
 	_, statusTopic := resolveTopics(bcfg, iata, o.pubKeyHx, o.originName)
 
 	// LWT uses minimal status (no live stats — we're about to disconnect).
-	offlinePayload, _ := formatStatus("offline", o.originName, o.pubKeyHx, modem.RadioInfo{}, modem.DeviceStats{}, PacketCounts{}, 0)
+	offlinePayload, _ := formatStatus("offline", o.originName, o.pubKeyHx,
+		modem.RadioInfo{}, modem.DeviceStats{}, PacketCounts{}, TxCounts{}, modem.LinkStats{}, ObserverCounts{}, 0)
 	opts.SetWill(statusTopic, string(offlinePayload), 1, bcfg.RetainStatus)
+
+	opts.SetOnConnectHandler(func(paho.Client) { o.recordConnected(bcfg.Name) })
+	opts.SetConnectionLostHandler(func(_ paho.Client, err error) {
+		o.log.Warn("broker connection lost", "broker", bcfg.Name, "error", err)
+		o.recordBrokerErr(bcfg.Name, err)
+	})
 
 	client := paho.NewClient(opts)
 	token := client.Connect()

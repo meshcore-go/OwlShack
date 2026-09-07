@@ -1,5 +1,5 @@
-import { useMemo, useState } from "react";
-import { Link } from "react-router-dom";
+import { useEffect, useMemo, useState } from "react";
+import { Link, useSearchParams } from "react-router-dom";
 import {
   Crosshair,
   Hash,
@@ -24,7 +24,8 @@ import { configApi, type ConfigCompanion } from "@/lib/configApi";
 import { LoadErrorAlert } from "@/components/LoadErrorAlert";
 import { PageHeader } from "@/components/PageHeader";
 import { InlineConfirm } from "@/components/InlineConfirm";
-import { TextField } from "@/components/ConfigFields";
+import { PATH_HASH_SIZE_OPTIONS, SelectField, TextField } from "@/components/ConfigFields";
+import { PositionPicker, round6 } from "@/components/PositionPicker";
 import { truncateMid } from "@/lib/format";
 
 // Runtime roster (/api/companions) — keyed by the live identity, used only to
@@ -53,6 +54,15 @@ export function CompanionsPage() {
 
   const [editing, setEditing] = useState<ConfigCompanion | "new" | null>(null);
   const [confirming, setConfirming] = useState<number | null>(null);
+
+  const [params, setParams] = useSearchParams();
+  const editName = params.get("edit");
+  useEffect(() => {
+    if (!editName || !companions) return;
+    const target = companions.find((c) => c.name === editName);
+    if (target) setEditing(target);
+    setParams({}, { replace: true });
+  }, [editName, companions, setParams]);
 
   const runtimeByPubkey = useMemo(() => {
     const m = new Map<string, RuntimeCompanion>();
@@ -240,6 +250,9 @@ function CompanionEditor({
   const [longitude, setLongitude] = useState(
     companion?.longitude != null ? String(companion.longitude) : "",
   );
+  const [pathHashSize, setPathHashSize] = useState(
+    companion?.pathHashSize != null ? String(companion.pathHashSize) : "",
+  );
   const [advertInterval, setAdvertInterval] = useState(
     companion?.advertInterval != null ? String(companion.advertInterval) : "",
   );
@@ -260,6 +273,7 @@ function CompanionEditor({
           longitude: longitude === "" ? null : parseFloat(longitude) || 0,
           advertInterval:
             advertInterval === "" ? null : parseInt(advertInterval, 10) || 0,
+          pathHashSize: pathHashSize === "" ? null : parseInt(pathHashSize, 10),
         },
         companion?.id,
       );
@@ -332,13 +346,30 @@ function CompanionEditor({
               placeholder="blank = no position"
             />
           </div>
-          <TextField
-            label="Advert interval (s)"
-            value={advertInterval}
-            onChange={setAdvertInterval}
-            placeholder="blank = 86400 (daily)"
-            hint="0 = never advertise"
+          <PositionPicker
+            lat={parseFloat(latitude)}
+            lon={parseFloat(longitude)}
+            onPick={(la, lo) => {
+              setLatitude(round6(la));
+              setLongitude(round6(lo));
+            }}
           />
+          <div className="grid grid-cols-1 gap-4 sm:grid-cols-2">
+            <TextField
+              label="Advert interval (s)"
+              value={advertInterval}
+              onChange={setAdvertInterval}
+              placeholder="blank = 86400 (daily)"
+              hint="0 = never advertise"
+            />
+            <SelectField
+              label="Path hash size"
+              value={pathHashSize}
+              options={[{ value: "", label: "Inherit from Settings" }, ...PATH_HASH_SIZE_OPTIONS]}
+              onChange={setPathHashSize}
+              hint="width of each hop hash in our flood packets"
+            />
+          </div>
 
           <div className="flex justify-end gap-2 pt-1">
             <Button

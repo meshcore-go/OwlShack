@@ -4,6 +4,8 @@ import (
 	"encoding/json"
 	"log/slog"
 	"net/http"
+	"net/url"
+	"strings"
 	"sync"
 	"time"
 
@@ -11,7 +13,23 @@ import (
 )
 
 var upgrader = websocket.Upgrader{
-	CheckOrigin: func(r *http.Request) bool { return true },
+	CheckOrigin: sameHostOrigin,
+}
+
+// sameHostOrigin admits browser connections only from the page we served: the
+// Origin's host must equal the request Host. Non-browser clients send no Origin
+// and are allowed. Without this any web page could open our socket and read
+// the live feed from a visitor's browser on the LAN.
+func sameHostOrigin(r *http.Request) bool {
+	origin := r.Header.Get("Origin")
+	if origin == "" {
+		return true
+	}
+	u, err := url.Parse(origin)
+	if err != nil {
+		return false
+	}
+	return strings.EqualFold(u.Host, r.Host)
 }
 
 // Keepalive tuning. The server pings every wsPingPeriod; browsers answer with

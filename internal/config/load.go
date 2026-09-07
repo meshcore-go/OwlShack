@@ -142,6 +142,10 @@ func (c *Config) Validate() error {
 		return fmt.Errorf("tx must be between 0 and 22 dBm")
 	}
 
+	if v := c.PathHashSize; v != nil && (*v < MinPathHashSize || *v > MaxPathHashSize) {
+		return fmt.Errorf("pathHashSize must be %d-%d bytes", MinPathHashSize, MaxPathHashSize)
+	}
+
 	// Zero companions is a valid state: a fresh install boots quietly until the
 	// first-run wizard creates one, and an observer-only setup may keep none.
 
@@ -167,6 +171,9 @@ func (c *Config) Validate() error {
 				return fmt.Errorf("companions %q and %q share the same privateKey", other, comp.Name)
 			}
 			seenKeys[comp.PrivateKey] = comp.Name
+		}
+		if v := comp.PathHashSize; v != nil && (*v < MinPathHashSize || *v > MaxPathHashSize) {
+			return fmt.Errorf("companion %q: pathHashSize must be %d-%d bytes", comp.Name, MinPathHashSize, MaxPathHashSize)
 		}
 		if comp.Triggers != nil {
 			for j, trig := range *comp.Triggers {
@@ -231,14 +238,40 @@ func (c *Config) Validate() error {
 				return fmt.Errorf("repeater %q: defaultRegion %q is not a configured region", r.Name, r.DefaultRegion)
 			}
 		}
-		if r.PathHashMode != nil && (*r.PathHashMode < 0 || *r.PathHashMode > 3) {
-			return fmt.Errorf("repeater %q: pathHashMode must be 0 (1B), 1 (2B) or 3 (4B)", r.Name)
+		if r.HomeRegion != "" {
+			found := false
+			for _, rg := range r.Regions {
+				if rg.Name == r.HomeRegion {
+					found = true
+					break
+				}
+			}
+			if !found {
+				return fmt.Errorf("repeater %q: homeRegion %q is not a configured region", r.Name, r.HomeRegion)
+			}
 		}
-		if r.AdvertInterval != nil && *r.AdvertInterval < 0 {
-			return fmt.Errorf("repeater %q: advertInterval must be >= 0", r.Name)
+		if v := r.PathHashSize; v != nil && (*v < MinPathHashSize || *v > MaxPathHashSize) {
+			return fmt.Errorf("repeater %q: pathHashSize must be %d-%d bytes", r.Name, MinPathHashSize, MaxPathHashSize)
 		}
-		if r.FloodAdvertInterval != nil && *r.FloodAdvertInterval < 0 {
-			return fmt.Errorf("repeater %q: floodAdvertInterval must be >= 0", r.Name)
+		if v := r.TxDelayFactor; v != nil && !(*v >= 0 && *v <= MaxTxDelayFactor) {
+			return fmt.Errorf("repeater %q: txDelayFactor must be 0-%g", r.Name, MaxTxDelayFactor)
+		}
+		if v := r.DirectTxDelayFactor; v != nil && !(*v >= 0 && *v <= MaxTxDelayFactor) {
+			return fmt.Errorf("repeater %q: directTxDelayFactor must be 0-%g", r.Name, MaxTxDelayFactor)
+		}
+		if v := r.RxDelayBase; v != nil && !(*v >= 0 && *v <= MaxRxDelayBase) {
+			return fmt.Errorf("repeater %q: rxDelayBase must be 0-%g", r.Name, MaxRxDelayBase)
+		}
+		if v := r.MultiAcks; v != nil && (*v < 0 || *v > 255) {
+			return fmt.Errorf("repeater %q: multiAcks must be 0-255", r.Name)
+		}
+		if v := r.AdvertInterval; v != nil && *v != 0 && (*v < MinAdvertIntervalSecs || *v > MaxAdvertIntervalSecs) {
+			return fmt.Errorf("repeater %q: advertInterval must be 0 (off) or %d-%d seconds (%d-%d minutes)",
+				r.Name, MinAdvertIntervalSecs, MaxAdvertIntervalSecs, MinAdvertIntervalSecs/60, MaxAdvertIntervalSecs/60)
+		}
+		if v := r.FloodAdvertInterval; v != nil && *v != 0 && (*v < MinFloodAdvertIntervalSecs || *v > MaxFloodAdvertIntervalSecs) {
+			return fmt.Errorf("repeater %q: floodAdvertInterval must be 0 (off) or %d-%d seconds (%d-%d hours)",
+				r.Name, MinFloodAdvertIntervalSecs, MaxFloodAdvertIntervalSecs, MinFloodAdvertIntervalSecs/3600, MaxFloodAdvertIntervalSecs/3600)
 		}
 		if len(r.Regions) > meshcore.MaxRegions {
 			return fmt.Errorf("repeater %q: at most %d regions", r.Name, meshcore.MaxRegions)
@@ -255,14 +288,30 @@ func (c *Config) Validate() error {
 		}
 	}
 
+	if c.DutyCycle != nil && (*c.DutyCycle <= 0 || *c.DutyCycle > 100) {
+		// Deliberate divergence: the firmware's `set dutycycle` validates 1-100
+		// and reaches sub-1% only via the unvalidated `set af`. Some EU868
+		// sub-bands are 0.1%, so a fraction is allowed here rather than adding
+		// a second raw-factor key that could disagree with this one.
+		return fmt.Errorf("dutyCycle is a percentage: must be greater than 0 and at most 100")
+	}
+
 	if c.Mqtt != nil {
 		if c.Mqtt.Node != nil && *c.Mqtt.Node != "" && !seen[*c.Mqtt.Node] {
 			return fmt.Errorf("mqtt node %q does not match any companion", *c.Mqtt.Node)
 		}
+		// Names must be unique: the observer's health map and
+		// GET /api/mqtt/status both key on them, so duplicates make one broker
+		// report the other's connection state.
+		seenBroker := make(map[string]bool, len(c.Mqtt.Brokers))
 		for i, b := range c.Mqtt.Brokers {
 			if err := b.Validate(); err != nil {
 				return fmt.Errorf("mqtt broker[%d] %q: %w", i, b.Name, err)
 			}
+			if seenBroker[b.Name] {
+				return fmt.Errorf("mqtt broker[%d]: duplicate name %q", i, b.Name)
+			}
+			seenBroker[b.Name] = true
 		}
 	}
 
@@ -278,7 +327,20 @@ func ModemSettingsChanged(old, new_ *Config) bool {
 		derefFloat(old.Bw) != derefFloat(new_.Bw) ||
 		derefUint8(old.SF) != derefUint8(new_.SF) ||
 		derefUint8(old.CR) != derefUint8(new_.CR) ||
-		derefUint8(old.TX) != derefUint8(new_.TX)
+		derefUint8(old.TX) != derefUint8(new_.TX) ||
+		// The airtime factor is baked into the RadioMux at modem.Setup, and the
+		// mux is only rebuilt on reconnect — so without this a duty-cycle change
+		// persists and silently does nothing until the process restarts.
+		// Compare the RESOLVED factor, not the stored percentage: unset and an
+		// explicit 50 are the same budget, and a reconnect drops the serial
+		// link and every node's sessions, so a no-op must not trigger one.
+		// ponytail: exact float compare. Set-to-set is bitwise safe (same
+		// computation, same input), but unset-vs-equivalent-explicit is exact
+		// only because DefaultAirtimeFactor is 1.0 and both 50 and 1.0 are
+		// representable. If that constant moves to a value whose percent is
+		// inexact, this starts churning a reconnect on a no-op and wants an
+		// epsilon.
+		old.AirtimeFactorOr() != new_.AirtimeFactorOr()
 }
 
 func derefStr(p *string) string {

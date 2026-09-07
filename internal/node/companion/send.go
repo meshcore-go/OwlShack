@@ -1,6 +1,7 @@
 package companion
 
 import (
+	"context"
 	"crypto/rand"
 	"encoding/binary"
 	"encoding/hex"
@@ -13,12 +14,17 @@ import (
 	"github.com/meshcore-go/OwlShack/internal/store"
 )
 
+// uniqueTimestamp mirrors the firmware's getCurrentTimeUnique(): strictly
+// increasing, so a room server never sees two posts with one timestamp (it
+// treats the second as a retry and drops it).
+func (c *Companion) uniqueTimestamp() uint32 { return c.repeaters.UniqueTimestamp() }
+
 func (c *Companion) SendChannelMessage(channelName, text string) error {
 	ch := c.findChannel(channelName)
 	if ch == nil {
 		return fmt.Errorf("channel %q not found", channelName)
 	}
-	return c.sendGroupReply(ch, text, meshcore.PathHashSize, 5*time.Second, 3)
+	return c.sendGroupReply(ch, text, c.pathHashSize(), 5*time.Second, 3)
 }
 
 // sendGroupReply persists an outgoing group-text message, broadcasts it to the
@@ -29,7 +35,7 @@ func (c *Companion) SendChannelMessage(channelName, text string) error {
 // replies were never persisted or broadcast.
 func (c *Companion) sendGroupReply(ch *meshcore.ChannelEntry, text string, hashSize uint8, retryTimeout time.Duration, maxRetries int) error {
 	payload := &meshcore.GroupTextPayload{
-		Timestamp: uint32(time.Now().Unix()),
+		Timestamp: c.uniqueTimestamp(),
 		Sender:    c.cfg.Name,
 		Text:      text,
 	}
@@ -45,7 +51,7 @@ func (c *Companion) sendGroupReply(ch *meshcore.ChannelEntry, text string, hashS
 	}
 
 	c.store.WriteSync(func() {
-		if insertErr := c.store.Messages.Insert(c.runCtx, msg); insertErr != nil {
+		if insertErr := c.store.Messages.Insert(context.Background(), msg); insertErr != nil {
 			c.log.Error("failed to persist outgoing message", "error", insertErr)
 		}
 	})
@@ -121,7 +127,7 @@ func (c *Companion) SendContactMessage(pubkeyHex, text string) error {
 	}
 
 	c.store.WriteSync(func() {
-		if insertErr := c.store.Messages.Insert(c.runCtx, msg); insertErr != nil {
+		if insertErr := c.store.Messages.Insert(context.Background(), msg); insertErr != nil {
 			c.log.Error("failed to persist outgoing DM", "error", insertErr)
 		}
 	})
@@ -144,7 +150,7 @@ func (c *Companion) SendContactMessage(pubkeyHex, text string) error {
 		peerIdentity,
 		[]byte(text),
 		0,
-		time.Now(),
+		time.Unix(int64(c.uniqueTimestamp()), 0),
 		outPath,
 		hashSize,
 		5*time.Second,
@@ -159,7 +165,7 @@ func (c *Companion) SendContactMessage(pubkeyHex, text string) error {
 			}
 
 			c.store.WriteAsync(func() {
-				if err := c.store.Messages.UpdateStatus(c.runCtx, msgID, status); err != nil {
+				if err := c.store.Messages.UpdateStatus(context.Background(), msgID, status); err != nil {
 					c.log.Error("failed to update message status", "id", msgID, "error", err)
 				}
 			})

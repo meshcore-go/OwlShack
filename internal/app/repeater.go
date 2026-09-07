@@ -18,6 +18,21 @@ import (
 // identity), so its lifecycle is a simple start/stop/reconcile rather than the
 // diff-based set reconciliation companions need.
 
+// effectiveRepeaterConfig resolves the inherited settings into the repeater's
+// own block, so the node reads only its own fields and a change to a global
+// default shows up in the reload diff.
+func effectiveRepeaterConfig(cfg *config.Config) *config.RepeaterConfig {
+	if cfg.Repeater == nil {
+		return nil
+	}
+	block := *cfg.Repeater
+	if block.PathHashSize == nil {
+		v := cfg.PathHashSizeOr()
+		block.PathHashSize = &v
+	}
+	return &block
+}
+
 func startRepeater(ctx context.Context, cfg *config.Config, mux *node.RadioMux, db *store.Store, hub *api.Hub, stats modem.StatsProvider, reload func() error) (*repeater.Repeater, error) {
 	if cfg.Repeater == nil {
 		return nil, nil
@@ -26,7 +41,7 @@ func startRepeater(ctx context.Context, cfg *config.Config, mux *node.RadioMux, 
 		Reconfigure: repeaterReconfigurer(db, reload),
 		PollStats:   statsPoller(stats),
 	}
-	rep, err := repeater.NewRepeater(*cfg.Repeater, mux, db, hub, hooks)
+	rep, err := repeater.NewRepeater(*effectiveRepeaterConfig(cfg), mux, db, hub, hooks)
 	if err != nil {
 		return nil, fmt.Errorf("creating repeater %q: %w", cfg.Repeater.Name, err)
 	}
@@ -48,14 +63,14 @@ func stopRepeater(rep *repeater.Repeater) {
 // old one is stopped and the new one (if any) started.
 func reloadRepeater(ctx context.Context, oldCfg, newCfg *config.Config, running *repeater.Repeater, mux *node.RadioMux, db *store.Store, hub *api.Hub, stats modem.StatsProvider, reload func() error) (*repeater.Repeater, error) {
 	// reflect.DeepEqual handles nil/one-nil/deep on the two *RepeaterConfig.
-	if running != nil && oldCfg != nil && reflect.DeepEqual(oldCfg.Repeater, newCfg.Repeater) {
+	if running != nil && oldCfg != nil && reflect.DeepEqual(effectiveRepeaterConfig(oldCfg), effectiveRepeaterConfig(newCfg)) {
 		return running, nil
 	}
 	// Region-only change: apply it to the live node instead of restarting, so
 	// the neighbour list, learned routes and relay counters survive (region
 	// edits are frequent — every add/remove/deny-flood toggle from the UI).
-	if running != nil && oldCfg != nil && onlyRegionsDiffer(oldCfg.Repeater, newCfg.Repeater) {
-		running.ApplyRegions(newCfg.Repeater.Regions, newCfg.Repeater.DefaultRegion)
+	if running != nil && oldCfg != nil && onlyRegionsDiffer(effectiveRepeaterConfig(oldCfg), effectiveRepeaterConfig(newCfg)) {
+		running.ApplyRegions(newCfg.Repeater.Regions, newCfg.Repeater.DefaultRegion, newCfg.Repeater.HomeRegion)
 		return running, nil
 	}
 	stopRepeater(running)
@@ -63,8 +78,8 @@ func reloadRepeater(ctx context.Context, oldCfg, newCfg *config.Config, running 
 }
 
 // onlyRegionsDiffer reports whether a and b are identical apart from their
-// Regions / DefaultRegion — the changes the reload path can apply live (no
-// node restart).
+// Regions / DefaultRegion / HomeRegion — the changes the reload path can
+// apply live (no node restart).
 func onlyRegionsDiffer(a, b *config.RepeaterConfig) bool {
 	if a == nil || b == nil {
 		return false
@@ -72,19 +87,25 @@ func onlyRegionsDiffer(a, b *config.RepeaterConfig) bool {
 	x, y := *a, *b
 	x.Regions, y.Regions = nil, nil
 	x.DefaultRegion, y.DefaultRegion = "", ""
+	x.HomeRegion, y.HomeRegion = "", ""
 	return reflect.DeepEqual(x, y)
 }
 
 // statsPoller adapts the modem's device-stats provider to the plain func the
 // repeater node consumes (keeps the node package decoupled from modem). nil
 // provider → nil poller (noise floor / battery stay 0).
-func statsPoller(stats modem.StatsProvider) func(context.Context) (int16, uint16) {
+func statsPoller(stats modem.StatsProvider) func(context.Context) repeater.DeviceStats {
 	if stats == nil {
 		return nil
 	}
-	return func(ctx context.Context) (int16, uint16) {
+	return func(ctx context.Context) repeater.DeviceStats {
 		ds := stats.Stats(ctx)
-		return ds.NoiseFloor, ds.BatteryMV
+		return repeater.DeviceStats{
+			NoiseFloor:  ds.NoiseFloor,
+			BatteryMV:   ds.BatteryMV,
+			MCUTempC:    ds.MCUTempC,
+			HaveMCUTemp: ds.HaveMCUTemp,
+		}
 	}
 }
 

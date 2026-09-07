@@ -1,29 +1,55 @@
 import { useEffect } from "react";
 import L from "leaflet";
+import markerIcon from "leaflet/dist/images/marker-icon.png";
+import markerIcon2x from "leaflet/dist/images/marker-icon-2x.png";
+import markerShadow from "leaflet/dist/images/marker-shadow.png";
 
-// Shared theme-aware CARTO tile plumbing for every Leaflet usage (MapPage,
-// TrackMap, RepeaterDetailPage position picker). Tiles follow <html>'s dark
-// class, swapped live via a MutationObserver.
+// Leaflet's default marker icon URLs are broken under bundlers; rebind them to
+// the imported assets once, here, so every map that imports this module gets
+// working pins.
+type MarkerProto = L.Icon.Default & { _getIconUrl?: () => string };
+delete (L.Icon.Default.prototype as MarkerProto)._getIconUrl;
+L.Icon.Default.mergeOptions({
+  iconUrl: markerIcon,
+  iconRetinaUrl: markerIcon2x,
+  shadowUrl: markerShadow,
+});
+
+// https://carto.com/basemaps/apikey/
 
 export const TILE_ATTRIBUTION =
   '&copy; <a href="https://www.openstreetmap.org/copyright">OSM</a> &copy; <a href="https://carto.com/attributions">CARTO</a>';
 
+let tileKey = "";
+let tileKeySet = false; // a save beat the fetch below; don't let it win
+const tileKeyReady: Promise<void> = fetch("/api/config/settings")
+  .then((r) => (r.ok ? r.json() : null))
+  .then((s: { mapTileKey?: string | null } | null) => {
+    if (!tileKeySet) tileKey = s?.mapTileKey ?? "";
+  })
+  .catch(() => {});
+
+export function setTileKey(key: string | null) {
+  tileKey = key ?? "";
+  tileKeySet = true;
+}
+
 export function tileUrlForTheme(): string {
   const isDark = document.documentElement.classList.contains("dark");
-  return isDark
-    ? "https://{s}.basemaps.cartocdn.com/dark_all/{z}/{x}/{y}{r}.png"
-    : "https://{s}.basemaps.cartocdn.com/light_all/{z}/{x}/{y}{r}.png";
+  const style = isDark ? "dark_all" : "light_all";
+  const key = tileKey ? `?key=${encodeURIComponent(tileKey)}` : "";
+  return `https://basemaps.cartocdn.com/rastertiles/${style}/{z}/{x}/{y}{r}.png${key}`;
 }
 
 export function themeTileLayer(): L.TileLayer {
-  return L.tileLayer(tileUrlForTheme(), {
+  const layer = L.tileLayer(tileUrlForTheme(), {
     attribution: TILE_ATTRIBUTION,
-    subdomains: "abcd",
     maxZoom: 19,
   });
+  tileKeyReady.then(() => layer.setUrl(tileUrlForTheme()));
+  return layer;
 }
 
-// Replaces the map's tile layer whenever the theme class flips.
 export function useThemeTiles(
   mapRef: { current: L.Map | null },
   tileRef: { current: L.TileLayer | null },
@@ -40,7 +66,6 @@ export function useThemeTiles(
       attributeFilter: ["class"],
     });
     return () => obs.disconnect();
-    // Refs are stable containers; observing them in deps is unnecessary.
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 }

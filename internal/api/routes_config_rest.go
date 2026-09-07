@@ -26,7 +26,12 @@ type settingsDTO struct {
 	CR             *int     `json:"cr"`
 	TX             *int     `json:"tx"`
 	ListenAddr     *string  `json:"listenAddr"`
-	SetupComplete  bool     `json:"setupComplete"`
+	MapTileKey     *string  `json:"mapTileKey"` // sent to the browser by design: it rides on tile URLs
+	PathHashSize   *int     `json:"pathHashSize"`
+	// DutyCycle is the TX airtime cap as a percentage — the unit the firmware
+	// uses, bare like its `set dutycycle`. null = the default (50%).
+	DutyCycle     *float64 `json:"dutyCycle"`
+	SetupComplete bool     `json:"setupComplete"`
 }
 
 type mqttDTO struct {
@@ -67,6 +72,7 @@ type companionDTO struct {
 	Latitude       *float64 `json:"latitude"`
 	Longitude      *float64 `json:"longitude"`
 	AdvertInterval *int     `json:"advertInterval"`
+	PathHashSize   *int     `json:"pathHashSize"`
 }
 
 type channelDTO struct {
@@ -105,6 +111,7 @@ func companionToDTO(c store.Companion) companionDTO {
 	return companionDTO{
 		ID: c.ID, Name: c.Name, PubKey: c.PubKey, PrivateKeySet: c.PrivateKey != "",
 		Latitude: c.Latitude, Longitude: c.Longitude, AdvertInterval: c.AdvertInterval,
+		PathHashSize: c.PathHashSize,
 	}
 }
 
@@ -132,7 +139,8 @@ func (s *Server) handleGetSettings(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, settingsDTO{
 		LogLevel: st.LogLevel, ConnectionType: st.ConnectionType, Connection: st.Connection,
 		BaudRate: st.BaudRate, Freq: st.Freq, BW: st.BW, SF: st.SF, CR: st.CR, TX: st.TX,
-		ListenAddr: st.ListenAddr, SetupComplete: st.SetupComplete,
+		ListenAddr: st.ListenAddr, MapTileKey: st.MapTileKey, PathHashSize: st.PathHashSize,
+		DutyCycle: st.DutyCyclePct, SetupComplete: st.SetupComplete,
 	})
 }
 
@@ -452,4 +460,25 @@ func (s *Server) handleGetTriggers(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	writeJSON(w, http.StatusOK, mapSlice(trigs, triggerToDTO))
+}
+
+// handleMqttStatus reports live broker connection state. Runtime state, so it
+// comes from the backend rather than the config tables — and it lists every
+// CONFIGURED broker, including one whose connect failed, since a broker that
+// silently vanished is exactly what an operator needs to see.
+func (s *Server) handleMqttStatus(w http.ResponseWriter, r *http.Request) {
+	b := s.backendRef()
+	if b == nil {
+		writeJSON(w, http.StatusOK, map[string]any{"running": false, "brokers": []MqttBrokerStatus{}})
+		return
+	}
+	brokers, ok := b.MqttStatus()
+	if !ok {
+		writeJSON(w, http.StatusOK, map[string]any{"running": false, "brokers": []MqttBrokerStatus{}})
+		return
+	}
+	if brokers == nil {
+		brokers = []MqttBrokerStatus{}
+	}
+	writeJSON(w, http.StatusOK, map[string]any{"running": true, "brokers": brokers})
 }

@@ -230,6 +230,18 @@
   body {
     font-family: var(--font-sans);
     letter-spacing: -0.01em;
+    /* A live console: a pull-to-refresh reload drops the socket and the draft. */
+    overscroll-behavior-y: contain;
+  }
+
+  :root {
+    /* Height reserved for the mobile bottom nav (0 once the sidebar is visible). */
+    --bottom-nav: calc(3.5rem + env(safe-area-inset-bottom, 0px));
+  }
+  @media (min-width: 768px) {
+    :root {
+      --bottom-nav: 0px;
+    }
   }
 
   /* Background grid texture — subtle technical atmosphere */
@@ -264,13 +276,19 @@
 
 @layer utilities {
   .text-mono-xs {
-    @apply font-mono text-[10px] leading-none uppercase tracking-[0.08em];
+    @apply font-mono text-[11px] sm:text-[10px] leading-none uppercase tracking-[0.08em];
   }
   .text-mono-sm {
     @apply font-mono text-[11px] leading-tight tracking-tight;
   }
   .label-overline {
-    @apply font-mono text-[10px] uppercase tracking-[0.12em] text-muted-foreground;
+    @apply font-mono text-[11px] sm:text-[10px] uppercase tracking-[0.12em] text-muted-foreground;
+  }
+  .pt-safe {
+    padding-top: env(safe-area-inset-top, 0px);
+  }
+  .pb-safe {
+    padding-bottom: env(safe-area-inset-bottom, 0px);
   }
   .panel {
     @apply bg-card border border-border;
@@ -367,6 +385,13 @@
   background: var(--card) !important;
   color: var(--foreground) !important;
   border-color: var(--border) !important;
+}
+@media (max-width: 767px) {
+  .leaflet-touch .leaflet-control-zoom a {
+    width: 40px;
+    height: 40px;
+    line-height: 40px;
+  }
 }
 .leaflet-control-attribution {
   background: color-mix(in oklch, var(--card) 80%, transparent) !important;

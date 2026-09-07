@@ -1,9 +1,7 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 import { Contact, MapPin, Plus, Send, UserRound } from "lucide-react";
 import L from "leaflet";
-import markerIcon from "leaflet/dist/images/marker-icon.png";
-import markerIcon2x from "leaflet/dist/images/marker-icon-2x.png";
-import markerShadow from "leaflet/dist/images/marker-shadow.png";
+import { themeTileLayer } from "@/lib/leaflet";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import {
@@ -21,15 +19,6 @@ import {
 } from "@/components/ui/dialog";
 import { PeerAvatar } from "@/components/PeerAvatar";
 import { PeerTypePill } from "@/components/StatusIndicator";
-
-// Rebind Leaflet's bundler-broken default marker icon (idempotent at load).
-type MarkerProto = L.Icon.Default & { _getIconUrl?: () => string };
-delete (L.Icon.Default.prototype as MarkerProto)._getIconUrl;
-L.Icon.Default.mergeOptions({
-  iconUrl: markerIcon,
-  iconRetinaUrl: markerIcon2x,
-  shadowUrl: markerShadow,
-});
 
 const TYPE_INT: Record<string, number> = {
   CHAT: 1,
@@ -75,7 +64,7 @@ export function ComposerAttachMenu({
           <button
             type="button"
             aria-label="Attach"
-            className="size-9 shrink-0 grid place-items-center text-muted-foreground hover:text-foreground border border-border bg-background hover:bg-muted/60"
+            className="relative size-9 shrink-0 grid place-items-center text-muted-foreground hover:text-foreground border border-border bg-background hover:bg-muted/60 before:absolute before:-inset-0.5 before:content-[''] sm:before:hidden"
           >
             <Plus className="size-4" strokeWidth={1.8} />
           </button>
@@ -245,7 +234,6 @@ function ShareLocationDialog({
 
   useEffect(() => {
     if (!open || !containerRef.current) return;
-    const isDark = document.documentElement.classList.contains("dark");
     const center: [number, number] =
       initialLat != null && initialLon != null
         ? [initialLat, initialLon]
@@ -253,12 +241,7 @@ function ShareLocationDialog({
     const map = L.map(containerRef.current, {
       attributionControl: false,
     }).setView(center, initialLat != null ? 12 : 2);
-    L.tileLayer(
-      isDark
-        ? "https://{s}.basemaps.cartocdn.com/dark_all/{z}/{x}/{y}{r}.png"
-        : "https://{s}.basemaps.cartocdn.com/light_all/{z}/{x}/{y}{r}.png",
-      { maxZoom: 19 },
-    ).addTo(map);
+    themeTileLayer().addTo(map);
     if (initialLat != null && initialLon != null) {
       markerRef.current = L.marker([initialLat, initialLon]).addTo(map);
     }

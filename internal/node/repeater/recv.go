@@ -1,8 +1,8 @@
 package repeater
 
 import (
+	"context"
 	"encoding/hex"
-	"math"
 	"time"
 
 	meshcore "github.com/meshcore-go/meshcore-go"
@@ -21,7 +21,7 @@ func (r *Repeater) registerHandlers() {
 		r.recvCount.Add(1)
 		if hasSignal {
 			r.lastRSSI.Store(int32(rssi))
-			r.lastSNRx4.Store(int32(math.Round(float64(snr) * 4))) // firmware quarter-dB
+			r.lastSNRx4.Store(int32(snr * 4)) // firmware (int16_t)(getLastSNR()*4): truncated quarter-dB
 			r.haveSignal.Store(true)
 		}
 		if r.airtime != nil {
@@ -52,8 +52,9 @@ func (r *Repeater) handleAdvert(pkt *meshcore.Packet) {
 	appData := adv.AppData()
 
 	// Neighbour tracking (firmware onAdvertRecv): a zero-hop REPEATER advert is
-	// a direct RF neighbour. Kept in memory, matching the firmware.
-	if pkt.PathHashCount() == 0 && appData.Type == "REPEATER" {
+	// a direct RF neighbour — unless it was a "Share" (transport codes {0,0}).
+	isShare := pkt.IsTransport() && pkt.TransportCode1 == 0 && pkt.TransportCode2 == 0
+	if pkt.PathHashCount() == 0 && !isShare && appData.Type == "REPEATER" {
 		pub := adv.PublicKey.PublicKey()                   // [32]byte
 		if pub != r.node.Identity().Identity.PublicKey() { // don't record ourselves
 			snr := 0.0
@@ -63,6 +64,13 @@ func (r *Repeater) handleAdvert(pkt *meshcore.Packet) {
 			r.neighbors.Lock()
 			r.neighbors.m[pub] = &neighbor{pubkey: pub, name: appData.Name, snr: snr, heard: time.Now()}
 			r.neighbors.Unlock()
+			if r.hub != nil {
+				r.hub.Broadcast("repeaterNeighbors", NeighborInfo{
+					PubKey: hex.EncodeToString(pub[:]),
+					Name:   appData.Name,
+					SNR:    snr,
+				})
+			}
 		}
 	}
 
@@ -86,7 +94,7 @@ func (r *Repeater) handleAdvert(pkt *meshcore.Packet) {
 	}
 
 	r.store.WriteAsync(func() {
-		if err := r.store.Peers.Upsert(r.runCtx, p); err != nil {
+		if err := r.store.Peers.Upsert(context.Background(), p); err != nil {
 			r.log.Error("failed to persist peer", "error", err)
 			return
 		}

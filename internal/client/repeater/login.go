@@ -10,9 +10,10 @@ import (
 )
 
 type LoginResult struct {
-	Success bool   `json:"success"`
-	IsAdmin bool   `json:"isAdmin"`
-	Role    string `json:"role,omitempty"`
+	Success     bool   `json:"success"`
+	IsAdmin     bool   `json:"isAdmin"`
+	Permissions int    `json:"permissions"`
+	Role        string `json:"role,omitempty"`
 }
 
 func (rm *Client) SendLogin(pubkeyHex, password string, timeout time.Duration) (*LoginResult, error) {
@@ -58,13 +59,13 @@ func (rm *Client) sendLogin(pubkeyHex, password string, roomSyncSince *uint32, t
 	if roomSyncSince != nil {
 		// Room login: [timestamp:4][sync_since:4][password:N]
 		plaintext = make([]byte, 8+len(password))
-		binary.LittleEndian.PutUint32(plaintext[:4], uint32(time.Now().Unix()))
+		binary.LittleEndian.PutUint32(plaintext[:4], rm.UniqueTimestamp())
 		binary.LittleEndian.PutUint32(plaintext[4:8], *roomSyncSince)
 		copy(plaintext[8:], password)
 	} else {
 		// Repeater login: [timestamp:4][password:N]
 		plaintext = make([]byte, 4+len(password))
-		binary.LittleEndian.PutUint32(plaintext[:4], uint32(time.Now().Unix()))
+		binary.LittleEndian.PutUint32(plaintext[:4], rm.UniqueTimestamp())
 		copy(plaintext[4:], password)
 	}
 
@@ -129,6 +130,10 @@ func (rm *Client) sendLogin(pubkeyHex, password string, roomSyncSince *uint32, t
 	select {
 	case data := <-resultCh:
 		isAdmin := len(data) > 6 && data[6] == 1
+		perms := 0
+		if len(data) > 7 {
+			perms = int(data[7])
+		}
 		role := ""
 		if roomSyncSince != nil {
 			// Room login response byte 6: 1=admin, 2=read-only (guest), 0=read-write
@@ -146,6 +151,7 @@ func (rm *Client) sendLogin(pubkeyHex, password string, roomSyncSince *uint32, t
 		rm.sessions[pubkeyHex] = &Session{
 			PubKeyHex:    pubkeyHex,
 			IsAdmin:      isAdmin,
+			Permissions:  perms,
 			Role:         role,
 			IsRoom:       roomSyncSince != nil,
 			LoggedInAt:   time.Now(),
@@ -153,7 +159,7 @@ func (rm *Client) sendLogin(pubkeyHex, password string, roomSyncSince *uint32, t
 			localPubKey:  selfIdentity.PublicKey(),
 		}
 		rm.mu.Unlock()
-		return &LoginResult{Success: true, IsAdmin: isAdmin, Role: role}, nil
+		return &LoginResult{Success: true, IsAdmin: isAdmin, Permissions: perms, Role: role}, nil
 	case <-time.After(timeout):
 		return nil, fmt.Errorf("login timed out")
 	}

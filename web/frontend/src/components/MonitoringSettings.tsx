@@ -14,6 +14,7 @@ import {
 } from "@/components/ui/select";
 import { cn } from "@/lib/utils";
 import { RETRY_OPTS, MAX_RETRIES_OPTS } from "@/lib/monitorOptions";
+import { apiErrorMessage } from "@/lib/apiError";
 
 export interface MonitorMetadata {
   isRepeater?: boolean;
@@ -163,12 +164,12 @@ export function MonitoringSettings({
           body: JSON.stringify(meta),
         },
       );
-      if (!r.ok) throw new Error(await r.text());
+      if (!r.ok) throw new Error(await apiErrorMessage(r));
       setBase(meta);
       toast.success("Monitoring settings saved");
       onSaved?.(meta);
-    } catch {
-      toast.error("Failed to save monitoring settings");
+    } catch (e) {
+      toast.error(e instanceof Error ? e.message : "Failed to save monitoring settings");
     } finally {
       setSaving(false);
     }
@@ -238,7 +239,7 @@ export function MonitoringSettings({
                   value={password}
                   onChange={(e) => setPassword(e.target.value)}
                   placeholder="(blank = guest / anonymous)"
-                  className="rounded-none font-mono text-xs border-border bg-background pr-9"
+                  className="rounded-none font-mono text-base md:text-xs border-border bg-background pr-9"
                 />
                 <button
                   type="button"

@@ -4,11 +4,13 @@ import { toast } from "sonner";
 import { PageHeader } from "@/components/PageHeader";
 import { LoadErrorAlert } from "@/components/LoadErrorAlert";
 import { SectionTitle } from "@/components/SectionTitle";
-import { SelectField, TextField } from "@/components/ConfigFields";
+import { PATH_HASH_SIZE_OPTIONS, SelectField, TextField } from "@/components/ConfigFields";
 import { RadioPresetSelect } from "@/components/RadioPresetSelect";
+import { BackupPanel } from "@/components/BackupPanel";
 import { Button } from "@/components/ui/button";
 import { Skeleton } from "@/components/ui/skeleton";
 import { useApiObject } from "@/hooks/useApiObject";
+import { setTileKey } from "@/lib/leaflet";
 import { configApi, type Settings } from "@/lib/configApi";
 
 const BANDWIDTHS = [7.8, 10.4, 15.6, 20.8, 31.25, 41.7, 62.5, 125, 250, 500];
@@ -29,6 +31,10 @@ export function RadioPage() {
   const [cr, setCr] = useState("");
   const [tx, setTx] = useState("");
   const [listenAddr, setListenAddr] = useState("");
+  const [mapTileKey, setMapTileKey] = useState("");
+  const [pathHashSize, setPathHashSize] = useState("1");
+  // Percentage, like the firmware's `set dutycycle`. Blank = the 50% default.
+  const [dutyCycle, setDutyCycle] = useState("");
   const [logLevel, setLogLevel] = useState("info");
 
   useEffect(() => {
@@ -41,6 +47,9 @@ export function RadioPage() {
     setCr(settings.cr != null ? String(settings.cr) : "");
     setTx(settings.tx != null ? String(settings.tx) : "");
     setListenAddr(settings.listenAddr ?? "");
+    setMapTileKey(settings.mapTileKey ?? "");
+    setPathHashSize(String(settings.pathHashSize ?? 1));
+    setDutyCycle(settings.dutyCycle != null ? String(settings.dutyCycle) : "");
     setLogLevel(settings.logLevel ?? "info");
   }, [settings]);
 
@@ -60,10 +69,14 @@ export function RadioPage() {
         cr: parseInt(cr, 10) || null,
         tx: tx === "" ? null : parseInt(tx, 10),
         listenAddr: listenAddr || null,
+        mapTileKey: mapTileKey.trim(), // "" clears
+        pathHashSize: parseInt(pathHashSize, 10) || 1,
+        dutyCycle: dutyCycle.trim() === "" ? null : Number(dutyCycle),
         logLevel: logLevel || null,
         // setupComplete omitted on purpose: the server keeps the stored value.
       });
       toast.success("Radio settings saved");
+      setTileKey(mapTileKey.trim());
       reload();
     } catch (e) {
       toast.error(e instanceof Error ? e.message : "Failed to save settings");
@@ -76,7 +89,7 @@ export function RadioPage() {
     <div className="space-y-8">
       <PageHeader
         eyebrow="system"
-        title="Radio"
+        title="Settings"
         actions={
           <Button
             size="sm"
@@ -182,6 +195,20 @@ export function RadioPage() {
                 onChange={setTx}
                 placeholder="0-22"
               />
+              <SelectField
+                label="Path hash size"
+                value={pathHashSize}
+                options={PATH_HASH_SIZE_OPTIONS}
+                onChange={setPathHashSize}
+                hint="default for every node here · some regions run 2 bytes"
+              />
+              <TextField
+                label="TX duty cycle %"
+                value={dutyCycle}
+                onChange={setDutyCycle}
+                placeholder="50"
+                hint="share of each hour this radio may transmit · blank = 50% (the firmware default) · set 1 where a 1% limit applies, e.g. EU868 (0.1 for its stricter sub-bands)"
+              />
               </div>
             </div>
           </section>
@@ -203,8 +230,33 @@ export function RadioPage() {
                 onChange={setLogLevel}
                 hint="-v / -vv flags override this"
               />
+              <div className="sm:col-span-2">
+                <TextField
+                  label="CARTO basemap API key"
+                  type="password"
+                  value={mapTileKey}
+                  onChange={setMapTileKey}
+                  placeholder="blank = keyless tiles"
+                  hint={
+                    <>
+                      map tiles now need a key from{" "}
+                      <a
+                        href="https://carto.com/basemaps/apikey/"
+                        target="_blank"
+                        rel="noreferrer"
+                        className="text-primary underline underline-offset-2 hover:text-primary/80"
+                      >
+                        carto.com/basemaps/apikey
+                      </a>{" "}
+                      (free tier: 5M tiles/month) · the key is visible to anyone using this UI
+                    </>
+                  }
+                />
+              </div>
             </div>
           </section>
+
+          <BackupPanel />
         </>
       ) : null}
     </div>

@@ -75,9 +75,9 @@ func (s *Server) handleGetMessagePath(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	msgs, err := s.store.Messages.List(r.Context(), cid, channel, 1000, 0)
-	if err != nil {
-		writeError(w, http.StatusInternalServerError, "failed to fetch messages")
+	m, err := s.store.Messages.GetByID(r.Context(), msgID)
+	if err != nil || m.CompanionID != cid || m.Channel != channel {
+		writeError(w, http.StatusNotFound, "message not found")
 		return
 	}
 
@@ -88,28 +88,15 @@ func (s *Server) handleGetMessagePath(w http.ResponseWriter, r *http.Request) {
 		Path         []pathHopJSON `json:"path"`
 	}
 
-	for _, m := range msgs {
-		if m.ID != msgID {
-			continue
-		}
-
-		result := pathJSON{
-			Sender: m.Sender,
-		}
-
-		if m.Hops != nil {
-			result.Hops = *m.Hops
-		}
-		if m.PathHashSize != nil {
-			result.PathHashSize = *m.PathHashSize
-		}
-
-		result.Path = s.resolvePathHashes(r.Context(), m.PathHashes, result.PathHashSize)
-		writeJSON(w, http.StatusOK, result)
-		return
+	result := pathJSON{Sender: m.Sender}
+	if m.Hops != nil {
+		result.Hops = *m.Hops
 	}
-
-	writeError(w, http.StatusNotFound, "message not found")
+	if m.PathHashSize != nil {
+		result.PathHashSize = *m.PathHashSize
+	}
+	result.Path = s.resolvePathHashes(r.Context(), m.PathHashes, result.PathHashSize)
+	writeJSON(w, http.StatusOK, result)
 }
 
 func (s *Server) resolvePathHashes(ctx context.Context, pathBytes []byte, hashSize int) []pathHopJSON {

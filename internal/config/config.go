@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"strings"
 
+	"github.com/meshcore-go/meshcore-go/node"
 	"github.com/pelletier/go-toml/v2"
 	"gopkg.in/yaml.v3"
 )
@@ -93,8 +94,27 @@ type Config struct {
 	CR   *uint8   `json:"cr" yaml:"cr" toml:"cr"`       // e.g. 8
 	TX   *uint8   `json:"tx" yaml:"tx" toml:"tx"`       // TX Power e.g. 22
 
+	// PathHashSize is the default per-hop path hash width in BYTES for the flood
+	// packets our nodes originate — a regional convention (the official radio
+	// presets carry it, e.g. NZ Narrow and Hungary run 2 bytes). Companions and
+	// the repeater inherit it unless they set their own. nil == 1 byte.
+	// The firmware's `path.hash.mode` is this minus one; convert at that
+	// boundary, never store the mode.
+	PathHashSize *int `json:"pathHashSize,omitempty" yaml:"pathHashSize,omitempty" toml:"pathHashSize,omitempty"`
+
 	// Web UI
 	ListenAddr *string `json:"listenAddr" yaml:"listenAddr" toml:"listenAddr"`
+	// https://carto.com/basemaps/apikey/
+	MapTileKey *string `json:"mapTileKey" yaml:"mapTileKey" toml:"mapTileKey"`
+
+	// DutyCycle caps how much of each hour we may spend transmitting,
+	// as a PERCENTAGE — the same unit the firmware's `set dutycycle` takes,
+	// and the same unit it reports back. The library wants an inverted
+	// "airtime factor" instead (factor = 100/pct - 1, so a SMALLER factor is a
+	// HIGHER duty cycle); that inversion is confusing enough that it is
+	// converted only at the edge, in AirtimeFactorOr. nil = the library
+	// default, which is factor 1.0 = 50%, matching every firmware role.
+	DutyCycle *float64 `json:"dutyCycle,omitempty" yaml:"dutyCycle,omitempty" toml:"dutyCycle,omitempty"`
 
 	// SetupComplete is nil/false until the first-run web wizard finishes. A
 	// fresh bootstrap leaves it false (so the UI shows the setup wizard);
@@ -278,3 +298,26 @@ func unmarshalConfig(data []byte, fn func([]byte, any) error) (*Config, error) {
 func UnmarshalConfigJson(data []byte) (*Config, error) { return unmarshalConfig(data, json.Unmarshal) }
 func UnmarshalConfigYaml(data []byte) (*Config, error) { return unmarshalConfig(data, yaml.Unmarshal) }
 func UnmarshalConfigToml(data []byte) (*Config, error) { return unmarshalConfig(data, toml.Unmarshal) }
+
+// AirtimeFactorOr converts the configured duty-cycle percentage into the
+// library's airtime factor. Mirrors the firmware's
+// `airtime_factor = (100/dc) - 1` (CommonCLI.cpp handleSetCmd "dutycycle").
+func (c *Config) AirtimeFactorOr() float64 {
+	if c.DutyCycle == nil || *c.DutyCycle <= 0 {
+		return node.DefaultAirtimeFactor
+	}
+	return (100.0 / *c.DutyCycle) - 1.0
+}
+
+// DutyCyclePercentOr is the effective percentage, for display and logging.
+func (c *Config) DutyCyclePercentOr() float64 {
+	return 100.0 / (c.AirtimeFactorOr() + 1.0)
+}
+
+// PathHashSizeOr resolves the global default flood path hash width in bytes.
+func (c *Config) PathHashSizeOr() int {
+	if c.PathHashSize == nil {
+		return DefaultPathHashSize
+	}
+	return *c.PathHashSize
+}

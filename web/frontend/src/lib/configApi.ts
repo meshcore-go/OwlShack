@@ -23,6 +23,10 @@ export interface Settings {
   cr: number | null;
   tx: number | null;
   listenAddr: string | null;
+  mapTileKey: string | null;
+  pathHashSize: number | null;
+  // TX airtime cap as a percentage, the unit the firmware uses. null = 50%.
+  dutyCycle: number | null;
   setupComplete: boolean;
 }
 
@@ -64,6 +68,7 @@ export interface ConfigCompanion {
   latitude: number | null;
   longitude: number | null;
   advertInterval: number | null;
+  pathHashSize: number | null; // null = inherit the global default
 }
 
 export interface ConfigChannel {
@@ -106,7 +111,11 @@ export interface ConfigRepeater {
   floodMaxUnscoped: number | null;
   floodMaxAdvert: number | null;
   loopDetect: string | null;
-  pathHashMode: number | null;
+  pathHashSize: number | null;
+  txDelayFactor: number | null;
+  directTxDelayFactor: number | null;
+  rxDelayBase: number | null;
+  multiAcks: number | null;
   defaultRegion: string;
   adminPasswordSet: boolean;
   guestPasswordSet: boolean;
@@ -132,6 +141,18 @@ export interface RepeaterNodeStats {
   neighbors: number;
   latitude: number;
   longitude: number;
+  lastSnr: number | null;
+  lastRssi: number | null;
+  noiseFloor: number | null;
+  batteryMv: number | null;
+  rxAirSecs: number;
+  txAirSecs: number;
+  floodTx: number;
+  directTx: number;
+  floodRx: number;
+  directRx: number;
+  floodDups: number;
+  directDups: number;
 }
 
 export interface RepeaterNodeNeighbor {
@@ -162,6 +183,9 @@ export interface SettingsInput {
   cr?: number | null;
   tx?: number | null;
   listenAddr?: string | null;
+  mapTileKey?: string | null; // omit = keep, "" = clear
+  pathHashSize?: number | null;
+  dutyCycle?: number | null;
   // Only set by the first-run wizard; omit elsewhere so a radio edit never
   // re-opens setup.
   setupComplete?: boolean;
@@ -202,6 +226,7 @@ export interface CompanionInput {
   latitude?: number | null;
   longitude?: number | null;
   advertInterval?: number | null;
+  pathHashSize?: number | null; // null = inherit the global default
 }
 
 export interface ChannelInput {
@@ -228,7 +253,11 @@ export interface RepeaterRelayInput {
   floodMaxUnscoped?: number | null;
   floodMaxAdvert?: number | null;
   loopDetect?: string | null;
-  pathHashMode?: number | null;
+  pathHashSize?: number | null;
+  txDelayFactor?: number | null;
+  directTxDelayFactor?: number | null;
+  rxDelayBase?: number | null;
+  multiAcks?: number | null;
   defaultRegion?: string; // "" = unscoped flood adverts
   advertInterval?: number | null;
   floodAdvertInterval?: number | null;
@@ -328,6 +357,10 @@ export const configApi = {
     request(`/api/config/repeater/regions/${encodeURIComponent(name)}`, "DELETE"),
   deleteRepeater: () => request("/api/config/repeater", "DELETE"),
   repeaterAdvert: (flood: boolean) => request("/api/repeater/advert", "POST", { flood }),
+  repeaterDiscover: () => request("/api/repeater/discover", "POST"),
+  clearRepeaterStats: () => request("/api/repeater/stats", "DELETE"),
+  setRepeaterAcl: (pubkey: string, permission: number) =>
+    request(`/api/repeater/acl/${encodeURIComponent(pubkey)}`, "PUT", { permission }),
   revokeRepeaterAcl: (pubkey: string) =>
     request(`/api/repeater/acl/${encodeURIComponent(pubkey)}`, "DELETE"),
 };

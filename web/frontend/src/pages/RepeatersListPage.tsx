@@ -27,6 +27,7 @@ import { PageHeader } from "@/components/PageHeader";
 import { PeerAvatar } from "@/components/PeerAvatar";
 import { PeerTypePill } from "@/components/StatusIndicator";
 import { useWebSocket } from "@/hooks/useWebSocket";
+import { isPeerDelete } from "@/lib/peerWs";
 import { timeAgo, truncateMid } from "@/lib/format";
 import { cn } from "@/lib/utils";
 
@@ -63,6 +64,11 @@ export function RepeatersListPage() {
 
   const onWsPeer = useCallback((topic: string, data: unknown) => {
     if (topic !== "peers" || !data) return;
+    if (isPeerDelete(data)) {
+      const gone = new Set(data.pubkeys.map((k) => k.toLowerCase()));
+      setPeers((prev) => prev.filter((p) => !gone.has(p.pubkey.toLowerCase())));
+      return;
+    }
     const p = data as Peer;
     setPeers((prev) => {
       const idx = prev.findIndex((x) => x.pubkey === p.pubkey);
@@ -435,7 +441,7 @@ function AddRepeaterDialog({
                 value={search}
                 onChange={(e) => setSearch(e.target.value)}
                 placeholder="search name or pubkey…"
-                className="pl-8 rounded-none font-mono text-xs h-8"
+                className="pl-8 rounded-none font-mono text-base md:text-xs h-8"
               />
             </div>
 
@@ -544,7 +550,7 @@ function AddRepeaterDialog({
                 aria-invalid={
                   manualKey.length > 0 && (!manualValid || manualAlreadyAdded)
                 }
-                className="rounded-none font-mono text-xs h-8 flex-1"
+                className="rounded-none font-mono text-base md:text-xs h-8 flex-1"
               />
               <Button
                 variant="default"

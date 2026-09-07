@@ -4,6 +4,7 @@ import (
 	"context"
 	"time"
 
+	"github.com/meshcore-go/OwlShack/internal/config"
 	"github.com/meshcore-go/OwlShack/internal/node/advert"
 )
 
@@ -55,8 +56,17 @@ func (c *Companion) SendAdvert(flood bool) error {
 }
 
 func (c *Companion) sendAdvert(flood bool) error {
-	// Companions always use 1-byte path hashes (mode 0); everything else is the
-	// shared self-advert build.
 	return advert.SendSelf(c.node, c.log, "CHAT", c.cfg.Name,
-		c.cfg.Latitude, c.cfg.Longitude, flood, 0, nil) // companions don't scope their floods
+		c.cfg.Latitude, c.cfg.Longitude, flood, int(c.pathHashSize()), nil) // companions don't scope their floods
+}
+
+// pathHashSize is the per-hop path hash width, in bytes, for the flood packets
+// this companion originates. The global settings default is resolved into the
+// block at startup (effectiveCompanionConfigs), so nil here only happens in
+// tests.
+func (c *Companion) pathHashSize() uint8 {
+	if c.cfg.PathHashSize == nil {
+		return config.DefaultPathHashSize
+	}
+	return uint8(*c.cfg.PathHashSize)
 }

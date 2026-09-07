@@ -6,7 +6,6 @@ package modem
 
 import (
 	"context"
-	"errors"
 	"fmt"
 	"io"
 	"log/slog"
@@ -19,6 +18,11 @@ import (
 	"github.com/meshcore-go/meshcore-go/node"
 )
 
+// handlerWatchdog is the per-dispatch latency alarm. Not configurable: DATA
+// dispatch is sub-millisecond by design, so any value an operator might pick
+// would only mask a stall.
+const handlerWatchdog = 500 * time.Millisecond
+
 // State holds a live modem connection together with the resources that must be
 // torn down when it is replaced (on reconnect) or shut down.
 type State struct {
@@ -26,9 +30,10 @@ type State struct {
 	Stats      StatsProvider
 	RecvErrors *atomic.Uint64
 
-	radioConfig *hardware.RadioConfig
-	closers     []io.Closer
-	watcherDone chan struct{}
+	radioConfig   *hardware.RadioConfig
+	airtimeFactor float64
+	closers       []io.Closer
+	watcherDone   chan struct{}
 }
 
 // Close stops the dead-watcher goroutine and closes the modem's resources in
@@ -80,13 +85,9 @@ func MuxOptions(ms *State) []node.MuxOption {
 		}),
 	}
 	if ms.radioConfig != nil {
-		opts = append(opts,
-			node.WithMuxAirtimeEstimator(hardware.LoRaAirtimeEstimator(ms.radioConfig)),
-			node.WithMuxRetryable(func(err error) bool {
-				return errors.Is(err, hardware.ErrTxBusy)
-			}),
-		)
+		opts = append(opts, node.WithMuxAirtimeEstimator(hardware.LoRaAirtimeEstimator(ms.radioConfig)))
 	}
+	opts = append(opts, node.WithMuxAirtimeFactor(ms.airtimeFactor))
 	return opts
 }
 
@@ -122,11 +123,27 @@ func Setup(ctx context.Context, cfg *config.Config) (*State, error) {
 		CR:     *cfg.CR,
 	}
 
+	// TX flow control paces sends to the radio: the firmware holds ONE pending
+	// TX slot and drops any data frame that arrives while it's busy
+	// (HW_ERR_TX_BUSY), so without waiting for TX_DONE a burst is silently lost
+	// — the airtime budget alone permits back-to-back writes. The estimator
+	// sizes that wait from the radio's own time-on-air, since the fixed default
+	// is too short for a max-length frame at a high spreading factor.
 	kissModem := hardware.NewKissModem(
 		t,
 		hardware.WithSignalReport(true),
 		hardware.WithLogger(slog.Default()),
+		hardware.WithTxFlowControl(hardware.DefaultTxTimeout),
+		hardware.WithTxAirtimeEstimator(hardware.LoRaAirtimeEstimator(radioConfig)),
+		// DATA frames dispatch serially on one goroutine, and our single mux
+		// fans out to the companion, the repeater and the observer inside that
+		// one call — so a slow handler stalls RX for all of them. Dispatch
+		// should be sub-millisecond; 500ms only fires on a real stall.
+		hardware.WithHandlerWatchdog(handlerWatchdog),
 	)
+	kissModem.SetErrorHandler(func(err error) {
+		slog.Warn("modem error", "component", "modem", "error", err)
+	})
 
 	connectCtx, connectCancel := context.WithTimeout(ctx, 10*time.Second)
 	defer connectCancel()
@@ -137,6 +154,12 @@ func Setup(ctx context.Context, cfg *config.Config) (*State, error) {
 	ms.closers = append(ms.closers, kissModem)
 
 	ms.radioConfig = radioConfig
+	ms.airtimeFactor = cfg.AirtimeFactorOr()
+	// The library takes an inverted factor, so log the percentage an operator
+	// actually cares about — deriving it from the factor is the exact mistake
+	// this line exists to prevent.
+	slog.Info("airtime budget",
+		"duty_cycle_pct", cfg.DutyCyclePercentOr(), "airtime_factor", ms.airtimeFactor)
 
 	if err := kissModem.SetRadio(radioConfig); err != nil {
 		ms.Close()

@@ -5,6 +5,7 @@
 #   ./build.sh                       # -> ./OwlShack, version from git
 #   OUTPUT=dist/owlshack ./build.sh  # custom output path
 #   VERSION=v1.2.3 ./build.sh        # pin the stamped version
+#   FORCE_INSTALL=1 ./build.sh       # reinstall node_modules even if in sync
 set -euo pipefail
 
 # Always run from the repo root, regardless of the caller's cwd.
@@ -17,7 +18,14 @@ VERSION="${VERSION:-$(git describe --tags --always --dirty 2>/dev/null || echo d
 
 echo ">> Building frontend"
 pushd web/frontend >/dev/null
-npm ci                  # lockfile-exact + reproducible (matches CI); use `npm install` for fast local iteration
+# npm ci is lockfile-exact + reproducible (matches CI) but wipes and reinstalls
+# node_modules every time, which dominates a local rebuild. Skip it when the
+# tree is already in sync with the lockfile; FORCE_INSTALL=1 reinstalls anyway.
+if [ -n "${FORCE_INSTALL:-}" ] || [ ! -d node_modules ] || [ package-lock.json -nt node_modules ]; then
+  npm ci
+else
+  echo ">> node_modules up to date with package-lock.json, skipping npm ci"
+fi
 npm run build
 popd >/dev/null
 
@@ -26,11 +34,13 @@ popd >/dev/null
 # the cache name. App freshness is already handled by hashed /assets/ URLs.
 sed -i "s/__BUILD_VERSION__/${VERSION}/" web/frontend/dist/sw.js
 
-echo ">> Building backend -> ${OUTPUT} (version ${VERSION})"
+# No spaces: the linker splits -ldflags on whitespace.
+BUILD_DATE="$(date -u +%Y-%m-%d)"
+echo ">> Building backend -> ${OUTPUT} (version ${VERSION}, built ${BUILD_DATE})"
 go mod download
 CGO_ENABLED=0 go build \
   -trimpath \
-  -ldflags "-s -w -X github.com/meshcore-go/OwlShack/internal/buildinfo.Version=${VERSION}" \
+  -ldflags "-s -w -X github.com/meshcore-go/OwlShack/internal/buildinfo.Version=${VERSION} -X github.com/meshcore-go/OwlShack/internal/buildinfo.Date=${BUILD_DATE}" \
   -o "${OUTPUT}" .
 
 echo ">> Done: ${OUTPUT} ($(du -h "${OUTPUT}" | cut -f1))"

@@ -52,6 +52,15 @@ type Repeater struct {
 	recvCount atomic.Uint64 // raw packets received (radio raw handler)
 	fwdCount  atomic.Uint64 // packets we relayed (allowForward returned true)
 
+	// TX counters for the STATUS response (firmware Dispatcher getNumSentFlood /
+	// getNumSentDirect). RX / dup counters come from the router (routeStats),
+	// rebased at `clear stats` via statsBase.
+	sentFlood  atomic.Uint64
+	sentDirect atomic.Uint64
+	routeStats func() node.RouteStats
+	statsBase  node.RouteStats
+	sf         uint8 // spreading factor, for the rx-delay packet score (0 = unknown)
+
 	// Signal + airtime, for the over-mesh STATUS response. lastRSSI/lastSNRx4
 	// are the last heard values (SNR in firmware quarter-dB); noise floor is
 	// derived as rssi-snr. rx/txAirtimeMs accumulate estimated LoRa time-on-air
@@ -70,7 +79,9 @@ type Repeater struct {
 	noiseFloor      atomic.Int32
 	batteryMV       atomic.Uint32
 	haveDeviceStats atomic.Bool
-	pollStats       func(ctx context.Context) (noiseFloor int16, batteryMV uint16)
+	pollStats       func(ctx context.Context) DeviceStats
+	mcuTempC        atomic.Int32 // tenths of a degree C
+	haveMCUTemp     atomic.Bool
 
 	// reconfigure applies an over-mesh CLI config change (set/password/region):
 	// persist + validate + reload. nil disables config writes. Called off the
@@ -114,9 +125,38 @@ type Repeater struct {
 		m map[string]*store.RepeaterACLEntry // keyed by full pubkey hex
 	}
 
+	lastTS atomic.Uint32 // last timestamp we stamped (firmware getCurrentTimeUnique)
+
 	mu     sync.Mutex
 	cancel context.CancelFunc
 	runCtx context.Context
+}
+
+// uniqueTimestamp mirrors the firmware's getCurrentTimeUnique(): strictly
+// increasing across every timestamp we stamp on outgoing traffic.
+func (r *Repeater) uniqueTimestamp() uint32 {
+	for {
+		last := r.lastTS.Load()
+		ts := max(uint32(time.Now().Unix()), last+1)
+		if r.lastTS.CompareAndSwap(last, ts) {
+			return ts
+		}
+	}
+}
+
+// reverseHops flips a received path into send order (the sender's neighbour
+// last); a flood request's accumulated path lists the client's neighbour first.
+func reverseHops(path []byte, hashSize uint8) []byte {
+	hs := int(hashSize)
+	if hs == 0 {
+		hs = int(meshcore.PathHashSize)
+	}
+	n := len(path) / hs * hs
+	out := make([]byte, n)
+	for i := 0; i < n; i += hs {
+		copy(out[n-hs-i:], path[i:i+hs])
+	}
+	return out
 }
 
 // Hooks are the app-provided callbacks the repeater needs but can't build
@@ -126,9 +166,9 @@ type Hooks struct {
 	// Reconfigure persists + validates + reloads a repeater config change (the
 	// over-mesh CLI set/password/region commands). nil disables config writes.
 	Reconfigure func(mutate func(*config.RepeaterConfig)) error
-	// PollStats reads the shared modem's device stats (noise floor + battery).
-	// nil when unavailable (those STATUS/telemetry fields then stay 0).
-	PollStats func(ctx context.Context) (noiseFloor int16, batteryMV uint16)
+	// PollStats reads the shared modem's device stats. nil when unavailable
+	// (those STATUS/telemetry fields then stay 0).
+	PollStats func(ctx context.Context) DeviceStats
 }
 
 func NewRepeater(cfg config.RepeaterConfig, mux *node.RadioMux, st *store.Store, hub *api.Hub, hooks Hooks) (*Repeater, error) {
@@ -163,11 +203,15 @@ func NewRepeater(cfg config.RepeaterConfig, mux *node.RadioMux, st *store.Store,
 	// Build the LoRa time-on-air estimator from the shared radio settings, the
 	// same way the modem does. Set before the node goes live so the raw handler
 	// and allowForward (both airtime accumulators) never see a torn value.
-	r.airtime = buildAirtimeEstimator(st)
+	r.airtime, r.sf = buildAirtimeEstimator(st)
 
 	opts := []node.Option{
 		node.WithMaxPeers(100_000),
 		node.WithErrorHandler(func(err error) { log.Error("node error", "error", err) }),
+		node.WithFloodRetransmitDelay(r.floodRelayDelay),
+		node.WithDirectRetransmitDelay(r.directRelayDelay),
+		node.WithRxDelay(r.rxDelay),
+		node.WithExtraAckTransmitCount(r.extraAcks),
 		// The relay policy — this is what makes the node a repeater. A node
 		// with no allowForward handler never relays (the router's canForward
 		// returns false), which is why a companion doesn't forward.
@@ -182,6 +226,7 @@ func NewRepeater(cfg config.RepeaterConfig, mux *node.RadioMux, st *store.Store,
 		opts = append(opts, node.WithRegions(named...))
 	}
 	r.node = node.New(id, radio, opts...)
+	r.routeStats = r.node.RouteStats
 	r.node.Regions().SetWildcardFlags(wildcardFlags) // "*" entry ⇒ relay unscoped flood; absent ⇒ don't
 
 	r.registerHandlers()
@@ -193,17 +238,29 @@ func NewRepeater(cfg config.RepeaterConfig, mux *node.RadioMux, st *store.Store,
 // radio Settings, mirroring how the modem builds its own. Returns nil when the
 // radio params aren't set (no relaying happens without them, so airtime stays
 // 0). Used to accumulate rx/tx airtime for the over-mesh STATUS response.
-func buildAirtimeEstimator(st *store.Store) func(int) uint32 {
+// Also returns the spreading factor, which the rx-delay packet score needs.
+func buildAirtimeEstimator(st *store.Store) (func(int) uint32, uint8) {
 	s, err := st.Settings.Get(context.Background())
 	if err != nil || s.Freq == nil || s.BW == nil || s.SF == nil || s.CR == nil {
-		return nil
+		return nil, 0
 	}
 	return hardware.LoRaAirtimeEstimator(&hardware.RadioConfig{
 		FreqHz: uint32(*s.Freq * 1_000_000),
 		BwHz:   uint32(*s.BW * 1000),
 		SF:     uint8(*s.SF),
 		CR:     uint8(*s.CR),
-	})
+	}), uint8(*s.SF)
+}
+
+// runContext guards the nil r.runCtx window: node.New registers the radio
+// handler inside NewRepeater, so CLI traffic can arrive before Start.
+func (r *Repeater) runContext() context.Context {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	if r.runCtx == nil {
+		return context.Background()
+	}
+	return r.runCtx
 }
 
 func (r *Repeater) Start(ctx context.Context) error {
@@ -232,12 +289,16 @@ func (r *Repeater) Start(ctx context.Context) error {
 func (r *Repeater) deviceStatsLoop(ctx context.Context) {
 	const interval = 60 * time.Second
 	refresh := func() {
-		noise, batt := r.pollStats(ctx)
+		ds := r.pollStats(ctx)
 		if ctx.Err() != nil {
 			return
 		}
-		r.noiseFloor.Store(int32(noise))
-		r.batteryMV.Store(uint32(batt))
+		r.noiseFloor.Store(int32(ds.NoiseFloor))
+		r.batteryMV.Store(uint32(ds.BatteryMV))
+		if ds.HaveMCUTemp {
+			r.mcuTempC.Store(int32(ds.MCUTempC * 10))
+			r.haveMCUTemp.Store(true)
+		}
 		r.haveDeviceStats.Store(true)
 	}
 	refresh()
@@ -295,7 +356,7 @@ func regionsFromConfig(cfg []config.RepeaterRegion) (named []*meshcore.Region, w
 // changed, so such an edit doesn't restart the node (a restart would wipe the
 // neighbour list, learned routes and relay counters). It reconciles the live
 // RegionMap and the config snapshot that regionList/regionHas read.
-func (r *Repeater) ApplyRegions(regions []config.RepeaterRegion, defaultRegion string) {
+func (r *Repeater) ApplyRegions(regions []config.RepeaterRegion, defaultRegion, homeRegion string) {
 	named, wildcardFlags := regionsFromConfig(regions)
 	rm := r.node.Regions()
 	rm.SetWildcardFlags(wildcardFlags)
@@ -326,6 +387,7 @@ func (r *Repeater) ApplyRegions(regions []config.RepeaterRegion, defaultRegion s
 	r.mu.Lock()
 	r.cfg.Regions = regions
 	r.cfg.DefaultRegion = defaultRegion
+	r.cfg.HomeRegion = homeRegion
 	r.mu.Unlock()
 }
 
@@ -363,4 +425,14 @@ func (l *rateLimiter) allow() bool {
 	}
 	l.stamps = append(kept, now)
 	return true
+}
+
+// DeviceStats are the shared modem's board readings, polled for the over-mesh
+// STATUS and telemetry replies. HaveMCUTemp is false when the board can't
+// measure a temperature, so 0 °C isn't mistaken for a reading.
+type DeviceStats struct {
+	NoiseFloor  int16
+	BatteryMV   uint16
+	MCUTempC    float64
+	HaveMCUTemp bool
 }

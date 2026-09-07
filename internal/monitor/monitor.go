@@ -207,7 +207,7 @@ func (s *Service) rescheduleAfter(key string, t Target, ok bool) {
 		} else {
 			if maxRetries > 0 {
 				s.log.Info("monitor giving up after consecutive failures, resuming normal interval",
-					"pubkey", key[:12], "failures", s.failures[key], "next", interval)
+					"pubkey", key, "failures", s.failures[key], "next", interval)
 			}
 			delete(s.failures, key)
 		}

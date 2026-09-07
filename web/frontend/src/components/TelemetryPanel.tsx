@@ -5,6 +5,7 @@ import { Alert, AlertDescription, AlertTitle } from "@/components/ui/alert";
 import { Skeleton } from "@/components/ui/skeleton";
 import { CoordLink } from "@/components/CoordLink";
 import { cn } from "@/lib/utils";
+import { apiErrorMessage } from "@/lib/apiError";
 
 export interface TelemetryReading {
   channel: number;
@@ -24,9 +25,13 @@ export interface TelemetryData {
 export function TelemetryPanel({
   apiBase,
   autoFetch = false,
+  errorHint,
 }: {
   apiBase: string;
   autoFetch?: boolean;
+  // Shown under a failed request — the caller knows why this node might not
+  // answer (e.g. a sensor only replies to clients in its ACL).
+  errorHint?: string;
 }) {
   const [data, setData] = useState<TelemetryData | null>(null);
   const [loading, setLoading] = useState(false);
@@ -38,10 +43,7 @@ export function TelemetryPanel({
     setErr(null);
     try {
       const r = await fetch(`${apiBase}/telemetry`);
-      if (!r.ok) {
-        const txt = await r.text();
-        throw new Error(txt || `HTTP ${r.status}`);
-      }
+      if (!r.ok) throw new Error(await apiErrorMessage(r));
       const body: TelemetryData = await r.json();
       setData(body);
       fetchedRef.current = true;
@@ -78,7 +80,12 @@ export function TelemetryPanel({
           <AlertTitle className="font-mono uppercase tracking-widest">
             Error
           </AlertTitle>
-          <AlertDescription>{err}</AlertDescription>
+          <AlertDescription>
+            {err}
+            {errorHint && (
+              <span className="block mt-1 text-muted-foreground">{errorHint}</span>
+            )}
+          </AlertDescription>
         </Alert>
       )}
       {!data && loading && (
