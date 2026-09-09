@@ -413,7 +413,7 @@ func reloadCompanions(ctx context.Context, oldCfg, newCfg *config.Config, runnin
 			companions = append(companions, p.reuse)
 			continue
 		}
-		c, err := companion.NewCompanion(p.block, mux, db, hub, echoTracker, ms.Stats, ms.RecvErrors)
+		c, err := companion.NewCompanion(p.block, mux, db, hub, echoTracker, ms.Stats, ms.ParseErrors)
 		if err != nil {
 			stopAll()
 			return nil, stats, fmt.Errorf("creating companion %q: %w", p.block.Name, err)

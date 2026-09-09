@@ -3,6 +3,69 @@
 Notable changes per release. Dates are the tag date; unreleased work sits at the
 top until tagged.
 
+## Unreleased
+
+Corrects two fields on the MQTT status schema that carried a different measurement from the one
+their name promises. The schema is shared: `meshcoretomqtt` forwards real firmware nodes to the
+same brokers under the same topic, and it is the client LetsMesh recommends, so the names were
+already defined by the firmware and OwlShack was the one publishing something else into them.
+
+Baseline `v1.3.1` · no schema change
+
+### Upgrading
+
+- **`recv_errors` changes meaning.** It now carries radio-driver receive failures, matching the
+  firmware's own field (`driver.getPacketsRecvErrors()`, which `RadioLibWrapper::recvRaw`
+  increments when `readData` fails after the interrupt). It was carrying packet parse failures.
+  Both transports report it: the KISS firmware answers `HW_CMD_GET_STATS` with the same counter,
+  which OwlShack now polls at status-publish time.
+- **`packet_parse_errors` is new** and carries what `recv_errors` used to: bytes that arrived
+  intact and did not decode as a MeshCore packet. The radio did its job; something else sent
+  malformed bytes.
+- **A dashboard keyed on `recv_errors` will see OwlShack nodes change**, usually downwards, since
+  a radio-driver failure is far rarer than a malformed packet. Nothing errors and no key
+  disappears, so the change is invisible on the wire. Read `client_version` to tell the versions
+  apart.
+- No database migration; `user_version` stays 11.
+
+### Fixed
+
+- **`recv_errors` published a parse failure under a name the firmware had already defined** as a
+  radio-driver counter. A consumer aggregating across firmware nodes and OwlShack nodes was
+  summing two unrelated measurements, with no way to tell them apart.
+- **`hw_decode_errors` published an SPI data-packet readout failure** on the SPI path.
+  `PacketsRecvErrors` was mapped into it, but that field is a malformed KISS **SETHARDWARE** frame,
+  which is the battery, MCU-temperature and noise-floor channel rather than a mesh packet. It is
+  now KISS-only, publishing 0 on SPI like the other four KISS counters, and `PacketsRecvErrors`
+  goes to `recv_errors` where it belongs.
+- **A driver error incremented two counters.** On the SPI path the modem error handler fed both
+  `driver_errors` and the parse count, so `driver_errors` was a strict subset of `recv_errors` and
+  the same event was counted twice. `recv_errors` also meant different things on the two
+  transports: parse failures on KISS, parse plus driver failures on SPI.
+- **The KISS firmware's own packet counters were never polled.** `HW_CMD_GET_STATS` has always
+  answered with rx, tx and `getPacketsRecvErrors()`, and `meshcore-go` has wrapped it as
+  `FirmwareCounters` since v1.4.0. Not asking meant publishing a 0 that read as a radio hearing
+  everything cleanly. Polled now, and still absent rather than 0 when a modem does not answer.
+- `GET /api/radio/status` omits `hwDecodeErrors` on SPI rather than reporting a 0 it never
+  measured, and gains `recvErrors` on both transports. On KISS it now also reports `packetsRecv`
+  and `packetsSent` from the firmware's own totals, where both were absent. This is the REST surface only: the MQTT
+  payload keeps publishing both keys on both transports, because omitting a key there is a
+  coordinated change and dropping to 0 is not.
+
+### Known limitations
+
+- The rename is invisible to a consumer that does not parse `client_version`: the key stays
+  present, nothing errors, and a delta computed over `recv_errors` steps once per node at upgrade.
+  Nothing on the wire distinguishes the two meanings, and no transport field is published either,
+  so an SPI node's `hw_decode_errors: 0` reads the same as a KISS node measuring zero.
+- **`packets_recv` and `packets_sent` on MQTT are still the observer's own tallies**, not the
+  radio's, so they undercount by exactly the parse failures `packet_parse_errors` now counts. The
+  firmware's counters are polled and reach `GET /api/radio/status`, but feeding them onto the wire
+  changes two more keys on the shared schema, and `packets_recv` is what
+  `flood_rx + direct_rx + dups` reconciles against. Its own change.
+- `packet_parse_errors` has not been observed non-zero on the bench. Read a 0 there as
+  "nothing malformed arrived, or the path is not exercised", not as proof the counter works.
+
 ## v1.3.1
 
 **Security fix.** A repeater created through OwlShack had no admin password, and a blank one

@@ -166,8 +166,8 @@ type RadioStatsInfo struct {
 
 	InboundDroppedNew uint64 `json:"inboundDroppedNew"`
 	HandlerSlow       uint64 `json:"handlerSlow"`
-	HwDecodeErrors    uint64 `json:"hwDecodeErrors"`
 
+	HwDecodeErrors       *uint64 `json:"hwDecodeErrors,omitempty"`
 	InboundDroppedOldest *uint64 `json:"inboundDroppedOldest,omitempty"`
 	RxMetaTimeouts       *uint64 `json:"rxMetaTimeouts,omitempty"`
 	RxMetaMisattributed  *uint64 `json:"rxMetaMisattributed,omitempty"`
@@ -177,6 +177,7 @@ type RadioStatsInfo struct {
 	PacketsRecv    *uint64 `json:"packetsRecv,omitempty"`
 	PacketsSent    *uint64 `json:"packetsSent,omitempty"`
 	CRCErrors      *uint64 `json:"crcErrors,omitempty"`
+	RecvErrors     *uint64 `json:"recvErrors,omitempty"`
 	DriverErrors   *uint64 `json:"driverErrors,omitempty"`
 	RecvRecoveries *uint64 `json:"recvRecoveries,omitempty"`
 
