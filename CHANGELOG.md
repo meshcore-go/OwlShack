@@ -59,7 +59,9 @@ Baseline `v1.2.0` · schema `user_version` 9 → 10 · `meshcore-go` v1.4.0 · G
   unix seconds a group trigger's `{{.Timestamp}}` arrives as, which previously
   rendered as a bare number and had no way to be formatted. The zone database
   is compiled in, so a named zone resolves identically on every release target
-  rather than only where the host ships zoneinfo.
+  rather than only where the host ships zoneinfo. Omitting the zone uses the
+  process's local time, which in a container is UTC until `TZ` is set: the
+  README now documents that, and a mistyped `TZ` falls back to UTC silently.
 - **A new owl mark** replaces the radio glyph in the sidebar, the favicon and
   every PWA icon. An installed app picks up the new icon on its next launch.
   The maskable and iOS icons are opaque on purpose: Android crops the maskable
