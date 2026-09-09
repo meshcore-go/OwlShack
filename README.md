@@ -5,7 +5,7 @@
 <h1 align="center">OwlShack</h1>
 
 <p align="center">
-  An operator console for <a href="https://github.com/meshcore-dev/MeshCore">MeshCore</a> mesh networks — one static Go binary, no CGO.
+  An operator console for <a href="https://github.com/meshcore-dev/MeshCore">MeshCore</a> mesh networks. One static Go binary, no CGO.
 </p>
 
 Plug a MeshCore radio into any Linux, macOS or Windows machine (a Raspberry Pi
@@ -29,11 +29,11 @@ telemetry, all persisted to SQLite. Built on the pure Go
 - **Watches the radio.** Modem fault counters, TX outcomes, RX losses, and a
   zero-hop discovery scan that answers "what can this radio actually hear?".
 - **Talks to two radio families.** MeshCore firmware over serial or TCP (KISS),
-  or a bare SX1262 driven directly over a Pi's SPI bus — no firmware node needed.
+  or a bare SX1262 driven straight off a Pi's SPI bus, no firmware node needed.
 - **Bridges to MQTT.** Feeds aggregators like LetsMesh and CoreScope.
 
 The web UI is the configuration surface and the database is the source of
-truth — there is nothing to hand-edit.
+truth; there is nothing to hand-edit.
 
 ## Screenshots
 
@@ -59,7 +59,7 @@ Installable as a PWA, with a mobile layout and a light theme.
 | Trace | Interactive path builder and result timeline |
 | Monitoring | Polled nodes with status and telemetry history charts |
 | Radio | Modem diagnostics: TX outcomes, RX losses, board readings, faults |
-| Discover | Zero-hop scan — which repeaters and sensors are in direct range |
+| Discover | Zero-hop scan: which repeaters and sensors are in direct range |
 | Companions | Per-companion chat, contacts, channels, remote repeaters, rooms, sensors |
 | Bots | Create and edit triggers across every companion (group and cron) |
 | Repeater | The repeater this instance runs: relay stats, neighbours, access, settings |
@@ -71,7 +71,7 @@ Installable as a PWA, with a mobile layout and a light theme.
 ### The machine running OwlShack
 
 Any Linux, macOS or Windows host Go targets. Release binaries and Docker images
-cover x86-64, 386, ARMv6/v7, ARM64, ppc64le, riscv64 and s390x — a Pi Zero 2 W
+cover x86-64, 386, ARMv6/v7, ARM64, ppc64le, riscv64 and s390x. A Pi Zero 2 W
 is enough to run a companion, a repeater and the console at once.
 
 ### Radio interfaces
@@ -83,8 +83,8 @@ Set on the Settings page: `serial://` or `tcp://` for a MeshCore firmware node
 > **Which of the two you need.** SPI means this process is the radio driver: it
 > clocks an SX126x over the host's own bus and toggles its reset, busy and
 > RF-switch lines itself, so the board has to be one it holds a pin map for.
-> Everything else — any other chip family, a gateway concentrator, a bridge
-> that fakes a bus over USB — belongs on the KISS side, behind MeshCore
+> Everything else (any other chip family, a gateway concentrator, a bridge
+> that fakes a bus over USB) belongs on the KISS side, behind MeshCore
 > firmware that already knows its own hardware.
 
 | Interface | Status |
@@ -124,7 +124,7 @@ antenna. Boards with an external PA reach far higher: NebraHat-2W is listed at
 
 An untested preset is a pin map someone contributed that nobody has since
 confirmed against the board in hand. Get one wrong and the radio never
-receives, or transmits into a dead antenna path — and both look exactly like a
+receives, or transmits into a dead antenna path, and both look exactly like a
 quiet mesh, so watch the Radio page's counters before you trust a first
 contact.
 
@@ -143,21 +143,21 @@ These nine are listed but **cannot be selected**, and the UI says why:
 
 ### KISS radios
 
-Whatever board MeshCore firmware supports, OwlShack can drive — it speaks to
+Whatever board MeshCore firmware supports, OwlShack can drive: it speaks to
 the firmware, not the chip. Verified here on a Seeed XIAO nRF52840 and a
 RAK4631.
 
 ### Nodes OwlShack talks to
 
-Any MeshCore repeater, room server or sensor node on the mesh, over the air —
-no wiring, nothing installed on them. Remote administration needs that node's
-admin or guest password.
+Any MeshCore repeater, room server or sensor node on the mesh, over the air,
+with no wiring and nothing installed on them. Remote administration needs that
+node's admin or guest password.
 
 > [!WARNING]
 > A first transmit is the moment a wrong pin map costs you hardware. Check the
 > antenna is on before anything keys up, and that your frequency and power are
 > legal where you are. The shipped defaults are New Zealand's narrow preset,
-> 917.375 MHz at 22 dBm, which is not yours to assume — pick your own region on
+> 917.375 MHz at 22 dBm, which is not yours to assume. Pick your own region on
 > the Settings page or in the wizard.
 
 ## Install
@@ -213,7 +213,7 @@ sudo usermod -a -G dialout $USER
 ./OwlShack -vvv
 ```
 
-On a first run OwlShack starts quietly — it observes the mesh and advertises
+On a first run OwlShack starts quietly: it observes the mesh and advertises
 nothing until you create a companion.
 
 **3. Open `http://localhost:8080`.** A first-run wizard walks through the radio
@@ -230,7 +230,7 @@ anything goes on the air:
 ![Wizard, review step](docs/screenshots/wizard-review.png)
 
 Moving an existing node to new hardware? Restore its backup from the welcome
-step — that is the only point at which you can, so a running node is never
+step. That is the only point at which you can, so a running node is never
 overwritten. Everything after setup is configured in the UI and written back to
 the database.
 
@@ -263,7 +263,7 @@ UI.
 |-------|-------------|---------|
 | `connection` | `serial:///dev/ttyACM0`, `tcp://host:port`, or `spi://` | `serial:///dev/ttyACM0` |
 | `connectionType` | `kiss` (MeshCore firmware) or `spi` (bare SX1262) | `kiss` |
-| `spiBoard` | Board id from the registry — required for `spi://` | — |
+| `spiBoard` | Board id from the registry, required for `spi://` | none |
 | `baudRate` | Serial baud rate | `115200` |
 | `freq` | Frequency in MHz | `917.375` |
 | `bw` | Bandwidth in kHz | `62.50` |
@@ -273,7 +273,7 @@ UI.
 | `logLevel` | `debug`, `info`, `warn`, `error`, `trace` (overridden by `-v`) | `info` |
 
 **SPI radios.** With the connection type set to `spi`, OwlShack drives the
-SX1262 itself and `spiBoard` picks the pin map — see
+SX1262 itself and `spiBoard` picks the pin map; see
 [Supported hardware](#supported-hardware) for which boards that build can
 actually drive.
 
@@ -333,7 +333,7 @@ data. Brokers are managed on the MQTT page.
 
 | Bridge field | Description |
 |--------------|-------------|
-| `node` | Companion that feeds the bridge — exactly one (empty = the first) |
+| `node` | Companion that feeds the bridge, exactly one (empty = the first) |
 | `enabled` | Whether the bridge runs |
 | `iataCode` | Location identifier, e.g. an airport code |
 | `statusInterval` | Seconds between status publishes (default `300`) |
@@ -369,7 +369,7 @@ Only RX packets are published, never TX. See
 config > `:8080`), which is handy for Docker and PaaS: `PORT=4432 ./OwlShack`.
 
 `SIGHUP` reloads config from the database without a restart. Reloads are
-diff-based — only companions whose config actually changed are restarted, so
+diff-based: only companions whose config actually changed are restarted, so
 the rest keep their sessions. A radio change reconnects the modem; changing the
 listen address needs a process restart.
 
