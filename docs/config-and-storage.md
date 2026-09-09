@@ -127,6 +127,25 @@ radio/connection change still restarts everything (modem reconnect);
   (`CompanionRepo.IDByName`, `Server.companionID`). `node_state.companion_id`
   is the lone exception: it stays a name (node-keyed, self-heals each poll).
 
+## SPI board registry (`internal/modem/boards.json`)
+
+One entry per radio hat, keyed by the name stored in `settings.spi_board`. Two
+of its fields drive the warnings in the picker, and only one of them is in the
+file:
+
+- **`verified`** is declared per board and required: `"hardware"` (run here on
+  the physical hat) or `"community"` (wiring transcribed from a vendor or
+  community list, never tested). The UI labels anything but `"hardware"` as
+  **unverified**. 2 of 21 are `"hardware"`.
+- **`unsupported`** is **not in the JSON at all** — `boardFile.board` derives it
+  ([boards.go](../internal/modem/boards.go)) and the UI labels those boards
+  **unsupported**. Two rules set it today: no RF-switch control (neither
+  `use_dio2_rf` nor `txen_pin`), and `gpio_chip` other than 0, which periph
+  cannot select because it resolves pins by name. 9 of 21 land here.
+
+An unsupported board stays listed rather than being hidden, because "my hat is
+missing" is a worse bug report than "my hat says why it will not work".
+
 ## Backup & restore
 
 Export/import so a non-technical operator can move a node to new hardware
