@@ -366,10 +366,7 @@ export function AppShell({ children }: { children: React.ReactNode }) {
         <SidebarHeader className="border-b border-sidebar-border h-14 px-3 justify-center">
           <Link to="/" className="flex items-center gap-2.5">
             <div className="relative size-8 grid place-items-center rounded-sm bg-primary/10 border border-primary/30 shrink-0">
-              <Radio
-                className="size-4 text-primary"
-                strokeWidth={2}
-              />
+              <span className="owl-mark h-4 w-[22px] bg-primary" aria-hidden="true" />
               <span className="absolute -top-0.5 -right-0.5 size-1.5 rounded-full bg-primary scan-pulse" />
             </div>
             <div className="flex flex-col leading-tight group-data-[collapsible=icon]:hidden">
