@@ -52,6 +52,8 @@ func (t *TriggerConfig) Validate() error {
 	// Stubs for the trigger func map (templater.go), so typo'd function names are caught here.
 	stubs := template.FuncMap{
 		"formatPathBytes": func(any) string { return "" },
+		"now":             func() any { return nil },
+		"date":            func(any, string, ...string) (string, error) { return "", nil },
 	}
 	if _, err := template.New("trigger").Funcs(stubs).Parse(t.Template); err != nil {
 		return fmt.Errorf("invalid template: %w", err)
