@@ -22,8 +22,7 @@ const handlerWatchdog = 500 * time.Millisecond
 type State struct {
 	Modem node.Modem
 	Stats StatsProvider
-	// ParseErrors counts bytes that arrived intact but did not decode as a MeshCore packet. Not a
-	// receive error: the radio did its job. Published as packet_parse_errors.
+	// ParseErrors is intact bytes that did not decode as a MeshCore packet; the radio did its job.
 	ParseErrors *atomic.Uint64
 
 	radioConfig   *hardware.RadioConfig

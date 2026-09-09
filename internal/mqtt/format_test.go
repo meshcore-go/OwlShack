@@ -61,8 +61,7 @@ func TestFormatStatus_CountersMapDistinctly(t *testing.T) {
 		"hw_decode_errors":      12,
 		"hw_errors":             13,
 		"tx_outcome_lost":       14,
-		// The parse count and the radio-driver count are separate fields with separate meanings;
-		// distinct values so a re-crossed mapping shows up as the wrong number rather than passing.
+		// Distinct values, so a re-crossed mapping shows up as the wrong number rather than passing.
 		"packet_parse_errors": 99,
 		"recv_errors":         15,
 	} {
@@ -340,9 +339,7 @@ func TestFormatPacket_RxWithoutSignalInfoOmitsMeasurements(t *testing.T) {
 	}
 }
 
-// recv_errors is the firmware's field: meshcoretomqtt copies driver.getPacketsRecvErrors() into it
-// and publishes to the same brokers under the same topic. Publishing a parse failure there put a
-// different measurement under a name the firmware had already defined, so the two must stay apart.
+// recv_errors is the firmware's field, published to the same brokers by meshcoretomqtt, so a parse failure must never land in it.
 func TestFormatStatus_RecvErrorsIsTheRadioCounterNotTheParseCount(t *testing.T) {
 	u := func(v uint64) *uint64 { return &v }
 	read := func(link modem.LinkStats, parseErrors uint64) map[string]any {
@@ -369,8 +366,7 @@ func TestFormatStatus_RecvErrorsIsTheRadioCounterNotTheParseCount(t *testing.T) 
 		t.Errorf("packet_parse_errors = %v, want 40", stats["packet_parse_errors"])
 	}
 
-	// A modem that does not answer HW_CMD_GET_STATS: 0 on the wire, and never the parse count
-	// leaking across. The key still ships because the schema is shared.
+	// A modem that does not answer: 0 on the wire, never the parse count leaking across.
 	stats = read(modem.LinkStats{}, 40)
 	if stats["recv_errors"] != float64(0) {
 		t.Errorf("recv_errors = %v unmeasured, want 0 and never the parse count", stats["recv_errors"])

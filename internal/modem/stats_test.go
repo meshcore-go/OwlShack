@@ -28,9 +28,7 @@ func TestKissStatsProvider_DerivedValues(t *testing.T) {
 	}
 }
 
-// HW_CMD_GET_STATS answers with the firmware's own rx, tx and getPacketsRecvErrors, the same
-// counter the SPI path reads off the chip. Publishing 0 because nobody asked reads as a radio
-// hearing everything cleanly, so nil must mean the modem did not answer and nothing else.
+// nil must mean the modem did not answer: a 0 here would read as a radio hearing everything cleanly.
 func TestKissLinkStats_FirmwareCountersAbsentUntilPolled(t *testing.T) {
 	p := &kissStatsProvider{modem: &hardware.KissModem{}, log: slog.Default()}
 

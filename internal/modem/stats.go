@@ -57,10 +57,7 @@ type LinkStats struct {
 	PacketsRecv *uint64
 	PacketsSent *uint64
 	CRCErrors   *uint64 // chip-level CRC and header errors: a noisy channel
-	// RecvErrors is the radio driver failing to read a packet it knew had arrived. This is the
-	// firmware's recv_errors (RadioLibWrapper::recvRaw increments it when readData fails after the
-	// interrupt), so it publishes under that name. Both transports can measure it: the KISS
-	// firmware answers HW_CMD_GET_STATS with the same counter.
+	// RecvErrors is the radio driver failing to read a packet it knew had arrived: the firmware's recv_errors, measurable on both transports.
 	RecvErrors *uint64
 	// DriverErrors is SPI transaction failures, busy timeouts and failed IRQ reads.
 	DriverErrors *uint64
@@ -170,12 +167,7 @@ func (p *kissStatsProvider) PacketScore(snrDB float64, packetLen int) float64 {
 }
 
 func (p *kissStatsProvider) Stats(ctx context.Context) DeviceStats {
-	// Must stay ABOVE the fire-and-forget queries below, not merely for tidiness: the request
-	// waiter takes any HW_RESP_ERROR that is not TX_BUSY, whichever command provoked it, so a
-	// battery query answering HW_ERR_NO_CALLBACK while this one is in flight would fail it. That
-	// is the normal reply on a board with no cell. Cached because LinkStats has no ctx to poll
-	// with. Firmware without HW_CMD_GET_STATS errors here and the counters stay nil, which is the
-	// honest answer: this modem cannot report them, rather than a 0 that reads as a clean radio.
+	// Must run before the queries below: the waiter takes any non-TX_BUSY HW_RESP_ERROR, so a battery query's HW_ERR_NO_CALLBACK would fail this one.
 	if fw, err := p.modem.FirmwareCounters(ctx); err != nil {
 		p.log.Debug("firmware counters unavailable", "error", err)
 	} else {

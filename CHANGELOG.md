@@ -3,7 +3,7 @@
 Notable changes per release. Dates are the tag date; unreleased work sits at the
 top until tagged.
 
-## v1.3.2
+## Unreleased
 
 Corrects two fields on the MQTT status schema that carried a different measurement from the one
 their name promises. The schema is shared: `meshcoretomqtt` forwards real firmware nodes to the

@@ -118,14 +118,9 @@ type statsBlock struct {
 	DirectTx   uint64 `json:"direct_tx"`
 	FloodDups  uint64 `json:"flood_dups"`
 	DirectDups uint64 `json:"direct_dups"`
-	// recv_errors is the RADIO DRIVER failing to read a packet it knew had arrived, matching the
-	// firmware's own field (driver.getPacketsRecvErrors) that meshcoretomqtt forwards to these same
-	// brokers. Polled over HW_CMD_GET_STATS on KISS and read from the chip on SPI; 0 only when the
-	// modem does not answer that query at all.
+	// recv_errors is the radio driver failing to read a packet it knew had arrived, matching the firmware field meshcoretomqtt forwards to these same brokers.
 	RecvErrors uint64 `json:"recv_errors"`
-	// PacketParseErrors is bytes that arrived intact and did not decode as a MeshCore packet. This
-	// is what recv_errors carried until v1.3.2, which was a different measurement under a name the
-	// firmware had already defined.
+	// PacketParseErrors is what recv_errors used to carry: intact bytes that did not decode.
 	PacketParseErrors uint64 `json:"packet_parse_errors"`
 	QueueLen          int    `json:"queue_len"`
 
