@@ -182,10 +182,13 @@ docker run -d \
   --device /dev/ttyACM0 \
   -p 8080:8080 \
   -v "$PWD/data:/data" \
+  -e TZ=Pacific/Auckland \
   ghcr.io/meshcore-go/owlshack
 ```
 
-Drop `--device` for a TCP radio connection.
+Drop `--device` for a TCP radio connection. Set `TZ` to your own zone: the
+image carries the zone database but selects nothing, so without it the
+container's idea of local time is UTC.
 
 ### From source
 
@@ -348,6 +351,10 @@ directly gives a bare number; pass it through `date` to render it. The zone
 database is compiled into the binary, so a named zone resolves the same on
 every platform.
 
+Leaving the zone off uses whatever the process treats as local, which in a
+container is UTC unless `TZ` is set. Name the zone in the template when it has
+to be right regardless of where OwlShack runs.
+
 ## MQTT
 
 OwlShack publishes observed traffic to MQTT brokers, used by
@@ -389,8 +396,20 @@ Only RX packets are published, never TX. See
 | `-V, --version` | Print version and exit |
 | `-v, --verbose` | Increase log verbosity (`-v` debug, `-vv` trace, `-vvv` trace+) |
 
+| Variable | Effect |
+|---|---|
+| `HOST` | Bind host. Unset means all interfaces |
+| `PORT` | Bind port. Unset means the stored value, then `8080` |
+| `TZ` | The zone the process treats as local, e.g. `Pacific/Auckland` |
+
 `HOST` and `PORT` override the stored listen address at startup (env > stored
 config > `:8080`), which is handy for Docker and PaaS: `PORT=4432 ./OwlShack`.
+
+`TZ` matters wherever a time is rendered without an explicit zone, which in
+practice means bot templates and log lines. **A container has no local zone, so
+it runs in UTC until you set `TZ`.** A mistyped zone is worth care: the runtime
+falls back to UTC silently rather than refusing to start, so `TZ=Pacific/Aukland`
+looks exactly like choosing UTC on purpose.
 
 `SIGHUP` reloads config from the database without a restart. Reloads are
 diff-based: only companions whose config actually changed are restarted, so
