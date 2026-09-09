@@ -1,72 +1,171 @@
-# OwlShack
+<p align="center">
+  <img src="web/frontend/public/icons/icon-192.png" width="96" alt="OwlShack">
+</p>
 
-An operator console for [MeshCore](https://github.com/meshcore-dev/MeshCore) mesh networks, packaged as a single static Go binary. It runs companion nodes on the mesh, observes and archives traffic, administers remote repeaters, talks to room servers, polls nodes for telemetry, and serves a live web UI for all of it. Built on the pure Go [meshcore-go](https://github.com/meshcore-go/meshcore-go) library (no CGO).
+<h1 align="center">OwlShack</h1>
 
-## What it is
+<p align="center">
+  An operator console for <a href="https://github.com/meshcore-dev/MeshCore">MeshCore</a> mesh networks — one static Go binary, no CGO.
+</p>
 
-Plug a MeshCore radio into any Linux, macOS or Windows machine (a Raspberry Pi is plenty), point a browser at `http://localhost:8080`, and you get a full operator console for the mesh:
+Plug a MeshCore radio into any Linux, macOS or Windows machine (a Raspberry Pi
+is plenty), open `http://localhost:8080`, and you get a live console for the
+mesh: chat, packet capture, mapping, remote repeater administration, and
+telemetry, all persisted to SQLite. Built on the pure Go
+[meshcore-go](https://github.com/meshcore-go/meshcore-go) library.
 
-- **Companion chat**: run one or more companion identities that send and receive on public and private channels, hold DM conversations, and auto-respond via triggers.
-- **Network observer**: every packet, peer and advert seen on the air is decoded, streamed live, mapped, and persisted to SQLite.
-- **Repeater administration**: log in to remote repeaters and drive them (status telemetry, a CLI terminal, neighbours, full settings, access control).
-- **Room servers**: join server-hosted chat rooms, post, and receive backlog.
-- **Node monitoring**: poll repeaters and companions on a schedule and chart their telemetry over time.
-- **MQTT bridge**: forward observed traffic to aggregators like LetsMesh and CoreScope.
+![Overview](docs/screenshots/overview.png)
 
-Configuration lives in the database and is managed from the web UI. A config file is only ever a one-time import.
+## What it does
 
-## Features
+- **Runs nodes on the mesh.** One or more companion identities (channels, DMs,
+  templated auto-responders) and, optionally, a repeater that relays traffic
+  with its own identity, ACL and region scoping.
+- **Observes everything.** Every packet, peer and advert is decoded, streamed
+  live to the browser, mapped, and archived.
+- **Administers remote nodes.** Log in to other operators' repeaters and drive
+  them: status, CLI terminal, path, neighbours, settings, access control. Same
+  for room servers and sensor nodes.
+- **Watches the radio.** Modem fault counters, TX outcomes, RX losses, and a
+  zero-hop discovery scan that answers "what can this radio actually hear?".
+- **Talks to two radio families.** MeshCore firmware over serial or TCP (KISS),
+  or a bare SX1262 driven directly over a Pi's SPI bus — no firmware node needed.
+- **Bridges to MQTT.** Feeds aggregators like LetsMesh and CoreScope.
 
-**Web operator console** (served on `:8080` by default, single binary, SPA embedded)
-- Overview dashboard, searchable peers table, live Leaflet map, live packet stream, interactive path tracer.
-- Per-companion chat client (channels and DMs), contacts and channel management.
-- Repeater detail: login, status tiles, CLI terminal with autocomplete, neighbours, and a full settings panel (radio, position with map picker, advert intervals, routing, owner info, security).
-- Node monitoring views with telemetry history charts.
-- In-app config editors for companions/bots, MQTT, and radio, all backed by the same stored config.
+The web UI is the configuration surface and the database is the source of
+truth — there is nothing to hand-edit.
 
-**Companion nodes**
-- Group and cron triggers with Go `text/template` responses and regex matching.
-- Public and private channels, DM conversations, message delivery status and retry.
-- Inline ed25519 identity per companion (generated automatically if you omit it).
+## Screenshots
 
-**Repeater client** (drive remote repeaters over the air)
-- Login, status request, CLI passthrough, path learning, neighbours, telemetry, and ACL (`setperm`, access list).
+| | |
+|---|---|
+| ![Map](docs/screenshots/map.png) | ![Packets](docs/screenshots/packets.png) |
+| Every geolocated peer, filterable by type, with link lines | Live packet stream, grouped by hash, with route and signal |
+| ![Chat](docs/screenshots/chat.png) | ![Repeater](docs/screenshots/repeater.png) |
+| Per-companion chat: channels, DMs, rooms, delivery status | The repeater you run, with live relay stats and ACL |
+| ![Discover](docs/screenshots/discover.png) | ![Radio](docs/screenshots/radio.png) |
+| Zero-hop scan: who is in direct range, and both SNR directions | Modem diagnostics, with unmeasurable counters shown as `—` |
 
-**Room server client**
-- Login, post, ACK-gated backlog sync, and author resolution.
+Installable as a PWA, with a mobile layout and a light theme.
 
-**Operations**
-- SQLite persistence (peers, contacts, channels, messages, packets, conversations, telemetry).
-- Database is the source of truth for config; `SIGHUP` reloads it with minimal disruption (only changed companions restart).
-- Multi-format config import (TOML, YAML, JSON).
-- Static binary, no CGO, runs anywhere Go cross-compiles.
-
-## The web console
-
-Once running, open `http://localhost:8080`.
+## The console
 
 | Section | What it does |
 |---------|--------------|
-| Overview | Live peer count, peer-type spectrum, recently seen list, companions roster |
+| Overview | Peer counts, type spectrum, recently seen, companion roster |
 | Peers | Searchable, sortable table with type pills, signal bars, last-seen |
-| Map | Leaflet map of geolocated peers, filterable by type |
-| Packets | Live packet stream grouped by hash, with a detail panel (route, hops, signal, raw hex) |
+| Map | Leaflet map of geolocated peers, filterable, with link lines |
+| Packets | Live packet stream with a detail panel (route, hops, signal, raw hex) |
 | Trace | Interactive path builder and result timeline |
 | Monitoring | Polled nodes with status and telemetry history charts |
-| Bots | Trigger CRUD across companions (group and cron) |
-| MQTT | Top-level MQTT node selector and broker management |
-| Radio | Connection, baud, RF parameters, listen address, log level |
-| Companions | Companion roster, plus per-companion chat, contacts, channels, repeaters |
+| Radio | Modem diagnostics: TX outcomes, RX losses, board readings, faults |
+| Discover | Zero-hop scan — which repeaters and sensors are in direct range |
+| Companions | Per-companion chat, contacts, channels, remote repeaters, rooms, sensors |
+| Bots | Create and edit triggers across every companion (group and cron) |
+| Repeater | The repeater this instance runs: relay stats, neighbours, access, settings |
+| MQTT | Broker management and the companion that feeds the bridge |
+| Settings | Connection, radio parameters, presets, listen address, log level |
 
-## Installation
+## Supported hardware
 
-### Download a release binary (recommended)
+### The machine running OwlShack
 
-Pre-built binaries for Linux, macOS, and Windows are on the [Releases](https://github.com/meshcore-go/OwlShack/releases) page.
+Any Linux, macOS or Windows host Go targets. Release binaries and Docker images
+cover x86-64, 386, ARMv6/v7, ARM64, ppc64le, riscv64 and s390x — a Pi Zero 2 W
+is enough to run a companion, a repeater and the console at once.
 
-1. Grab the [latest release](https://github.com/meshcore-go/OwlShack/releases/latest).
-2. Download the binary for your platform (for example `OwlShack-linux-arm64` for a Raspberry Pi).
-3. Make it executable and move it onto your `PATH`:
+### Radio interfaces
+
+Set on the Settings page: `serial://` or `tcp://` for a MeshCore firmware node
+(KISS), `spi://` plus a board to drive a bare radio yourself.
+
+> [!CAUTION]
+> **Which of the two you need.** SPI means this process is the radio driver: it
+> clocks an SX126x over the host's own bus and toggles its reset, busy and
+> RF-switch lines itself, so the board has to be one it holds a pin map for.
+> Everything else — any other chip family, a gateway concentrator, a bridge
+> that fakes a bus over USB — belongs on the KISS side, behind MeshCore
+> firmware that already knows its own hardware.
+
+| Interface | Status |
+|---|---|
+| Native SX126x on the host SPI bus | Supported |
+| MeshCore firmware over USB serial (KISS) | Supported |
+| MeshCore firmware over TCP (KISS) | Supported |
+| SX127x on SPI | Not supported |
+| SX1302 / SX1303 concentrator boards | Not supported |
+| USB-to-SPI bridges (CH341 and similar) | Not supported |
+| Boards needing a non-default `gpiochip` | Not supported |
+
+### SPI boards
+
+Pin maps live in [`internal/modem/boards.json`](./internal/modem/boards.json)
+and are chosen by board, never by pin. Every entry is an SX1262. Twelve of the
+21 can be driven by the current build:
+
+| Board | Max TX | Bus | Status |
+|---|---|---|---|
+| Zindello UltraPeaterZero (E22, 1 W) | 22 dBm | SPI0.0 | **Verified on hardware** |
+| Zindello UltraPeaterZero (E22P, 1 W) | 22 dBm | SPI0.0 | **Verified on hardware** |
+| MeshAdv | 22 dBm | SPI0.0 | Preset available, untested |
+| Waveshare LoRa HAT | 22 dBm | SPI0.0 | Preset available, untested |
+| uConsole LoRa Module aio v2 | 22 dBm | SPI1.0 | Preset available, untested |
+| PiMesh-1W (V1) | 18 dBm | SPI0.0 | Preset available, untested |
+| PiMesh-1W (V2) | 18 dBm | SPI0.0 | Preset available, untested |
+| NebraDuo-E22P-1W | 18 dBm | SPI0.0 | Preset available, untested |
+| ZebraHat-1W | 18 dBm | SPI0.0 | Preset available, untested |
+| ZebraHatDuo-R0-1W | 18 dBm | SPI0.0 | Preset available, untested |
+| ZebraHatDuo-R1-1W | 18 dBm | SPI0.1 | Preset available, untested |
+| NebraHat-2W | 8 dBm | SPI0.0 | Preset available, untested |
+
+Max TX is the level the LoRa core is driven at, **not** what leaves the
+antenna. Boards with an external PA reach far higher: NebraHat-2W is listed at
+8 dBm because that 8 dBm drives its amplifier. Names are the registry's own.
+
+An untested preset is a pin map someone contributed that nobody has since
+confirmed against the board in hand. Get one wrong and the radio never
+receives, or transmits into a dead antenna path — and both look exactly like a
+quiet mesh, so watch the Radio page's counters before you trust a first
+contact.
+
+These nine are listed but **cannot be selected**, and the UI says why:
+
+| Board | Why not |
+|---|---|
+| Zindello UltraPeater (E22) | Needs a non-default `gpiochip` |
+| Zindello UltraPeater (E22P, 30 dBm) | Needs a non-default `gpiochip` |
+| FemtoFox SX1262 (1W) | Needs a non-default `gpiochip` |
+| FemtoFox SX1262 (2W) | Needs a non-default `gpiochip` |
+| RAK6421 with RAK1330x, slots 1 and 2 | Needs a non-default `gpiochip` |
+| BQ Voyage Station G3 | Needs a non-default `gpiochip` |
+| MeshAdv Mini | No confirmed RF-switch control |
+| uConsole LoRa Module aio v1 | No confirmed RF-switch control |
+
+### KISS radios
+
+Whatever board MeshCore firmware supports, OwlShack can drive — it speaks to
+the firmware, not the chip. Verified here on a Seeed XIAO nRF52840 and a
+RAK4631.
+
+### Nodes OwlShack talks to
+
+Any MeshCore repeater, room server or sensor node on the mesh, over the air —
+no wiring, nothing installed on them. Remote administration needs that node's
+admin or guest password.
+
+> [!WARNING]
+> A first transmit is the moment a wrong pin map costs you hardware. Check the
+> antenna is on before anything keys up, and that your frequency and power are
+> legal where you are. The shipped defaults are New Zealand's narrow preset,
+> 917.375 MHz at 22 dBm, which is not yours to assume — pick your own region on
+> the Settings page or in the wizard.
+
+## Install
+
+### Release binary
+
+Pre-built binaries for Linux, macOS and Windows are on the
+[Releases](https://github.com/meshcore-go/OwlShack/releases) page.
 
 ```bash
 chmod +x OwlShack-linux-arm64
@@ -75,274 +174,226 @@ sudo mv OwlShack-linux-arm64 /usr/local/bin/OwlShack
 
 ### Docker
 
-Images are published to `ghcr.io/meshcore-go/owlshack` for `linux/386`, `linux/amd64`, `linux/arm/v6`, `linux/arm/v7`, `linux/arm64/v8`, `linux/ppc64le`, `linux/riscv64`, and `linux/s390x`.
-
-```bash
-docker pull ghcr.io/meshcore-go/owlshack:latest
-```
-
-### Build from source
-
-Requires Go 1.26+. The frontend is built separately and embedded into the binary.
-
-```bash
-git clone https://github.com/meshcore-go/OwlShack.git
-cd OwlShack
-(cd web/frontend && npm install && npm run build)   # builds the SPA into web/frontend/dist
-go build -o OwlShack .
-```
-
-## Quick start
-
-### 1. Connect your radio
-
-Plug a MeshCore radio into your machine via USB. On Linux it usually appears as `/dev/ttyACM0`; on macOS as `/dev/cu.usbmodem*`.
-
-On Linux, give your user access to serial devices, then log out and back in:
-
-```bash
-sudo usermod -a -G dialout $USER
-```
-
-### 2. Run it
-
-```bash
-./OwlShack -vvv
-```
-
-On first run with no stored config, OwlShack starts quietly with no companion — it observes the mesh but advertises nothing — and the web console presents a first-run setup wizard that walks you through radio settings and creating your first companion. If a `config.toml` (or `.yaml` / `.json`) is present in the working directory, it is imported automatically instead (and the wizard is skipped). To import an explicit file and overwrite the stored config:
-
-```bash
-./OwlShack -config myconfig.toml
-```
-
-### 3. Open the console
-
-Visit `http://localhost:8080`. From here you can configure radio settings, add companions and channels, set up triggers, manage repeaters, and watch the mesh live. After the first run you rarely need the config file again: the web UI writes everything back to the database.
-
-### Using Docker
-
-Mount a config file for the initial import and pass through the serial device:
+Published to `ghcr.io/meshcore-go/owlshack` for `linux/386`, `amd64`,
+`arm/v6`, `arm/v7`, `arm64/v8`, `ppc64le`, `riscv64` and `s390x`.
 
 ```bash
 docker run -d \
   --device /dev/ttyACM0 \
   -p 8080:8080 \
-  -v ./config.toml:/data/config.toml \
+  -v "$PWD/data:/data" \
   ghcr.io/meshcore-go/owlshack
 ```
 
-For a TCP radio connection (a serial-to-TCP bridge), drop `--device`:
+Drop `--device` for a TCP radio connection.
+
+### From source
+
+Requires Go 1.26+ and Node. The SPA is embedded into the binary, so it has to
+be built first:
 
 ```bash
-docker run -d \
-  -p 8080:8080 \
-  -v ./config.toml:/data/config.toml \
-  ghcr.io/meshcore-go/owlshack
+git clone https://github.com/meshcore-go/OwlShack.git
+cd OwlShack
+./build.sh          # builds the SPA, then a version-stamped binary
 ```
+
+## Quick start
+
+**1. Connect the radio.** USB usually appears as `/dev/ttyACM0` on Linux,
+`/dev/cu.usbmodem*` on macOS. On Linux, join the serial group and log back in:
+
+```bash
+sudo usermod -a -G dialout $USER
+```
+
+**2. Run it.**
+
+```bash
+./OwlShack -vvv
+```
+
+On a first run OwlShack starts quietly — it observes the mesh and advertises
+nothing until you create a companion.
+
+**3. Open `http://localhost:8080`.** A first-run wizard walks through the radio
+and your first companion.
+
+| | |
+|---|---|
+| ![Wizard, welcome step](docs/screenshots/wizard-welcome.png) | ![Wizard, radio step](docs/screenshots/wizard-radio.png) |
+| Two steps, and nothing is broadcast until you create a companion | Attached radios are detected by name; presets fill the RF fields |
+
+The review step spells the whole configuration back in plain language before
+anything goes on the air:
+
+![Wizard, review step](docs/screenshots/wizard-review.png)
+
+Moving an existing node to new hardware? Restore its backup from the welcome
+step — that is the only point at which you can, so a running node is never
+overwritten. Everything after setup is configured in the UI and written back to
+the database.
 
 ## Configuration
 
-**The database is the source of truth.** Config is stored relationally in `meshcore.db`. A config file is read only to seed or overwrite that stored config:
+Everything is configured in the web UI and stored relationally in
+`meshcore.db`. There is no config file to write or maintain: the UI is the
+configuration surface, and `SIGHUP` reloads from the database.
 
-- First run with an empty database imports a `config.toml` / `.yaml` / `.json` from the working directory, or bootstraps a quiet default (no companions) and shows the first-run wizard.
-- `-config <path>` imports the given file and overwrites the stored config.
-- After that, the web UI is the way to change settings, and `SIGHUP` reloads from the database.
+> **Migrating from an older release?** `--config <path>` imports a TOML, YAML or
+> JSON config file once and overwrites the stored config, after which the file
+> is no longer read. Legacy layouts (`nodeType`, `[[bot]]`, `[[observer]]`)
+> fold onto the current one automatically. See
+> [config-and-storage.md](./docs/config-and-storage.md) for that format.
 
-Config files from older releases import automatically: the legacy `nodeType` key, `[[bot]]` blocks, and `[[observer]]` MQTT sections are mapped onto the current `connectionType` / `[[companion]]` / `[mqtt]` layout.
+The rest of this section is a reference for what the settings mean, wherever
+you set them.
 
-A minimal import file:
+### Map tiles
 
-```toml
-# Connection (KISS modem)
-connection = "serial:///dev/ttyACM0"   # or "tcp://host:port"
-baudRate = 115200
-
-# Radio
-freq = 917.375
-bw = 62.50
-sf = 7
-cr = 8
-tx = 22
-
-[[companion]]
-name = "Ping Bot"
-# privateKey = "<64 hex chars>"   # ed25519 seed; omit to generate one
-latitude = 0.0
-longitude = 0.0
-advertInterval = 86400            # seconds; 0 = never advertise
-channels = ["#testing", "Public"]
-
-[[companion.trigger]]
-type = "group"
-template = "Pong! Hello {{.Sender}}"
-channels = ["#testing"]
-match = ["(?i)^ping"]
-```
+The Map, and the position pickers, draw on CARTO basemaps, which now need a
+free API key ([carto.com/basemaps/apikey](https://carto.com/basemaps/apikey/),
+5M tiles a month). Without one the tiles render watermarked. Paste the key into
+Settings; it is stored with your config and visible to anyone who can open the
+UI.
 
 ### Connection and radio
 
 | Field | Description | Default |
 |-------|-------------|---------|
-| `connection` | `serial:///dev/ttyACM0` or `tcp://host:port` | `serial:///dev/ttyACM0` |
+| `connection` | `serial:///dev/ttyACM0`, `tcp://host:port`, or `spi://` | `serial:///dev/ttyACM0` |
+| `connectionType` | `kiss` (MeshCore firmware) or `spi` (bare SX1262) | `kiss` |
+| `spiBoard` | Board id from the registry — required for `spi://` | — |
 | `baudRate` | Serial baud rate | `115200` |
 | `freq` | Frequency in MHz | `917.375` |
 | `bw` | Bandwidth in kHz | `62.50` |
 | `sf` | Spreading factor | `7` |
 | `cr` | Coding rate | `8` |
 | `tx` | TX power | `22` |
-| `logLevel` | `debug`, `info`, `warn`, `error`, `trace` (overridden by `-v` flags) | `info` |
+| `logLevel` | `debug`, `info`, `warn`, `error`, `trace` (overridden by `-v`) | `info` |
+
+**SPI radios.** With the connection type set to `spi`, OwlShack drives the
+SX1262 itself and `spiBoard` picks the pin map — see
+[Supported hardware](#supported-hardware) for which boards that build can
+actually drive.
 
 ### Companions
 
-Each `[[companion]]` is a node identity that OwlShack runs on the mesh.
+A companion is a node identity OwlShack runs on the mesh. Add them on the
+Companions page.
 
 | Field | Description |
 |-------|-------------|
-| `name` | Display name shown on the mesh and in adverts (also the storage key for this companion's history) |
-| `privateKey` | 64-hex ed25519 seed; omit to have one generated and stored |
+| `name` | Display name on the mesh, and the storage key for this companion's history |
+| `privateKey` | 64-hex ed25519 seed; leave it unset and one is generated and stored |
 | `latitude` / `longitude` | Advertised position (decimal degrees) |
-| `advertInterval` | Seconds between adverts; `0` = never, omit for the default |
-| `channels` | Channels this companion joins (see below) |
-| `trigger` | Array of triggers (see below) |
+| `advertInterval` | Seconds between adverts; `0` = never |
+| `channels` | Channels to join |
+| `trigger` | Triggers attached to this companion |
 
 ### Triggers
 
-Each `[[companion.trigger]]` has a `type` and a `template`.
+Auto-responders and scheduled messages, managed on the Bots page.
 
 | Field | Description |
 |-------|-------------|
-| `type` | `group` (channel messages; `channel` is accepted as an alias) or `cron` |
-| `template` | Go `text/template` for the response or message |
+| `type` | `group` (channel messages) or `cron` |
+| `template` | Go `text/template` for the response |
 | `channels` | Channels to listen on / send to |
-| `match` | Array of [Go regular expressions](https://pkg.go.dev/regexp/syntax) matched against incoming messages (group triggers) |
-| `schedule` | Cron expression, for example `"*/5 * * * *"` (cron triggers) |
-| `contacts` | Contact names to listen to for DMs |
-| `retryTimeout` | Seconds to wait for a repeater echo before retrying (default `5`) |
-| `maxRetries` | Maximum send retries (default `3`) |
-| `charLimitBehaviour` | `truncate` or `split` when a message exceeds the character limit |
-| `pathHashSize` | `0` = copy sender's setting, `1`/`2`/`3` = bytes per hash (default `1`) |
+| `match` | [Go regexps](https://pkg.go.dev/regexp/syntax) matched against incoming messages (group) |
+| `schedule` | Cron expression, e.g. `"*/5 * * * *"` (cron) |
+| `contacts` | Contact names to answer DMs from |
+| `retryTimeout` / `maxRetries` | Repeater-echo timeout in seconds (`5`) and resend cap (`3`) |
+| `charLimitBehaviour` | `truncate` or `split` past the character limit |
+| `pathHashSize` | `0` = copy the sender's setting, `1`/`2`/`3` = bytes per hash |
 
-After sending, the companion listens for the message to be echoed back by a repeater. If no echo arrives within `retryTimeout`, it re-sends, up to `maxRetries` times. This applies to both group and cron triggers.
+After sending, a companion waits for a repeater to echo the message back; no
+echo inside `retryTimeout` means a resend, up to `maxRetries`.
 
-### Channels
-
-`channels` accepts plain names for public/hashtag channels, or objects with a `privateKey` for private channels:
-
-```toml
-# Public channels: just the name
-channels = ["#general", "#testing"]
-
-# Private channels: use the table syntax
-[[companion.trigger.channels]]
-name = "Secret Ops"
-privateKey = "a1b2c3d4e5f6a7b8c9d0e1f2a3b4c5d6"
-
-[[companion.trigger.channels]]
-name = "#general"
-```
+Channels are public or hashtag channels named directly (`Public`, `#general`),
+or private channels carrying a shared key. `Public` is the well-known channel
+every companion joins.
 
 ### Template variables
 
-**Group / channel triggers:**
+Group triggers: `{{.Sender}}` `{{.Channel}}` `{{.Message}}` `{{.Match}}` (named
+capture groups) `{{.Timestamp}}` `{{.SNR}}` `{{.RSSI}}` `{{.Hops}}`
+`{{.PathHashes}}` `{{.PathHashSize}}`.
 
-| Variable | Description |
-|----------|-------------|
-| `{{.Sender}}` | Sender's node name |
-| `{{.Channel}}` | Channel name |
-| `{{.Message}}` | Original message text |
-| `{{.Match}}` | Map of named regex capture groups |
-| `{{.Timestamp}}` | Message timestamp |
-| `{{.SNR}}` | Signal-to-noise ratio (dB) |
-| `{{.RSSI}}` | Received signal strength (dBm) |
-| `{{.Hops}}` | Number of hops |
-| `{{.PathHashes}}` | Raw path hashes |
-| `{{.PathHashSize}}` | Bytes per path hash |
+Cron triggers: `{{.Time}}` and `{{.Schedule}}`. `{{.BotName}}` is in every
+template. `formatPathBytes` renders raw path hashes readably (`Direct` when
+there is no path).
 
-**Cron triggers:** `{{.Time}}` (current time) and `{{.Schedule}}` (the schedule string). `{{.BotName}}` is available in every template.
+## MQTT
 
-**Built-in functions:** `formatPathBytes` renders raw path hashes into a readable string (returns `Direct` when there is no path).
+OwlShack publishes observed traffic to MQTT brokers, used by
+[LetsMesh](https://letsmesh.net) and
+[CoreScope](https://github.com/Kpa-clawbot/CoreScope) to aggregate network
+data. Brokers are managed on the MQTT page.
 
-## MQTT integration
-
-OwlShack can publish observed mesh traffic to MQTT brokers, used by services like [LetsMesh](https://letsmesh.net) and [CoreScope](https://github.com/Kpa-clawbot/CoreScope) to aggregate network data.
-
-MQTT is configured at the top level. Exactly one companion feeds the bridge, selected by `node` (empty = the first companion).
-
-```toml
-[mqtt]
-node = "Ping Bot"
-iataCode = "AKL"
-# statusInterval = 300
-# owner = "callsign"
-# email = "you@example.com"
-
-[[mqtt.broker]]
-name = "letsmesh-us"
-enabled = true
-transport = "websockets"          # "websockets" or "tcp"
-host = "mqtt-us-v1.letsmesh.net"
-port = 443
-tlsEnabled = true
-authType = "token"                # "token", "basic", or "none"
-audience = "mqtt-us-v1.letsmesh.net"
-packetTopic = "meshcore/{IATA}/{PUBLIC_KEY}/packets"
-statusTopic = "meshcore/{IATA}/{PUBLIC_KEY}/status"
-```
-
-| MQTT field | Description |
-|------------|-------------|
-| `node` | Companion that feeds the bridge (empty = first) |
-| `enabled` | Enable the bridge (omit = enabled) |
-| `iataCode` | Location identifier (for example an airport code) |
+| Bridge field | Description |
+|--------------|-------------|
+| `node` | Companion that feeds the bridge — exactly one (empty = the first) |
+| `enabled` | Whether the bridge runs |
+| `iataCode` | Location identifier, e.g. an airport code |
 | `statusInterval` | Seconds between status publishes (default `300`) |
-| `owner` / `email` | Included in MQTT token claims (optional) |
+| `owner` / `email` | Optional, included in MQTT token claims |
 
 | Broker field | Description |
 |--------------|-------------|
-| `name` | Display name |
-| `enabled` | Enable this broker |
-| `dedup` | Per-broker packet deduplication |
+| `name` / `enabled` | Display name; whether this broker is used |
 | `transport` | `websockets` or `tcp` |
-| `host` / `port` | Broker endpoint |
-| `path` | WebSocket path (default `/`) |
-| `packetTopic` / `statusTopic` | Topic templates; placeholders `{iata}` `{pubkey}` `{name}` (uppercase `{IATA}` `{PUBLIC_KEY}` also resolve). Empty = the default `meshcore/{iata}/{pubkey}/<kind>` |
-| `disallowedPacketTypes` | Packet types to exclude (for example `["ack", "advert"]`) |
-| `retainStatus` | Retain status messages on the broker |
+| `host` / `port` / `path` | Endpoint; `path` is the WebSocket path (default `/`) |
+| `packetTopic` / `statusTopic` | Templates; `{iata}` `{pubkey}` `{name}` (uppercase also resolves). Empty = `meshcore/{iata}/{pubkey}/<kind>` |
+| `disallowedPacketTypes` | Types to exclude, e.g. `["ack", "advert"]` |
+| `dedup` / `retainStatus` | Per-broker packet dedup; retain status messages |
 | `tlsEnabled` / `tlsInsecure` | Enable TLS / skip certificate verification |
 | `authType` | `token` (Ed25519 JWT from the node identity), `basic`, or `none` |
-| `username` / `password` | Credentials for `basic` auth |
-| `audience` | Token audience (for `token` auth) |
+| `username` / `password` / `audience` | Basic credentials; token audience |
 
-## CLI flags
+For LetsMesh, that is `mqtt-us-v1.letsmesh.net:443` over websockets with TLS
+and `token` auth, the audience matching the host.
+
+Only RX packets are published, never TX. See
+[docs/mqtt-and-radio.md](./docs/mqtt-and-radio.md) for the wire schema.
+
+## Running it
 
 | Flag | Description |
 |------|-------------|
-| `-c, --config PATH` | Import a config file (TOML, YAML, or JSON) into the database and run with it |
+| `-c, --config PATH` | One-time import of a legacy config file, then run with it |
 | `-V, --version` | Print version and exit |
-| `-v, --verbose` | Increase log verbosity (`-v` debug, `-vv` / `-vvv` trace) |
+| `-v, --verbose` | Increase log verbosity (`-v` debug, `-vv` trace, `-vvv` trace+) |
 
-## Environment variables
+`HOST` and `PORT` override the stored listen address at startup (env > stored
+config > `:8080`), which is handy for Docker and PaaS: `PORT=4432 ./OwlShack`.
 
-The web UI binds to `:8080` by default. Two environment variables override the stored listen address at startup (precedence: env > stored config > default), which is handy for Docker and PaaS deployments:
-
-| Variable | Description |
-|----------|-------------|
-| `HOST` | Bind host (e.g. `0.0.0.0` or `127.0.0.1`). Unset = all interfaces. |
-| `PORT` | Bind port (e.g. `4432`). Unset = the stored/default port. |
-
-Either may be set alone, for example `PORT=4432 ./OwlShack`.
-
-## Hot reload
-
-Send `SIGHUP` to reload configuration from the database without a full restart:
+`SIGHUP` reloads config from the database without a restart. Reloads are
+diff-based — only companions whose config actually changed are restarted, so
+the rest keep their sessions. A radio change reconnects the modem; changing the
+listen address needs a process restart.
 
 ```bash
 kill -SIGHUP $(pgrep OwlShack)
 ```
 
-Reloads are diff-based: only companions whose effective config changed are restarted, so unchanged ones keep their sessions. A radio or connection change reconnects the modem; changing the listen address needs a process restart.
+## Security
 
-## License
+There is **no authentication** on the REST API or the UI. Anyone who can reach
+the port can reconfigure your radio, post as your companions, and drive any
+repeater you have logged into. Bind it to localhost, or put it behind a reverse
+proxy that authenticates.
+
+## Docs
+
+| Doc | Covers |
+|---|---|
+| [firmware-protocol.md](./docs/firmware-protocol.md) | The wire: CLI replies, request types, path routing, DM/room plaintexts, sensors |
+| [config-and-storage.md](./docs/config-and-storage.md) | Config tables, `/api/config/*`, backup/restore, REST endpoints |
+| [frontend.md](./docs/frontend.md) | Styling system, page patterns, mobile, PWA |
+| [mqtt-and-radio.md](./docs/mqtt-and-radio.md) | MQTT wire schema, duty cycle, path hash size |
+| [CHANGELOG.md](./CHANGELOG.md) | Release history |
+
+## Licence
 
 See [LICENSE](LICENSE).
