@@ -26,8 +26,6 @@ Baseline `v1.3.1` · no schema change
   a radio-driver failure is far rarer than a malformed packet. Nothing errors and no key
   disappears, so the change is invisible on the wire. Read `client_version` to tell the versions
   apart.
-- **KISS nodes gain real `packets_recv` and `packets_sent`** from the same query, where they were
-  previously the observer's own tallies only.
 - No database migration; `user_version` stays 11.
 
 ### Fixed
@@ -49,13 +47,20 @@ Baseline `v1.3.1` · no schema change
   `FirmwareCounters` since v1.4.0. Not asking meant publishing a 0 that read as a radio hearing
   everything cleanly. Polled now, and still absent rather than 0 when a modem does not answer.
 - `GET /api/radio/status` omits `hwDecodeErrors` on SPI rather than reporting a 0 it never
-  measured, and gains `recvErrors` on both transports. The MQTT payload keeps publishing both keys on both
-  transports, because omitting a key there is a coordinated change and dropping to 0 is not.
+  measured, and gains `recvErrors` on both transports. On KISS it now also reports `packetsRecv`
+  and `packetsSent` from the firmware's own totals, where both were absent. This is the REST surface only: the MQTT
+  payload keeps publishing both keys on both transports, because omitting a key there is a
+  coordinated change and dropping to 0 is not.
 
 ### Known limitations
 
 - The rename is invisible to a consumer that does not parse `client_version`. Whoever runs
   CoreScope or LetsMesh is better told than left to notice.
+- **`packets_recv` and `packets_sent` on MQTT are still the observer's own tallies**, not the
+  radio's, so they undercount by exactly the parse failures `packet_parse_errors` now counts. The
+  firmware's counters are polled and reach `GET /api/radio/status`, but feeding them onto the wire
+  changes two more keys on the shared schema, and `packets_recv` is what
+  `flood_rx + direct_rx + dups` reconciles against. Its own change.
 - `packet_parse_errors` has not been observed non-zero on the bench. Read a 0 there as
   "nothing malformed arrived, or the path is not exercised", not as proof the counter works.
 
