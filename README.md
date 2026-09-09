@@ -321,8 +321,32 @@ capture groups) `{{.Timestamp}}` `{{.SNR}}` `{{.RSSI}}` `{{.Hops}}`
 `{{.PathHashes}}` `{{.PathHashSize}}`.
 
 Cron triggers: `{{.Time}}` and `{{.Schedule}}`. `{{.BotName}}` is in every
-template. `formatPathBytes` renders raw path hashes readably (`Direct` when
-there is no path).
+template.
+
+### Template functions
+
+| Function | Does |
+|---|---|
+| `formatPathBytes` | Renders raw path hashes readably (`Direct` when there is no path) |
+| `now` | The current time, as a value you can format or take parts of |
+| `date` | Formats a time in a layout, optionally in a named zone |
+
+`date` takes a time, a layout, and an optional [IANA zone](https://en.wikipedia.org/wiki/List_of_tz_database_time_zones);
+without a zone it uses the host's. Layouts are Go's, where the layout is itself
+an example date: `2006-01-02 15:04:05`, `Mon`, `Jan`, `3:04PM`.
+
+```
+{{date now "15:04"}}                            18:30
+{{date now "Mon 2 Jan, 3:04PM" "Pacific/Auckland"}}   Wed 9 Sep, 6:30PM
+{{date now "15:04" "UTC"}}                      06:30
+{{date .Timestamp "15:04" "UTC"}}               when the message was sent
+{{now.Year}}                                    2026
+```
+
+A group trigger's `{{.Timestamp}}` arrives as raw unix seconds, so printing it
+directly gives a bare number; pass it through `date` to render it. The zone
+database is compiled into the binary, so a named zone resolves the same on
+every platform.
 
 ## MQTT
 

@@ -53,6 +53,13 @@ Baseline `v1.2.0` · schema `user_version` 9 → 10 · `meshcore-go` v1.4.0 · G
 - **`meshcore-go` v1.4.0**, with `hardware/transport` and the new
   `hardware/sx12xx` at the same tag. Activity-LED blinking moved into the
   library's chip drivers, where every consumer gets it.
+- **Date and time in bot templates.** `now` gives the current time and `date`
+  formats one in any Go layout, with an optional IANA zone:
+  `{{date now "Mon 3:04PM" "Pacific/Auckland"}}`. `date` also reads the raw
+  unix seconds a group trigger's `{{.Timestamp}}` arrives as, which previously
+  rendered as a bare number and had no way to be formatted. The zone database
+  is compiled in, so a named zone resolves identically on every release target
+  rather than only where the host ships zoneinfo.
 - **A new owl mark** replaces the radio glyph in the sidebar, the favicon and
   every PWA icon. An installed app picks up the new icon on its next launch.
   The maskable and iOS icons are opaque on purpose: Android crops the maskable
