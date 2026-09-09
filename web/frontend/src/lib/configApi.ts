@@ -36,6 +36,16 @@ export interface SpiBoard {
   hasLeds: boolean;
 }
 
+// One serial device the host can see, from GET /api/serial/ports.
+export interface SerialPort {
+  // What to store: a stable by-id path where the OS has one, else the tty itself.
+  path: string;
+  // The tty `path` currently resolves to.
+  device: string;
+  label?: string;
+  stable: boolean;
+}
+
 // boardOption labels a hat for the picker, flagging one that cannot be trusted
 // blind: finding out afterwards means the antenna is already up.
 export function boardOption(b: SpiBoard): { value: string; label: string } {
@@ -357,6 +367,7 @@ export const configApi = {
   // The radio hats this binary knows how to wire. Empty until the backend is
   // up, which the UI shows as "no boards" rather than an empty picker.
   getSpiBoards: () => requestJSON<SpiBoard[]>("/api/spi/boards", "GET"),
+  getSerialPorts: () => requestJSON<SerialPort[]>("/api/serial/ports", "GET"),
   putMqtt: (input: MqttInput) => request("/api/config/mqtt", "PUT", input),
 
   saveBroker: (input: BrokerInput, id?: number) =>

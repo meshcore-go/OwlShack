@@ -15,19 +15,13 @@ import {
   DialogTitle,
 } from "@/components/ui/dialog";
 import { Button } from "@/components/ui/button";
-import { TextField, SelectField } from "@/components/ConfigFields";
+import { PATH_HASH_SIZE_OPTIONS, TextField, SelectField } from "@/components/ConfigFields";
+import { ConnectionFields, connectionSummary, useSerialPorts } from "@/components/ConnectionFields";
 import { RadioPresetSelect } from "@/components/RadioPresetSelect";
 import { PositionPicker } from "@/components/PositionPicker";
 import { toast } from "sonner";
 import { cn } from "@/lib/utils";
-import {
-  boardHint,
-  boardOption,
-  configApi,
-  defaultBoard,
-  type Settings,
-  type SpiBoard,
-} from "@/lib/configApi";
+import { configApi, type Settings, type SpiBoard } from "@/lib/configApi";
 import { RestoreEntryButton, RestoreFromBackup } from "@/components/RestoreFromBackup";
 
 const BANDWIDTHS = [7.8, 10.4, 15.6, 20.8, 31.25, 41.7, 62.5, 125, 250, 500];
@@ -79,11 +73,6 @@ function StepDots({ current }: { current: Step }) {
   );
 }
 
-const SETUP_CONNECTION_TYPES = [
-  { value: "kiss", label: "KISS modem (serial / TCP)" },
-  { value: "spi", label: "SPI radio hat" },
-];
-
 export function SetupWizard({
   settings,
   onComplete,
@@ -111,6 +100,7 @@ export function SetupWizard({
   const [sf, setSf] = useState(settings.sf != null ? String(settings.sf) : "7");
   const [cr, setCr] = useState(settings.cr != null ? String(settings.cr) : "8");
   const [tx, setTx] = useState(settings.tx != null ? String(settings.tx) : "22");
+  const [pathHashSize, setPathHashSize] = useState(String(settings.pathHashSize ?? 1));
 
   // Companion.
   const [skipCompanion, setSkipCompanion] = useState(false);
@@ -122,6 +112,7 @@ export function SetupWizard({
   const [advertInterval, setAdvertInterval] = useState("");
 
   const spi = connectionType === "spi";
+  const ports = useSerialPorts(!spi);
 
   useEffect(() => {
     configApi
@@ -169,6 +160,8 @@ export function SetupWizard({
         sf: parseInt(sf, 10) || null,
         cr: parseInt(cr, 10) || null,
         tx: tx === "" ? null : parseInt(tx, 10),
+        pathHashSize: parseInt(pathHashSize, 10) || 1,
+        dutyCycle: settings.dutyCycle,
         setupComplete: true,
       });
       // Writes are validated and reloaded server-side before returning, so the re-fetched config already gates this wizard away.
@@ -227,56 +220,17 @@ export function SetupWizard({
                 {spi ? "spi radio · connection" : "kiss modem · connection"}
               </span>
               <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
-                <SelectField
-                  label="Radio backend"
-                  value={connectionType}
-                  options={SETUP_CONNECTION_TYPES}
-                  onChange={(v) => {
-                    setConnectionType(v);
-                    if (v === "spi") {
-                      const pick = defaultBoard(boards);
-                      if (!connection.startsWith("spi://")) {
-                        setConnection(`spi://${pick?.spiPort ?? "SPI0.0"}`);
-                      }
-                      if (!spiBoard && pick) setSpiBoard(pick.name);
-                    } else if (connection.startsWith("spi://")) {
-                      setConnection("serial:///dev/ttyACM0");
-                    }
-                  }}
+                <ConnectionFields
+                  connectionType={connectionType}
+                  setConnectionType={setConnectionType}
+                  connection={connection}
+                  setConnection={setConnection}
+                  baudRate={baudRate}
+                  setBaudRate={setBaudRate}
+                  spiBoard={spiBoard}
+                  setSpiBoard={setSpiBoard}
+                  boards={boards}
                 />
-                <TextField
-                  label={spi ? "SPI port" : "Connection"}
-                  value={connection}
-                  onChange={setConnection}
-                  placeholder={
-                    spi ? "spi://SPI0.0" : "serial:///dev/ttyACM0 or tcp://host:port"
-                  }
-                />
-                {spi ? (
-                  boards.length > 0 ? (
-                    <SelectField
-                      label="Radio hat"
-                      value={spiBoard}
-                      options={boards.map(boardOption)}
-                      onChange={setSpiBoard}
-                      hint={boardHint(boards.find((b) => b.name === spiBoard))}
-                    />
-                  ) : (
-                    <TextField
-                      label="Radio hat"
-                      value={spiBoard}
-                      onChange={setSpiBoard}
-                      placeholder="ultrapeaterzero-e22p"
-                    />
-                  )
-                ) : (
-                  <TextField
-                    label="Baud rate"
-                    value={baudRate}
-                    onChange={setBaudRate}
-                    placeholder="115200"
-                  />
-                )}
               </div>
             </div>
             <div className="space-y-3">
@@ -291,6 +245,9 @@ export function SetupWizard({
                   setBw(String(p.bw));
                   setSf(String(p.sf));
                   setCr(String(p.cr));
+                  // Only when the preset states one; most do not, and defaulting would override a
+                  // region that needs 2 bytes with the 1-byte default.
+                  if (p.pathHashSize) setPathHashSize(String(p.pathHashSize));
                 }}
               />
               <div className="grid grid-cols-1 sm:grid-cols-3 gap-4">
@@ -332,6 +289,13 @@ export function SetupWizard({
                   value={tx}
                   onChange={setTx}
                   placeholder="0-22"
+                />
+                <SelectField
+                  label="Path hash size"
+                  value={pathHashSize}
+                  options={PATH_HASH_SIZE_OPTIONS}
+                  onChange={setPathHashSize}
+                  hint="must match the rest of your mesh · some regions run 2 bytes"
                 />
               </div>
             </div>
@@ -414,35 +378,32 @@ export function SetupWizard({
         {step === "review" && (
           <div className="space-y-4">
             <div className="border border-border bg-card divide-y divide-border font-mono text-xs">
-              <div className="flex justify-between gap-4 px-3 py-2">
-                <span className="text-muted-foreground uppercase tracking-[0.08em]">
-                  Connection
-                </span>
-                <span className="truncate text-right">{connection}</span>
-              </div>
-              {spi && (
-                <div className="flex justify-between gap-4 px-3 py-2">
-                  <span className="text-muted-foreground uppercase tracking-[0.08em]">
-                    Radio hat
-                  </span>
-                  <span className="truncate text-right">
-                    {boards.find((b) => b.name === spiBoard)?.label ?? spiBoard}
-                  </span>
-                </div>
+              {connectionSummary(connectionType, connection, baudRate, spiBoard, boards, ports).map(
+                (row) => (
+                  <div key={row.label} className="flex justify-between gap-4 px-3 py-2">
+                    <span className="shrink-0 text-muted-foreground uppercase tracking-[0.08em]">
+                      {row.label}
+                    </span>
+                    <span className="min-w-0 truncate text-right">
+                      {row.value}
+                      {row.sub && <span className="text-muted-foreground"> · {row.sub}</span>}
+                    </span>
+                  </div>
+                ),
               )}
               <div className="flex justify-between gap-4 px-3 py-2">
-                <span className="text-muted-foreground uppercase tracking-[0.08em]">
-                  Radio
+                <span className="shrink-0 text-muted-foreground uppercase tracking-[0.08em]">
+                  LoRa Radio
                 </span>
-                <span className="tabular-nums text-right">
-                  {freq} MHz · {bw} kHz · SF{sf} · 4/{cr} · {tx} dBm
+                <span className="min-w-0 tabular-nums text-right">
+                  {freq} MHz · {bw} kHz · SF{sf} · 4/{cr} · {tx} dBm · {pathHashSize}B path
                 </span>
               </div>
               <div className="flex justify-between gap-4 px-3 py-2">
-                <span className="text-muted-foreground uppercase tracking-[0.08em]">
+                <span className="shrink-0 text-muted-foreground uppercase tracking-[0.08em]">
                   Companion
                 </span>
-                <span className="text-right">
+                <span className="min-w-0 text-right">
                   {skipCompanion || !name.trim() ? (
                     <span className="inline-flex items-center gap-1.5 text-muted-foreground">
                       <CircleDashed className="size-3" /> view-only

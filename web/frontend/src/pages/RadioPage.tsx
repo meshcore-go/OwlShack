@@ -5,28 +5,17 @@ import { PageHeader } from "@/components/PageHeader";
 import { LoadErrorAlert } from "@/components/LoadErrorAlert";
 import { SectionTitle } from "@/components/SectionTitle";
 import { PATH_HASH_SIZE_OPTIONS, SelectField, TextField } from "@/components/ConfigFields";
+import { ConnectionFields } from "@/components/ConnectionFields";
 import { RadioPresetSelect } from "@/components/RadioPresetSelect";
 import { BackupPanel } from "@/components/BackupPanel";
 import { Button } from "@/components/ui/button";
 import { Skeleton } from "@/components/ui/skeleton";
 import { useApiObject } from "@/hooks/useApiObject";
 import { setTileKey } from "@/lib/leaflet";
-import {
-  boardHint,
-  boardOption,
-  configApi,
-  defaultBoard,
-  type Settings,
-  type SpiBoard,
-} from "@/lib/configApi";
+import { configApi, type Settings, type SpiBoard } from "@/lib/configApi";
 
 const BANDWIDTHS = [7.8, 10.4, 15.6, 20.8, 31.25, 41.7, 62.5, 125, 250, 500];
 const LOG_LEVELS = ["trace", "debug", "info", "warn", "error"];
-
-const CONNECTION_TYPES = [
-  { value: "kiss", label: "KISS modem (serial / TCP)" },
-  { value: "spi", label: "SPI radio hat" },
-];
 
 export function RadioPage() {
   const { item: settings, loading, error, reload } = useApiObject<Settings>(
@@ -80,7 +69,6 @@ export function RadioPage() {
   }, []);
 
   const spi = connectionType === "spi";
-  const board = boards.find((b) => b.name === spiBoard);
 
   const onSave = async () => {
     if (!settings) return;
@@ -159,63 +147,17 @@ export function RadioPage() {
               title="Connection"
             />
             <div className="p-4 grid grid-cols-1 sm:grid-cols-2 gap-4">
-              <SelectField
-                label="Radio backend"
-                value={connectionType}
-                options={CONNECTION_TYPES}
-                onChange={(v) => {
-                  setConnectionType(v);
-                  // The two backends take different connection strings.
-                  if (v === "spi") {
-                    const pick = defaultBoard(boards);
-                    if (!connection.startsWith("spi://")) {
-                      setConnection(`spi://${pick?.spiPort ?? "SPI0.0"}`);
-                    }
-                    if (!spiBoard && pick) setSpiBoard(pick.name);
-                  } else if (connection.startsWith("spi://")) {
-                    setConnection("serial:///dev/ttyACM0");
-                  }
-                }}
-                hint={
-                  spi
-                    ? "A radio wired to this host's SPI bus. No MeshCore firmware involved."
-                    : "MeshCore firmware driving the radio, over serial or TCP."
-                }
+              <ConnectionFields
+                connectionType={connectionType}
+                setConnectionType={setConnectionType}
+                connection={connection}
+                setConnection={setConnection}
+                baudRate={baudRate}
+                setBaudRate={setBaudRate}
+                spiBoard={spiBoard}
+                setSpiBoard={setSpiBoard}
+                boards={boards}
               />
-              <TextField
-                label={spi ? "SPI port" : "Connection"}
-                value={connection}
-                onChange={setConnection}
-                placeholder={
-                  spi ? "spi://SPI0.0" : "serial:///dev/ttyACM0 or tcp://host:port"
-                }
-              />
-              {spi ? (
-                boards.length > 0 ? (
-                  <SelectField
-                    label="Radio hat"
-                    value={spiBoard}
-                    options={boards.map(boardOption)}
-                    onChange={setSpiBoard}
-                    hint={boardHint(board)}
-                  />
-                ) : (
-                  <TextField
-                    label="Radio hat"
-                    value={spiBoard}
-                    onChange={setSpiBoard}
-                    hint="No board list available from the server."
-                    placeholder="ultrapeaterzero-e22p"
-                  />
-                )
-              ) : (
-                <TextField
-                  label="Baud rate"
-                  value={baudRate}
-                  onChange={setBaudRate}
-                  placeholder="115200"
-                />
-              )}
             </div>
           </section>
 
@@ -232,6 +174,9 @@ export function RadioPage() {
                   setBw(String(p.bw));
                   setSf(String(p.sf));
                   setCr(String(p.cr));
+                  // Only when the preset states one: most do not, and defaulting would silently
+                  // rewrite a working node's routing to 1 byte.
+                  if (p.pathHashSize) setPathHashSize(String(p.pathHashSize));
                 }}
               />
               <div className="grid grid-cols-1 sm:grid-cols-3 lg:grid-cols-5 gap-4">
