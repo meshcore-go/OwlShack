@@ -12,6 +12,20 @@ already defined by the firmware and OwlShack was the one publishing something el
 
 Baseline `v1.3.1` · no schema change
 
+### Fixed
+
+- **Released binaries reported `Build: unknown`.** The release workflow stamped
+  `buildinfo.Version` but not `buildinfo.Date`, which only `build.sh` set, so every published
+  build answered the repeater's `ver` command without a date while a locally built one answered
+  correctly. It now stamps the tagged commit's date, taken from the commit rather than the clock
+  so all eleven matrix jobs agree and a rebuilt tag gives the same string.
+- `--version` prints the build date alongside the version, in the same
+  `<version> (Build: <date>)` shape the repeater's `ver` reply uses. Without it the missing stamp
+  was only observable by querying the node over the air, which is why it went unnoticed.
+- Build dates now use the firmware's own `%d-%b-%Y` (`10-Sep-2026`) rather than ISO, so a `ver`
+  reply reads the same beside a real MeshCore node. `build.sh` previously stamped the UTC date,
+  which in NZ meant a morning build claimed yesterday; it follows the firmware's local clock now.
+
 ### Added
 
 - Chat bubbles show the path hash size next to the hop count, as `3 hops · 2B`. The field was
