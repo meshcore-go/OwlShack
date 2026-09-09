@@ -3,6 +3,49 @@
 Notable changes per release. Dates are the tag date; unreleased work sits at the
 top until tagged.
 
+## v1.3.1
+
+**Security fix.** A repeater created through OwlShack had no admin password, and a blank one
+compared equal to the blank a login request sends, so any node in radio range could log in as
+admin: change settings, set a password and lock the operator out, read the access list, run CLI
+commands. Upgrade if you run a repeater.
+
+Baseline `v1.3.0` · schema `user_version` 10 → 11
+
+### Upgrading
+
+- **The database migrates itself** on first start. A blank repeater admin password becomes
+  `password`, the same default the firmware ships (`ADMIN_PASSWORD` in `simple_repeater`), rather
+  than an invented value an operator could not guess.
+- **Change it.** `password` is the well-known firmware default, so it closes the "no password at
+  all" hole without being a secret. Set your own on the Repeater page, or over CLI with
+  `password <new>`.
+- **A repeater with a password already set is untouched** by the migration.
+- **Creating a repeater now requires an admin password.** `POST /api/config/repeater` rejects a
+  missing or blank one, and the setup form will not submit without it.
+
+### Fixed
+
+- **A blank repeater admin password granted admin to any node in range.** `CreateRepeater` never
+  set one and the column defaults to `''`, so `authLogin` matched the blank password a login
+  carries against the blank stored one and returned `permAdmin`. The auth logic itself mirrors the
+  firmware faithfully, including the fall-through when a blank-password sender is not in the ACL;
+  the firmware is not exposed because it never stores a blank password. Three paths could leave one
+  blank and all three now refuse: create (required field), `PUT /api/config/repeater/admin`
+  (sending `""` cleared it), and the `password` CLI command. The guest password is deliberately
+  still clearable — a blank guest password grants `PERM_ACL_GUEST`, which is 0, and is what the
+  firmware does.
+- **Migration slot 10 was not covered by the frozen-slots test.** `TestMigrations_ShippedSlotsFrozen`
+  pinned v1.1.0 and v1.2.0 only, so the slot v1.3.0 shipped could have been edited or renumbered
+  without failing anything. Pinned now, along with slot 11.
+
+### Known limitations
+
+- Setting an admin password longer than 15 characters is accepted but cannot be typed by a firmware
+  client, which truncates to that length. Validate or truncate at the boundary in a later release.
+- No authentication on the REST API or web UI, so anyone who can reach the port can still read and
+  change the repeater's password directly.
+
 ## v1.3.0
 
 Drive a bare SX12xx LoRa chip directly on the host SPI bus: no companion MCU, no

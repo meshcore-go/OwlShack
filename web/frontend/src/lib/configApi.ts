@@ -282,6 +282,8 @@ export interface ChannelInput {
 // Repeater node config is edited per-section (no whole-config bulk write).
 export interface RepeaterCreateInput {
   name: string;
+  // Required and non-blank: a blank admin password lets any node in range log in as admin.
+  adminPassword: string;
   privateKey?: string; // omit/blank = generate
 }
 
