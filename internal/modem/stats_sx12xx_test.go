@@ -50,9 +50,9 @@ func TestSx12xxStats_KeepsCRCAndDriverErrorsSeparate(t *testing.T) {
 	if ls.PacketsSent == nil || *ls.PacketsSent != 20 {
 		t.Errorf("PacketsSent = %v, want 20", ls.PacketsSent)
 	}
-	// HandlerSlow is absent here because it comes off the modem, not RadioStats.
-	if ls.RxMetaTimeouts != 0 || ls.RxMetaMisattributed != 0 || ls.HwErrors != 0 ||
-		ls.TxOutcomeLost != 0 || ls.InboundDroppedOldest != 0 {
+	// Nil, not zero: a 0 here would tell a consumer the SPI path measured these and saw none.
+	if ls.RxMetaTimeouts != nil || ls.RxMetaMisattributed != nil || ls.HwErrors != nil ||
+		ls.TxOutcomeLost != nil || ls.InboundDroppedOldest != nil {
 		t.Errorf("a KISS-only field was populated on the SPI path: %+v", ls)
 	}
 }
@@ -80,6 +80,21 @@ func TestKissLinkStats_LeavesTheSPICountersUnmeasured(t *testing.T) {
 	if ls.CRCErrors != nil || ls.DriverErrors != nil || ls.RecvRecoveries != nil {
 		t.Errorf("a KISS modem reported an SPI counter: crc=%v driver=%v recoveries=%v",
 			ls.CRCErrors, ls.DriverErrors, ls.RecvRecoveries)
+	}
+	if ls.PacketsRecv != nil || ls.PacketsSent != nil {
+		t.Errorf("a KISS modem reported a chip packet counter: recv=%v sent=%v", ls.PacketsRecv, ls.PacketsSent)
+	}
+	// The other direction: these five are real measurements here, so nil would hide a genuine zero.
+	for name, got := range map[string]*uint64{
+		"InboundDroppedOldest": ls.InboundDroppedOldest,
+		"RxMetaTimeouts":       ls.RxMetaTimeouts,
+		"RxMetaMisattributed":  ls.RxMetaMisattributed,
+		"HwErrors":             ls.HwErrors,
+		"TxOutcomeLost":        ls.TxOutcomeLost,
+	} {
+		if got == nil {
+			t.Errorf("%s is nil on a KISS modem, which measures it", name)
+		}
 	}
 }
 

@@ -153,6 +153,15 @@ type statsBlock struct {
 	RecvRecoveries *uint64 `json:"recv_recoveries,omitempty"`
 }
 
+// u64 flattens a counter this transport cannot measure to 0: the published schema is shared with
+// meshcore-bot and CoreScope, so omitting a key here is a coordinated change, not a local one.
+func u64(p *uint64) uint64 {
+	if p == nil {
+		return 0
+	}
+	return *p
+}
+
 // TxCounts mirrors node.TxStats plus the current queue depth; process-wide.
 type TxCounts struct {
 	Sent          uint64
@@ -254,12 +263,12 @@ func formatStatus(status, originName, originID string, radio modem.RadioInfo, ds
 			TxDroppedBusy:  tx.BusyDropped,
 			TxDroppedQueue: tx.QueueRejected,
 			TxFailed:       tx.Failed,
-			TxOutcomeLost:  link.TxOutcomeLost,
+			TxOutcomeLost:  u64(link.TxOutcomeLost),
 
-			RxDropped:           link.InboundDroppedOldest + link.InboundDroppedNew,
-			RxMetaMisattributed: link.RxMetaMisattributed,
-			RxMetaTimeouts:      link.RxMetaTimeouts,
-			HwErrors:            link.HwErrors,
+			RxDropped:           u64(link.InboundDroppedOldest) + link.InboundDroppedNew,
+			RxMetaMisattributed: u64(link.RxMetaMisattributed),
+			RxMetaTimeouts:      u64(link.RxMetaTimeouts),
+			HwErrors:            u64(link.HwErrors),
 			HwDecodeErrors:      link.HwDecodeErrors,
 			HandlerSlow:         link.HandlerSlow,
 

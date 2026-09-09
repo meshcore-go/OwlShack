@@ -32,21 +32,25 @@ type DeviceStats struct {
 	HaveMCUTemp bool
 }
 
-// ponytail: LinkStats mirrors hardware.ModemStats; six counters are KISS protocol concepts, to become omittable rather than 0 when a direct SX126x driver lands.
+// LinkStats mirrors hardware.ModemStats. Throughout, nil means the transport cannot measure that
+// counter and 0 means it measured none: a KISS framing fault has no analogue on the SPI path, and a
+// chip-level CRC count has none on the KISS path.
 type LinkStats struct {
-	// InboundDropped* are frames discarded because our inbound queue was full.
-	InboundDroppedOldest uint64
-	InboundDroppedNew    uint64
-	// RxMetaTimeouts: metadata never arrived. RxMetaMisattributed: matched to the wrong packet, so its SNR/RSSI is wrong.
-	RxMetaTimeouts      uint64
-	RxMetaMisattributed uint64
+	// InboundDroppedNew is a frame discarded because our inbound queue was full; the SPI driver's own drop count lands here.
+	InboundDroppedNew uint64
 	// HandlerSlow counts dispatches over the watchdog; DATA dispatch is serial, so one slow handler stalls RX for every consumer.
 	HandlerSlow    uint64
 	HwDecodeErrors uint64
-	HwErrors       uint64 // HW_RESP_ERROR frames received
-	TxOutcomeLost  uint64 // TX_DONE waits abandoned by a reconnect
 
-	// The SPI path's own counters; nil means the backend cannot measure them, 0 means it measured none.
+	// KISS framing concepts: the SPI chip hands us a decoded packet with its metadata attached, so none of these can occur there.
+	InboundDroppedOldest *uint64
+	// RxMetaTimeouts: metadata never arrived. RxMetaMisattributed: matched to the wrong packet, so its SNR/RSSI is wrong.
+	RxMetaTimeouts      *uint64
+	RxMetaMisattributed *uint64
+	HwErrors            *uint64 // HW_RESP_ERROR frames received
+	TxOutcomeLost       *uint64 // TX_DONE waits abandoned by a reconnect
+
+	// The SPI path's own counters.
 	// PacketsRecv and PacketsSent are the chip's own totals; with CRCErrors they separate a deaf radio from one hearing only garbage.
 	PacketsRecv *uint64
 	PacketsSent *uint64
@@ -101,14 +105,14 @@ func NewKissStatsProvider(modem *hardware.KissModem, radio RadioInfo) *kissStats
 func (p *kissStatsProvider) LinkStats() LinkStats {
 	s := p.modem.Stats()
 	return LinkStats{
-		InboundDroppedOldest: s.InboundDroppedOldest,
 		InboundDroppedNew:    s.InboundDroppedNew,
-		RxMetaTimeouts:       s.RxMetaTimeouts,
-		RxMetaMisattributed:  s.RxMetaMisattributed,
 		HandlerSlow:          s.HandlerSlow,
 		HwDecodeErrors:       s.HwDecodeErrors,
-		HwErrors:             s.HwErrors,
-		TxOutcomeLost:        s.TxOutcomeLost,
+		InboundDroppedOldest: &s.InboundDroppedOldest,
+		RxMetaTimeouts:       &s.RxMetaTimeouts,
+		RxMetaMisattributed:  &s.RxMetaMisattributed,
+		HwErrors:             &s.HwErrors,
+		TxOutcomeLost:        &s.TxOutcomeLost,
 	}
 }
 

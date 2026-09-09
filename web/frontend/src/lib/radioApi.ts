@@ -8,14 +8,15 @@ export interface RadioStatus {
   cr: number;
   txPower: number;
 
-  inboundDroppedOldest: number;
   inboundDroppedNew: number;
-  rxMetaTimeouts: number;
-  rxMetaMisattributed: number;
   handlerSlow: number;
   hwDecodeErrors: number;
-  hwErrors: number;
-  txOutcomeLost: number;
+
+  inboundDroppedOldest?: number;
+  rxMetaTimeouts?: number;
+  rxMetaMisattributed?: number;
+  hwErrors?: number;
+  txOutcomeLost?: number;
 
   txSent: number;
   txFailed: number;
