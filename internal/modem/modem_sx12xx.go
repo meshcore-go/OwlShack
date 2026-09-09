@@ -8,7 +8,7 @@ import (
 	"github.com/meshcore-go/OwlShack/internal/config"
 	"github.com/meshcore-go/meshcore-go/hardware"
 	"github.com/meshcore-go/meshcore-go/hardware/sx12xx"
-	"github.com/meshcore-go/meshcore-go/node"
+	"periph.io/x/conn/v3/gpio/gpioreg"
 	"periph.io/x/conn/v3/spi/spireg"
 	"periph.io/x/host/v3"
 )
@@ -68,6 +68,7 @@ func setupSPI(ms *State, cfg *config.Config, connAddr string, radioConfig *hardw
 	ms.closers = append(ms.closers, port)
 
 	opts := board.Opts()
+	dropMissingLEDs(&opts, board.Name)
 	radio, err := sx12xx.NewSX126x(port, &opts)
 	if err != nil {
 		ms.Close()
@@ -106,21 +107,29 @@ func setupSPI(ms *State, cfg *config.Config, connAddr string, radioConfig *hardw
 	ms.closers = append(ms.closers, m)
 	stats.Attach(m)
 
-	var modem node.Modem = m
-	if leds := openLEDs(board.LEDs()); leds != nil {
-		ms.closers = append(ms.closers, leds)
-		m.AddOutboundHandler(func([]byte) { leds.noteTx() })
-		modem = &ledModem{Modem: m, leds: leds}
-	}
-
 	pre, payload := sx12xx.PacketWindows(radioConfig)
 	slog.Info("radio up", "component", "modem", "board", board.Name, "chip", board.Chip,
-		"leds", board.LEDs().any(),
+		"leds", board.HasLEDs(),
 		"spi", portName, "freq", *cfg.Freq, "bw", *cfg.Bw, "sf", *cfg.SF, "cr", *cfg.CR,
 		"tx", txPower, "preamble_symbols", sx12xx.PreambleForSF(radioConfig.SF),
 		"activity_window", pre+payload)
 
 	ms.Stats = stats
-	ms.Modem = modem
+	ms.Modem = m
 	return nil
+}
+
+// dropMissingLEDs clears LED pins this host does not have: the driver rejects an unknown pin name, and a cosmetic pin from an unverified board entry must not stop the radio.
+func dropMissingLEDs(o *sx12xx.Opts, board string) {
+	for _, led := range []struct {
+		role string
+		pin  *string
+	}{{"tx", &o.TxLedPin}, {"rx", &o.RxLedPin}} {
+		if *led.pin == "" || gpioreg.ByName(*led.pin) != nil {
+			continue
+		}
+		slog.Warn("activity LED pin not present on this host, LED disabled",
+			"component", "modem", "board", board, "role", led.role, "pin", *led.pin)
+		*led.pin = ""
+	}
 }

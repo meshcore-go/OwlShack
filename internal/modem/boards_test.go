@@ -73,8 +73,11 @@ func TestVerifiedBoardIsUsable(t *testing.T) {
 	if o.TCXOVoltage == 0 {
 		t.Error("TCXO unset: DIO3 powers the oscillator on this board, and without it the radio hears nothing")
 	}
-	if leds := b.LEDs(); leds.Tx != "GPIO21" || leds.Rx != "GPIO20" {
-		t.Errorf("LEDs = %+v, want tx GPIO21 / rx GPIO20", leds)
+	if o.TxLedPin != "GPIO21" || o.RxLedPin != "GPIO20" {
+		t.Errorf("LED pins = tx %q / rx %q, want GPIO21 / GPIO20", o.TxLedPin, o.RxLedPin)
+	}
+	if !b.HasLEDs() {
+		t.Error("HasLEDs false: the board picker would offer this hat without mentioning its LEDs")
 	}
 }
 
