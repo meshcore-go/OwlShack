@@ -100,7 +100,7 @@ func TestFormatPacket_SNRIsIntegerDBTruncated(t *testing.T) {
 	}
 }
 
-// Board readings live inside "stats" under the firmware's key names; a missing MCU sensor omits the key.
+// Board readings live inside "stats" under the firmware's key names; a missing MCU sensor omits the key rather than publishing a reading it never took.
 func TestFormatStatus_BoardReadings(t *testing.T) {
 	read := func(ds modem.DeviceStats) map[string]any {
 		raw, err := formatStatus("online", "n", "id", modem.RadioInfo{}, ds,
