@@ -2022,7 +2022,7 @@ function AccessTab({
                       disabled={isBusy}
                     >
                       <SelectTrigger className="rounded-none font-mono text-[10px] uppercase tracking-widest h-7 w-32 border-border bg-background">
-                        <SelectValue />
+                        {roleLabel(entry.permissions)}
                       </SelectTrigger>
                       <SelectContent className="rounded-none font-mono text-xs">
                         {ROLE_OPTIONS.map((opt) => (

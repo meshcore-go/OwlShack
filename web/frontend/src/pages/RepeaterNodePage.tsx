@@ -42,7 +42,6 @@ import {
   SelectContent,
   SelectItem,
   SelectTrigger,
-  SelectValue,
 } from "@/components/ui/select";
 import { Field, TextField, SelectField, SwitchRow, PATH_HASH_SIZE_OPTIONS } from "@/components/ConfigFields";
 import { PositionPicker, round6 } from "@/components/PositionPicker";
@@ -671,7 +670,7 @@ function AccessTab({
                   disabled={busyKey !== null}
                 >
                   <SelectTrigger className="rounded-none font-mono text-[10px] uppercase tracking-widest h-7 w-32 border-border bg-background">
-                    <SelectValue />
+                    {roleLabel(c.permission)}
                   </SelectTrigger>
                   <SelectContent className="rounded-none font-mono text-xs">
                     {ROLE_OPTIONS.map((opt) => (

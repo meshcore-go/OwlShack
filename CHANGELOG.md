@@ -25,6 +25,13 @@ Baseline `v1.3.1` · no schema change
 - Build dates now use the firmware's own `%d-%b-%Y` (`10-Sep-2026`) rather than ISO, so a `ver`
   reply reads the same beside a real MeshCore node. `build.sh` previously stamped the UTC date,
   which in NZ meant a morning build claimed yesterday; it follows the firmware's local clock now.
+- **The repeater access list showed a blank role for a guest.** The dropdown rendered the matching
+  option's label and there was no guest option, so the one role that cannot be granted was the one
+  that displayed as nothing. The trigger now names whatever role the entry holds.
+- **The role picker no longer offers Read / Write.** Neither a repeater nor a sensor ever tests
+  for it — only `isAdmin()` and a guest check exist — so the choice promised a capability boundary
+  the node does not enforce and both roles granted identical access. Newly granted non-admin
+  clients get read-only; entries already holding read/write keep it and still display correctly.
 
 ### Added
 

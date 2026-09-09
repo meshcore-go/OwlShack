@@ -204,9 +204,10 @@ export function rolePillClass(perms: number): string {
   }
 }
 
+// No Read / Write: neither a repeater nor a sensor ever tests for it, so offering both roles
+// promised a boundary the node does not enforce. roleLabel still names it for entries holding it.
 export const ROLE_OPTIONS: { value: string; label: string }[] = [
   { value: String(PERM_READ_ONLY), label: "Read only" },
-  { value: String(PERM_READ_WRITE), label: "Read / Write" },
   { value: String(PERM_ADMIN), label: "Admin" },
 ];
 
@@ -230,7 +231,7 @@ export function AddAccessDialog({
 }) {
   const [search, setSearch] = useState("");
   const [manualKey, setManualKey] = useState("");
-  const [role, setRole] = useState<string>(String(PERM_READ_WRITE));
+  const [role, setRole] = useState<string>(String(PERM_READ_ONLY));
   // Sensors: what a password login grants, so an added client behaves the same.
   const [alertHi, setAlertHi] = useState(true);
   const [alertLo, setAlertLo] = useState(true);
@@ -242,7 +243,7 @@ export function AddAccessDialog({
     if (!open) {
       setSearch("");
       setManualKey("");
-      setRole(String(PERM_READ_WRITE));
+      setRole(String(PERM_READ_ONLY));
       setAlertHi(true);
       setAlertLo(true);
       setSubmitting(false);
