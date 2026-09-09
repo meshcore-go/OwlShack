@@ -492,7 +492,12 @@ func (s *Server) handleRadioStatus(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusServiceUnavailable, "modem not connected")
 		return
 	}
-	writeJSON(w, http.StatusOK, b.RadioStats())
+	info, ok := b.RadioStats()
+	if !ok {
+		writeError(w, http.StatusServiceUnavailable, "modem not connected")
+		return
+	}
+	writeJSON(w, http.StatusOK, info)
 }
 
 // handleRadioReset drops the modem and reconnects it. Returns 202: the reconnect runs in the

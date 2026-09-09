@@ -330,7 +330,12 @@ func (b *backend) SPIBoards() []api.SPIBoardInfo {
 }
 
 // RadioStats reports the modem's link counters, so the SPI path's fault counters are readable with MQTT off.
-func (b *backend) RadioStats() api.RadioStatsInfo {
+func (b *backend) RadioStats() (api.RadioStatsInfo, bool) {
+	// No provider means the modem never came up. Reporting a zeroed struct here would draw a page of
+	// healthy-looking counters for a radio that is not there.
+	if b.stats == nil {
+		return api.RadioStatsInfo{}, false
+	}
 	rc := b.stats.RadioConfig()
 	ls := b.stats.LinkStats()
 	out := api.RadioStatsInfo{
@@ -382,7 +387,7 @@ func (b *backend) RadioStats() api.RadioStatsInfo {
 	if r, ok := b.stats.(interface{ TxQueueLen() int }); ok {
 		out.TxQueueLen = r.TxQueueLen()
 	}
-	return out
+	return out, true
 }
 
 func (b *backend) ResetModem() {

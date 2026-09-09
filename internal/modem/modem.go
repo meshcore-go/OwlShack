@@ -44,25 +44,89 @@ func (m *State) Close() {
 	}
 }
 
-// StartDeadWatcher signals reconnectCh once when the read loop exits; a no-op for modems without Dead().
+// Liveness probe cadence. Three misses at 30s is ~90s to react, which is slow enough that a busy
+// modem dropping one reply cannot trigger a reconnect.
+const (
+	probeTimeout = 2 * time.Second
+	probeMisses  = 3
+)
+
+// A var so tests can shrink it; a probe goroutine must be stopped before a test restores it.
+var probeInterval = 30 * time.Second
+
+// StartDeadWatcher starts the watchers that ask for a reconnect: the transport's own read-loop-exited
+// signal, and a liveness probe for the case that signal cannot see. Both are skipped for a modem or
+// stats provider that does not support them, and both stop on Close.
 func (m *State) StartDeadWatcher(reconnectCh chan<- struct{}) {
-	d, ok := m.Modem.(interface{ Dead() <-chan struct{} })
-	if !ok {
-		return
-	}
 	m.watcherDone = make(chan struct{})
 	done := m.watcherDone
-	dead := d.Dead()
-	go func() {
-		select {
-		case <-dead:
+
+	if d, ok := m.Modem.(interface{ Dead() <-chan struct{} }); ok {
+		dead := d.Dead()
+		go func() {
 			select {
-			case reconnectCh <- struct{}{}:
-			default:
+			case <-dead:
+				select {
+				case reconnectCh <- struct{}{}:
+				default:
+				}
+			case <-done:
 			}
+		}()
+	}
+
+	if lr, ok := m.Stats.(interface{ LastReply() time.Time }); ok {
+		go m.probeLiveness(lr, reconnectCh, done)
+	}
+}
+
+// probeLiveness reconnects a modem that has stopped answering while its port stays open. The read
+// loop cannot detect this: a serial read timeout returns (0, nil), not an error, so a device that is
+// still enumerated but silent — a USB autosuspend that never resumes, wedged firmware, a stalled
+// passthrough — leaves the loop spinning every 100ms and Dead() never fires. Inbound frames are not
+// the signal: a quiet mesh is normal, so this asks the modem a question instead of waiting for one.
+func (m *State) probeLiveness(lr interface{ LastReply() time.Time }, reconnectCh chan<- struct{}, done <-chan struct{}) {
+	misses := 0
+	tick := time.NewTicker(probeInterval)
+	defer tick.Stop()
+
+	for {
+		select {
 		case <-done:
+			return
+		case <-tick.C:
 		}
-	}()
+
+		before := lr.LastReply()
+		if before.IsZero() {
+			// Never answered once. This firmware may not implement the queries at all, and a probe
+			// that cannot tell "unsupported" from "dead" would reconnect a working radio forever.
+			continue
+		}
+
+		ctx, cancel := context.WithTimeout(context.Background(), probeTimeout)
+		m.Stats.Stats(ctx)
+		cancel()
+
+		if lr.LastReply().After(before) {
+			misses = 0
+			continue
+		}
+
+		misses++
+		if misses < probeMisses {
+			slog.Warn("modem did not answer a status query",
+				"component", "modem", "misses", misses, "limit", probeMisses)
+			continue
+		}
+		slog.Error("modem stopped answering, reconnecting",
+			"component", "modem", "silent_for", time.Since(before).Round(time.Second))
+		select {
+		case reconnectCh <- struct{}{}:
+		default:
+		}
+		return
+	}
 }
 
 // MuxOptions builds the standard mux options, shared by startup and reconnect.

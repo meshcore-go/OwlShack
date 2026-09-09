@@ -23,6 +23,7 @@ import (
 	"github.com/meshcore-go/OwlShack/internal/modem"
 	"github.com/meshcore-go/OwlShack/internal/monitor"
 	"github.com/meshcore-go/OwlShack/internal/node/companion"
+	"github.com/meshcore-go/OwlShack/internal/node/repeater"
 	"github.com/meshcore-go/OwlShack/internal/signaltest"
 	"github.com/meshcore-go/OwlShack/internal/store"
 	"github.com/meshcore-go/OwlShack/web"
@@ -31,6 +32,11 @@ import (
 )
 
 const defaultListenAddr = ":8080"
+
+const (
+	initialRetryDelay = 1 * time.Second
+	maxRetryDelay     = 30 * time.Second
+)
 
 // applyListenEnvOverrides gives HOST/PORT precedence over the stored address; either may be set alone.
 func applyListenEnvOverrides(addr string) string {
@@ -107,13 +113,6 @@ func Run(ctx context.Context, importPath string, verbosity int) error {
 		slog.Error("board override file ignored", "component", "modem", "error", err)
 	}
 
-	ms, err := modem.Setup(ctx, cfg)
-	if err != nil {
-		return fmt.Errorf("modem setup: %w", err)
-	}
-	ms.StartDeadWatcher(reconnectCh)
-	mux := node.NewRadioMux(ms.Modem, modem.MuxOptions(ms)...)
-
 	srv := api.NewServer(db, web.Assets(), slog.Default())
 	reload := func() error {
 		p, err := os.FindProcess(os.Getpid())
@@ -141,7 +140,6 @@ func Run(ctx context.Context, importPath string, verbosity int) error {
 
 	// Long-lived across reloads: reaches the current companions through compReg, re-pointed on each reload.
 	compReg := newCompanionRegistry()
-	wirePacketLogger(mux, ms.Modem, db, srv, compReg)
 
 	mon := monitor.New(db, srv.Hub(), newMergedLister(newContactLister(compReg, db), newLinkLister(compReg, db)), slog.Default())
 	mon.RegisterCollector("repeater", newRepeaterCollector(compReg, db, slog.Default()))
@@ -155,27 +153,73 @@ func Run(ctx context.Context, importPath string, verbosity int) error {
 	tester.Start(ctx)
 	srv.SetSignalTester(tester)
 
-	companions, err := startCompanions(ctx, cfg, ms, mux, db, srv.Hub(), echoTracker)
-	if err != nil {
-		ms.Close()
-		return fmt.Errorf("companion startup: %w", err)
+	var (
+		ms         *modem.State
+		mux        *node.RadioMux
+		companions []*companion.Companion
+		rep        *repeater.Repeater
+	)
+	// startRadio brings up the modem and everything that hangs off it, leaving ms nil if it cannot.
+	// Failing is not fatal: exiting here would take away the page an operator uses to fix the connection.
+	startRadio := func(c *config.Config) error {
+		newMs, newMux, err := reconnectModem(ctx, c, db, srv, reconnectCh, compReg)
+		if err != nil {
+			return err
+		}
+		newComps, err := startCompanions(ctx, c, newMs, newMux, db, srv.Hub(), echoTracker)
+		if err != nil {
+			newMs.Close()
+			return fmt.Errorf("companion startup: %w", err)
+		}
+		newRep, err := startRepeater(ctx, c, newMux, db, srv.Hub(), newMs.Stats, reload)
+		if err != nil {
+			stopCompanions(newComps)
+			newMs.Close()
+			return fmt.Errorf("repeater startup: %w", err)
+		}
+		ms, mux, companions, rep = newMs, newMux, newComps, newRep
+		compReg.set(companions)
+		return nil
 	}
-	rep, err := startRepeater(ctx, cfg, mux, db, srv.Hub(), ms.Stats, reload)
-	if err != nil {
-		ms.Close()
-		return fmt.Errorf("repeater startup: %w", err)
+
+	// stopRadio tears the stack down and leaves the vars nil, which is the state startRadio recovers from.
+	stopRadio := func() {
+		stopCompanions(companions)
+		stopRepeater(rep)
+		if ms != nil {
+			ms.Close()
+		}
+		ms, mux, companions, rep = nil, nil, nil, nil
 	}
-	compReg.set(companions)
-	srv.SetBackend(newBackend(companions, rep, db, ms.Stats, mux, reload, resetModem))
+
+	// retryTimer is nil whenever no retry is pending, and a nil channel blocks forever in a select —
+	// which is how a retry queued while the radio was down gets cancelled the moment it comes up,
+	// instead of firing later and tearing down a working modem.
+	var retryTimer <-chan time.Time
+	retryDelay := initialRetryDelay
+	radioUp := func(err error) {
+		if err == nil {
+			retryTimer, retryDelay = nil, initialRetryDelay
+			return
+		}
+		retryTimer = time.After(retryDelay)
+		slog.Warn("radio unavailable, retrying", "error", err, "retryIn", retryDelay)
+		retryDelay = min(retryDelay*2, maxRetryDelay)
+	}
+
+	if err := startRadio(cfg); err != nil {
+		slog.Error("radio unavailable; serving the web UI so the connection can be corrected in Settings",
+			"error", err, "addr", listenAddr)
+		radioUp(err)
+	}
+	srv.SetBackend(newBackend(companions, rep, db, statsOf(ms), mux, reload, resetModem))
 
 	for {
 		select {
 		case <-ctx.Done():
 			slog.Info("shutting down...")
 			httpServer.Close()
-			stopCompanions(companions)
-			stopRepeater(rep)
-			ms.Close()
+			stopRadio()
 			return nil
 
 		case <-sighup:
@@ -195,26 +239,17 @@ func Run(ctx context.Context, importPath string, verbosity int) error {
 			logging.Configure(verbosity, newLogLevel)
 
 			var stats reloadStats
-			if config.ModemSettingsChanged(cfg, newCfg) {
-				slog.Info("modem config changed, reconnecting...")
-				stats.stopped = len(companions)
-				stopCompanions(companions)
-				stopRepeater(rep)
-				ms.Close()
-				ms, mux, err = reconnectModem(ctx, newCfg, db, srv, reconnectCh, compReg)
-				if err != nil {
-					return fmt.Errorf("modem reconnect after reload: %w", err)
+			// A reload with no radio always retries it: the save that just landed is how an operator
+			// corrects a connection the node could not open, and this is the only path back.
+			if ms == nil || config.ModemSettingsChanged(cfg, newCfg) {
+				if ms != nil {
+					slog.Info("modem config changed, reconnecting...")
+					stats.stopped = len(companions)
+					stopRadio()
 				}
-				companions, err = startCompanions(ctx, newCfg, ms, mux, db, srv.Hub(), echoTracker)
-				if err != nil {
-					ms.Close()
-					return fmt.Errorf("companion restart after reload: %w", err)
-				}
-				rep, err = startRepeater(ctx, newCfg, mux, db, srv.Hub(), ms.Stats, reload)
-				if err != nil {
-					ms.Close()
-					return fmt.Errorf("repeater restart after reload: %w", err)
-				}
+				// Not fatal, for the same reason startup is not: exiting takes away the page that
+				// would fix a wrong connection string.
+				radioUp(startRadio(newCfg))
 				stats.started = len(companions)
 			} else {
 				companions, stats, err = reloadCompanions(ctx, cfg, newCfg, companions, ms, mux, db, srv.Hub(), echoTracker)
@@ -230,37 +265,45 @@ func Run(ctx context.Context, importPath string, verbosity int) error {
 			}
 			cfg = newCfg
 			compReg.set(companions)
-			srv.SetBackend(newBackend(companions, rep, db, ms.Stats, mux, reload, resetModem))
+			srv.SetBackend(newBackend(companions, rep, db, statsOf(ms), mux, reload, resetModem))
 			slog.Info("config reloaded", "started", stats.started, "stopped", stats.stopped, "kept", stats.kept, "reloaded", stats.reloaded)
 
+		// One arm for both: the dead-radio watcher (and the UI's reset button) signal reconnectCh, and
+		// a failed attempt re-arms retryTimer. Retrying here rather than in a blocking backoff loop is
+		// what keeps a SIGHUP from the operator's fix from queueing behind the retries.
 		case <-reconnectCh:
-			slog.Warn("modem read loop exited, reconnecting...")
-
-			stopCompanions(companions)
-			stopRepeater(rep)
-			ms.Close()
-
-			ms, mux, err = reconnectModemWithBackoff(ctx, cfg, db, srv, reconnectCh, compReg)
-			if err != nil {
-				slog.Error("modem reconnect aborted", "error", err)
-				return nil
+			if ms != nil {
+				slog.Warn("modem read loop exited, reconnecting...")
+				stopRadio()
 			}
+			if err := startRadio(cfg); err == nil {
+				slog.Info("modem connected")
+				radioUp(nil)
+			} else {
+				radioUp(err)
+			}
+			srv.SetBackend(newBackend(companions, rep, db, statsOf(ms), mux, reload, resetModem))
 
-			companions, err = startCompanions(ctx, cfg, ms, mux, db, srv.Hub(), echoTracker)
-			if err != nil {
-				ms.Close()
-				return fmt.Errorf("companion restart after reconnect: %w", err)
+		case <-retryTimer:
+			retryTimer = nil
+			if err := startRadio(cfg); err == nil {
+				slog.Info("modem connected")
+				radioUp(nil)
+				srv.SetBackend(newBackend(companions, rep, db, statsOf(ms), mux, reload, resetModem))
+			} else {
+				radioUp(err)
 			}
-			rep, err = startRepeater(ctx, cfg, mux, db, srv.Hub(), ms.Stats, reload)
-			if err != nil {
-				ms.Close()
-				return fmt.Errorf("repeater restart after reconnect: %w", err)
-			}
-			compReg.set(companions)
-			srv.SetBackend(newBackend(companions, rep, db, ms.Stats, mux, reload, resetModem))
-			slog.Info("modem reconnected")
 		}
 	}
+}
+
+// statsOf keeps the nil modem out of every call site: a nil provider is what the backend reads as
+// "there is no radio", rather than a zeroed one it would report as healthy.
+func statsOf(ms *modem.State) modem.StatsProvider {
+	if ms == nil {
+		return nil
+	}
+	return ms.Stats
 }
 
 func startCompanions(ctx context.Context, cfg *config.Config, ms *modem.State, mux *node.RadioMux, db *store.Store, hub *api.Hub, echoTracker *echo.Tracker) ([]*companion.Companion, error) {
@@ -476,33 +519,6 @@ func reconnectModem(ctx context.Context, cfg *config.Config, db *store.Store, sr
 	mux := node.NewRadioMux(ms.Modem, modem.MuxOptions(ms)...)
 	wirePacketLogger(mux, ms.Modem, db, srv, compReg)
 	return ms, mux, nil
-}
-
-// reconnectModemWithBackoff retries reconnectModem with capped exponential backoff until ctx is cancelled.
-func reconnectModemWithBackoff(ctx context.Context, cfg *config.Config, db *store.Store, srv *api.Server, reconnectCh chan struct{}, compReg *companionRegistry) (*modem.State, *node.RadioMux, error) {
-	const (
-		initialDelay = 1 * time.Second
-		maxDelay     = 30 * time.Second
-	)
-	delay := initialDelay
-	for {
-		// Drain any reconnect signal queued during the previous lifetime.
-		select {
-		case <-reconnectCh:
-		default:
-		}
-		ms, mux, err := reconnectModem(ctx, cfg, db, srv, reconnectCh, compReg)
-		if err == nil {
-			return ms, mux, nil
-		}
-		slog.Warn("modem reconnect attempt failed", "error", err, "retryIn", delay)
-		select {
-		case <-ctx.Done():
-			return nil, nil, ctx.Err()
-		case <-time.After(delay):
-		}
-		delay = min(delay*2, maxDelay)
-	}
 }
 
 func derefInt8(p *int8) int8 {
