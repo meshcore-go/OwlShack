@@ -1,7 +1,7 @@
 {
   "boards": {
     "ultrapeaterzero-e22p": {
-      "label": "Zindello UltraPeaterZero (E22P, 30 dBm)",
+      "label": "Zindello UltraPeaterZero (E22P, 1 W)",
       "chip": "SX1262",
       "bus_id": 0,
       "cs_id": 0,
@@ -19,10 +19,10 @@
       "use_dio3_tcxo": true,
       "dio3_tcxo_voltage": 1.8,
       "verified": "hardware",
-      "notes": "PA reaches 30 dBm, LoRa core driven at 22. openhop's independent entry agrees on every pin."
+      "notes": "E22P-915M30S: 30 dBm PA with LNA and a band-pass filter, LoRa core driven at 22. openhop's independent entry agrees on every pin."
     },
     "ultrapeaterzero-e22": {
-      "label": "Zindello UltraPeaterZero (E22)",
+      "label": "Zindello UltraPeaterZero (E22, 1 W)",
       "chip": "SX1262",
       "bus_id": 0,
       "cs_id": 0,
@@ -39,7 +39,8 @@
       "use_dio2_rf": false,
       "use_dio3_tcxo": true,
       "dio3_tcxo_voltage": 1.8,
-      "verified": "community"
+      "verified": "hardware",
+      "notes": "E22-900M30S: same 30 dBm as the E22P but LNA only, no band-pass filter, so the host's own 2.4 GHz can swamp the receiver; keep the antenna clear of it."
     },
     "waveshare": {
       "label": "Waveshare LoRa HAT",

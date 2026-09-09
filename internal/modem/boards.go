@@ -35,18 +35,14 @@ type Board struct {
 	// Unsupported is why this build refuses the board, which stays listed anyway.
 	Unsupported string
 
-	leds ledPins
 	opts sx12xx.Opts
 }
 
 // Opts returns a copy of the board's driver options.
 func (b Board) Opts() sx12xx.Opts { return b.opts }
 
-// LEDs returns the board's activity LED pins, both empty when it has none.
-func (b Board) LEDs() ledPins { return b.leds }
-
 // HasLEDs reports whether the board drives activity LEDs.
-func (b Board) HasLEDs() bool { return b.leds.any() }
+func (b Board) HasLEDs() bool { return b.opts.TxLedPin != "" || b.opts.RxLedPin != "" }
 
 // boardFile is one entry in boards.json; pins are pointers because 0 is GPIO0, a real pin.
 type boardFile struct {
@@ -180,7 +176,6 @@ func (bf boardFile) board(name string) (Board, error) {
 		MaxTxPower: uint8(*bf.TxPower),
 		Verified:   bf.Verified,
 		Notes:      bf.Notes,
-		leds:       ledPins{Tx: txled, Rx: rxled},
 		opts: sx12xx.Opts{
 			Speed:             8 * physic.MegaHertz,
 			ResetPin:          reset,
@@ -189,6 +184,8 @@ func (bf boardFile) board(name string) (Board, error) {
 			CSPin:             cs,
 			TxEnPin:           txen,
 			RxEnPin:           rxen,
+			TxLedPin:          txled,
+			RxLedPin:          rxled,
 			EnablePins:        enables,
 			RegulatorMode:     sx12xx.RegulatorDCDCLDO,
 			UseDIO2AsRfSwitch: bf.UseDIO2RF != nil && *bf.UseDIO2RF,
