@@ -170,10 +170,12 @@ func (p *kissStatsProvider) PacketScore(snrDB float64, packetLen int) float64 {
 }
 
 func (p *kissStatsProvider) Stats(ctx context.Context) DeviceStats {
-	// A synchronous round-trip, unlike the fire-and-forget queries below, so it runs first and its
-	// reply is cached for LinkStats, which has no ctx to poll with. Firmware without
-	// HW_CMD_GET_STATS errors here and the counters stay nil, which is the honest answer: this
-	// modem cannot report them, rather than a 0 that reads as a radio hearing everything cleanly.
+	// Must stay ABOVE the fire-and-forget queries below, not merely for tidiness: the request
+	// waiter takes any HW_RESP_ERROR that is not TX_BUSY, whichever command provoked it, so a
+	// battery query answering HW_ERR_NO_CALLBACK while this one is in flight would fail it. That
+	// is the normal reply on a board with no cell. Cached because LinkStats has no ctx to poll
+	// with. Firmware without HW_CMD_GET_STATS errors here and the counters stay nil, which is the
+	// honest answer: this modem cannot report them, rather than a 0 that reads as a clean radio.
 	if fw, err := p.modem.FirmwareCounters(ctx); err != nil {
 		p.log.Debug("firmware counters unavailable", "error", err)
 	} else {
