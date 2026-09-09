@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"slices"
+	"strings"
 
 	"github.com/meshcore-go/OwlShack/internal/api"
 	"github.com/meshcore-go/OwlShack/internal/config"
@@ -318,6 +319,10 @@ func (b *backend) SaveTrigger(ctx context.Context, in api.TriggerInput) (int64, 
 
 // CreateRepeater seeds the "*" wildcard scope so the repeater relays unscoped flood, as the firmware implicitly does.
 func (b *backend) CreateRepeater(ctx context.Context, in api.RepeaterCreateInput) error {
+	if strings.TrimSpace(in.AdminPassword) == "" {
+		return errors.New("admin password is required: a blank one grants admin to any node in range")
+	}
+
 	var row store.Repeater
 	exists := false
 	return b.configMutate(ctx,
@@ -327,8 +332,9 @@ func (b *backend) CreateRepeater(ctx context.Context, in api.RepeaterCreateInput
 				return
 			}
 			row = store.Repeater{
-				Name:    in.Name,
-				Regions: []store.RepeaterRegion{{Name: config.WildcardRegion}},
+				Name:          in.Name,
+				AdminPassword: in.AdminPassword,
+				Regions:       []store.RepeaterRegion{{Name: config.WildcardRegion}},
 			}
 			if in.PrivateKey != nil && *in.PrivateKey != "" {
 				row.PrivateKey = *in.PrivateKey
@@ -404,6 +410,12 @@ func (b *backend) UpdateRepeaterRelay(ctx context.Context, in api.RepeaterRelayI
 
 // UpdateRepeaterAdmin edits the Owner & access section (nil password = keep).
 func (b *backend) UpdateRepeaterAdmin(ctx context.Context, in api.RepeaterAdminInput) error {
+	// Omitting the field keeps the stored value; sending "" would clear it, and a blank admin
+	// password compares equal to the blank a login sends. Guest may still be cleared: blank guest
+	// grants PERM_ACL_GUEST (0), which is what the firmware does.
+	if in.AdminPassword != nil && strings.TrimSpace(*in.AdminPassword) == "" {
+		return errors.New("admin password cannot be blank: omit the field to keep the current one")
+	}
 	return b.mutateRepeater(ctx, func(r *store.Repeater) {
 		r.OwnerInfo = in.OwnerInfo
 		r.AdminPassword = keepSecret(in.AdminPassword, r.AdminPassword)

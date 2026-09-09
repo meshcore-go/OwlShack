@@ -269,6 +269,9 @@ type ChannelInput struct {
 type RepeaterCreateInput struct {
 	Name       string  `json:"name"`
 	PrivateKey *string `json:"privateKey"` // nil/empty = generate
+	// AdminPassword is required and must be non-blank: a blank one compares equal to the blank a
+	// login sends, which granted admin to any node in range.
+	AdminPassword string `json:"adminPassword"`
 }
 
 // RepeaterNodeInput is the Node section; PrivateKey nil keeps the identity, a value rotates it.

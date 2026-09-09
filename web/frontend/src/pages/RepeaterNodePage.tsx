@@ -1251,6 +1251,7 @@ function PasswordField({
 function CreateCard({ onCreated }: { onCreated: () => void }) {
   const [name, setName] = useState("");
   const [privateKey, setPrivateKey] = useState("");
+  const [adminPassword, setAdminPassword] = useState("");
   const [saving, setSaving] = useState(false);
 
   const onCreate = async () => {
@@ -1258,6 +1259,7 @@ function CreateCard({ onCreated }: { onCreated: () => void }) {
     try {
       await configApi.createRepeater({
         name: name.trim(),
+        adminPassword,
         ...(privateKey.trim() !== "" ? { privateKey: privateKey.trim() } : {}),
       });
       toast.success("Repeater created");
@@ -1287,6 +1289,14 @@ function CreateCard({ onCreated }: { onCreated: () => void }) {
             hint="shown on the mesh and in adverts"
           />
           <TextField
+            label="Admin password"
+            type="password"
+            value={adminPassword}
+            onChange={setAdminPassword}
+            placeholder="required"
+            hint="what you log in with to administer this repeater, over the air. Max 15 characters, as the firmware stores. It cannot be blank: a blank one would let any node in range log in as admin"
+          />
+          <TextField
             label="Private key"
             type="password"
             value={privateKey}
@@ -1312,7 +1322,7 @@ function CreateCard({ onCreated }: { onCreated: () => void }) {
         <Button
           size="sm"
           onClick={onCreate}
-          disabled={saving || name.trim() === ""}
+          disabled={saving || name.trim() === "" || adminPassword.trim() === ""}
           className="rounded-none font-mono text-[11px] uppercase tracking-[0.12em]"
         >
           {saving ? <Loader2 className="size-3.5 animate-spin" /> : null}

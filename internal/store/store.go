@@ -202,6 +202,7 @@ var migrations = []func(context.Context, dbExecer) error{
 	migrateV6,   // 8 — map tile key, home region, advert clamp, path hash size, relay timing
 	migrateV7,   // 9 — settings.duty_cycle_pct (TX airtime budget)
 	migrateV8,   // 10 — settings.spi_board (SPI radio hat wiring)
+	migrateV9,   // 11 — repeater.admin_password backfilled off blank (blank granted admin)
 }
 
 // dbExecer is the subset of *sql.DB / *sql.Tx a migration needs.
@@ -601,6 +602,18 @@ func migrateV5(ctx context.Context, db dbExecer) error {
 		ALTER TABLE repeater ADD COLUMN flood_max_unscoped INTEGER;
 		ALTER TABLE repeater ADD COLUMN default_region TEXT NOT NULL DEFAULT '';
 	`)
+	return err
+}
+
+// migrateV9 closes a blank admin password. A blank one compared equal to the blank a login sends,
+// so any node in range was granted admin (permAdmin) on a repeater created before this. The
+// firmware never has a blank one — simple_repeater seeds ADMIN_PASSWORD "password" — so this
+// backfills to that same value rather than inventing one, and an operator changes it as they would
+// on any MeshCore repeater. Guest is left alone: blank guest grants PERM_ACL_GUEST (0), which is
+// what the firmware does too.
+func migrateV9(ctx context.Context, db dbExecer) error {
+	_, err := db.ExecContext(ctx,
+		`UPDATE repeater SET admin_password = 'password' WHERE admin_password = ''`)
 	return err
 }
 

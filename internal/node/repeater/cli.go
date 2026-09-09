@@ -513,9 +513,16 @@ func (r *Repeater) setMutation(key, val string) (func(*config.RepeaterConfig), s
 	}
 }
 
-// cliPassword echoes the stored, 15-char-truncated password, as the firmware reply does.
+// cliPassword echoes the stored, 15-char-truncated password, as the firmware reply does. The blank
+// check is belt-and-braces: dispatchCLI's TrimSpace already means "password " cannot match the
+// prefix, so nothing reaches here empty today. It is stated at the point of mutation because the
+// invariant matters more than the incidental trim — a blank admin password compares equal to the
+// blank a login sends, so clearing it hands admin to every node in range. Firmware allows it.
 func (r *Repeater) cliPassword(pass string) string {
 	pass = truncate(pass, maxPasswordLen)
+	if strings.TrimSpace(pass) == "" {
+		return "Error, password cannot be blank"
+	}
 	return r.applyCfg(func(c *config.RepeaterConfig) { c.AdminPassword = pass }, "password now: "+pass)
 }
 

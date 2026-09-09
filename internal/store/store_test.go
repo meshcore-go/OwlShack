@@ -763,7 +763,7 @@ func TestPacketRepo_ListFilter(t *testing.T) {
 // Bump wantVersion whenever a migration is appended to the migrations slice.
 func TestStore_MigrateUserVersion(t *testing.T) {
 	t.Parallel()
-	const wantVersion = 10 // migrateV1, 2 squashed noop slots, migrateV2..migrateV8
+	const wantVersion = 11 // migrateV1, 2 squashed noop slots, migrateV2..migrateV9
 	st := newTestStore(t)
 	var v int
 	if err := st.db.QueryRowContext(t.Context(), "PRAGMA user_version").Scan(&v); err != nil {
@@ -901,6 +901,8 @@ func TestMigrations_ShippedSlotsFrozen(t *testing.T) {
 	}{
 		{"v1.1.0", 7, "7af51d21828cd637"},
 		{"v1.2.0", 9, "e1e5fd0ea8417250"},
+		{"v1.3.0", 10, "0f622498527e26eb"},
+		{"v1.3.1", 11, "045401842c7b3fb7"},
 	}
 
 	st := newTestStore(t)
