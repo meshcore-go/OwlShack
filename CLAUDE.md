@@ -168,6 +168,7 @@ is the place to look.
 | Room posts stop mid-backlog | The push stream is ACK-gated — `handleRoomPush` must ACK hashing **our** pubkey. |
 | "Works on one repeater but not another" | Different admin passwords; the Settings tab is admin-only. |
 | Wrong password vs unreachable | Indistinguishable: ~10 s timeout either way, the firmware drops both. |
+| `kiss: tx failed` while RX and stats work | The **radio board**, not the link. `completeTx` raises it only when the firmware's TX-outcome frame says the transmit failed, so the serial side is healthy. Confirmed once by swapping the radio. |
 
 ## Known limitations / tech debt
 

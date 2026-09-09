@@ -47,7 +47,10 @@ type LinkStats struct {
 	TxOutcomeLost  uint64 // TX_DONE waits abandoned by a reconnect
 
 	// The SPI path's own counters; nil means the backend cannot measure them, 0 means it measured none.
-	CRCErrors *uint64 // chip-level CRC and header errors: a noisy channel
+	// PacketsRecv and PacketsSent are the chip's own totals; with CRCErrors they separate a deaf radio from one hearing only garbage.
+	PacketsRecv *uint64
+	PacketsSent *uint64
+	CRCErrors   *uint64 // chip-level CRC and header errors: a noisy channel
 	// DriverErrors is SPI transaction failures, busy timeouts and failed IRQ reads.
 	DriverErrors *uint64
 	// RecvRecoveries is the watchdog re-arming a stuck receiver.
@@ -55,6 +58,8 @@ type LinkStats struct {
 }
 
 type StatsProvider interface {
+	// Transport names the link ("kiss" or "spi"), which decides which counters can move at all.
+	Transport() string
 	RadioConfig() RadioInfo
 	Stats(ctx context.Context) DeviceStats
 	// LinkStats takes no ctx: atomic loads, unlike Stats which polls the board over the wire.
@@ -106,6 +111,8 @@ func (p *kissStatsProvider) LinkStats() LinkStats {
 		TxOutcomeLost:        s.TxOutcomeLost,
 	}
 }
+
+func (p *kissStatsProvider) Transport() string { return "kiss" }
 
 func (p *kissStatsProvider) RadioConfig() RadioInfo {
 	return p.radio

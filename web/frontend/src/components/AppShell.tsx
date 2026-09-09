@@ -1,5 +1,6 @@
 import { useEffect, useRef, useState } from "react";
 import {
+  Antenna,
   Activity,
   AudioLines,
   Bot,
@@ -87,6 +88,12 @@ const TELEMETRY: NavItem[] = [
     label: "Monitoring",
     icon: Gauge,
     match: (p) => p.startsWith("/monitoring"),
+  },
+  {
+    to: "/radio",
+    label: "Radio",
+    icon: Antenna,
+    match: (p) => p === "/radio",
   },
 ];
 

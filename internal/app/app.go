@@ -91,6 +91,15 @@ func Run(ctx context.Context, importPath string, verbosity int) error {
 	defer signal.Stop(sighup)
 
 	reconnectCh := make(chan struct{}, 1)
+	// resetModem lets the API ask for the reconnect a vanished port triggers. The channel is buffered
+	// and the send non-blocking, so a reset while one is already running is a no-op rather than a queue.
+	resetModem := func() {
+		slog.Warn("modem reset requested")
+		select {
+		case reconnectCh <- struct{}{}:
+		default:
+		}
+	}
 
 	// Not fatal: a KISS node never consults it, and an SPI node naming a board it
 	// failed to define fails at LookupBoard with that name in the error.
@@ -157,7 +166,7 @@ func Run(ctx context.Context, importPath string, verbosity int) error {
 		return fmt.Errorf("repeater startup: %w", err)
 	}
 	compReg.set(companions)
-	srv.SetBackend(newBackend(companions, rep, db, reload))
+	srv.SetBackend(newBackend(companions, rep, db, ms.Stats, mux, reload, resetModem))
 
 	for {
 		select {
@@ -221,7 +230,7 @@ func Run(ctx context.Context, importPath string, verbosity int) error {
 			}
 			cfg = newCfg
 			compReg.set(companions)
-			srv.SetBackend(newBackend(companions, rep, db, reload))
+			srv.SetBackend(newBackend(companions, rep, db, ms.Stats, mux, reload, resetModem))
 			slog.Info("config reloaded", "started", stats.started, "stopped", stats.stopped, "kept", stats.kept, "reloaded", stats.reloaded)
 
 		case <-reconnectCh:
@@ -248,7 +257,7 @@ func Run(ctx context.Context, importPath string, verbosity int) error {
 				return fmt.Errorf("repeater restart after reconnect: %w", err)
 			}
 			compReg.set(companions)
-			srv.SetBackend(newBackend(companions, rep, db, reload))
+			srv.SetBackend(newBackend(companions, rep, db, ms.Stats, mux, reload, resetModem))
 			slog.Info("modem reconnected")
 		}
 	}

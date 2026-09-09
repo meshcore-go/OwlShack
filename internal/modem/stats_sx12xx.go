@@ -39,6 +39,8 @@ func (p *sx12xxStatsProvider) NoteError(err error) {
 
 func (p *sx12xxStatsProvider) DriverErrors() uint64 { return p.driverErrors.Load() }
 
+func (p *sx12xxStatsProvider) Transport() string { return "spi" }
+
 func (p *sx12xxStatsProvider) RadioConfig() RadioInfo { return p.radio }
 
 // Stats reports the modem's noise floor and our uptime; battery and MCU temperature stay absent because a Pi has neither sensor.
@@ -70,11 +72,13 @@ func modemLinkStats(ls LinkStats, driverErrors, recoveries, handlerSlow uint64) 
 }
 
 func radioLinkStats(s sx12xx.RadioStats) LinkStats {
-	crc := s.PacketsCRCErrors
+	crc, recv, sent := s.PacketsCRCErrors, s.PacketsRecv, s.PacketsSent
 	return LinkStats{
 		InboundDroppedNew: s.PacketsDropped,
 		HwDecodeErrors:    s.PacketsRecvErrors,
 		CRCErrors:         &crc,
+		PacketsRecv:       &recv,
+		PacketsSent:       &sent,
 	}
 }
 
