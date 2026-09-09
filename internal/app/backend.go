@@ -358,6 +358,7 @@ func (b *backend) RadioStats() (api.RadioStatsInfo, bool) {
 		PacketsRecv:          ls.PacketsRecv,
 		PacketsSent:          ls.PacketsSent,
 		CRCErrors:            ls.CRCErrors,
+		RecvErrors:           ls.RecvErrors,
 		DriverErrors:         ls.DriverErrors,
 		RecvRecoveries:       ls.RecvRecoveries,
 		Transport:            b.stats.Transport(),

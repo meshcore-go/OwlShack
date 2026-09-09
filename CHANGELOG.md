@@ -3,6 +3,55 @@
 Notable changes per release. Dates are the tag date; unreleased work sits at the
 top until tagged.
 
+## v1.3.2
+
+Corrects two fields on the MQTT status schema that carried a different measurement from the one
+their name promises. The schema is shared: `meshcoretomqtt` forwards real firmware nodes to the
+same brokers under the same topic, and it is the client LetsMesh recommends, so the names were
+already defined by the firmware and OwlShack was the one publishing something else into them.
+
+Baseline `v1.3.1` · no schema change
+
+### Upgrading
+
+- **`recv_errors` changes meaning.** It now carries radio-driver receive failures, matching the
+  firmware's own field (`driver.getPacketsRecvErrors()`, which `RadioLibWrapper::recvRaw`
+  increments when `readData` fails after the interrupt). It was carrying packet parse failures.
+  On a KISS modem it is now **0**: the TNC does not expose its driver counters over telemetry
+  frames, only through the CLI stats reply.
+- **`packet_parse_errors` is new** and carries what `recv_errors` used to: bytes that arrived
+  intact and did not decode as a MeshCore packet. The radio did its job; something else sent
+  malformed bytes.
+- **A dashboard keyed on `recv_errors` will see OwlShack nodes change**, in most cases dropping to
+  0 on KISS. Nothing errors and no key disappears, so the change is invisible on the wire. Read
+  `client_version` if you need to tell the versions apart.
+- No database migration; `user_version` stays 11.
+
+### Fixed
+
+- **`recv_errors` published a parse failure under a name the firmware had already defined** as a
+  radio-driver counter. A consumer aggregating across firmware nodes and OwlShack nodes was
+  summing two unrelated measurements, with no way to tell them apart.
+- **`hw_decode_errors` published an SPI data-packet readout failure** on the SPI path.
+  `PacketsRecvErrors` was mapped into it, but that field is a malformed KISS **SETHARDWARE** frame,
+  which is the battery, MCU-temperature and noise-floor channel rather than a mesh packet. It is
+  now KISS-only, publishing 0 on SPI like the other four KISS counters, and `PacketsRecvErrors`
+  goes to `recv_errors` where it belongs.
+- **A driver error incremented two counters.** On the SPI path the modem error handler fed both
+  `driver_errors` and the parse count, so `driver_errors` was a strict subset of `recv_errors` and
+  the same event was counted twice. `recv_errors` also meant different things on the two
+  transports: parse failures on KISS, parse plus driver failures on SPI.
+- `GET /api/radio/status` omits `hwDecodeErrors` on SPI rather than reporting a 0 it never
+  measured, and gains `recvErrors` on SPI. The MQTT payload keeps publishing both keys on both
+  transports, because omitting a key there is a coordinated change and dropping to 0 is not.
+
+### Known limitations
+
+- The rename is invisible to a consumer that does not parse `client_version`. Whoever runs
+  CoreScope or LetsMesh is better told than left to notice.
+- `packet_parse_errors` has not been observed non-zero on the bench. Read a 0 there as
+  "nothing malformed arrived, or the path is not exercised", not as proof the counter works.
+
 ## v1.3.1
 
 **Security fix.** A repeater created through OwlShack had no admin password, and a blank one

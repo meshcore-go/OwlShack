@@ -95,9 +95,10 @@ func setupSPI(ms *State, cfg *config.Config, connAddr string, radioConfig *hardw
 		sx12xx.WithModemLogger(slog.Default()),
 		// The KISS threshold, so handler_slow means the same on both paths.
 		sx12xx.WithHandlerWatchdog(handlerWatchdog),
+		// NoteError owns driver_errors; ms.ParseErrors counts only what fails to decode as a
+		// MeshCore packet, so a driver fault must not land in both.
 		sx12xx.WithModemErrorHandler(func(err error) {
 			stats.NoteError(err)
-			ms.RecvErrors.Add(1)
 		}),
 	)
 	if err != nil {

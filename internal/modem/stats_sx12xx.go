@@ -73,12 +73,13 @@ func modemLinkStats(ls LinkStats, driverErrors, recoveries, handlerSlow uint64) 
 
 func radioLinkStats(s sx12xx.RadioStats) LinkStats {
 	crc, recv, sent := s.PacketsCRCErrors, s.PacketsRecv, s.PacketsSent
+	recvErrs := s.PacketsRecvErrors
 	return LinkStats{
 		InboundDroppedNew: s.PacketsDropped,
-		HwDecodeErrors:    s.PacketsRecvErrors,
 		CRCErrors:         &crc,
 		PacketsRecv:       &recv,
 		PacketsSent:       &sent,
+		RecvErrors:        &recvErrs,
 	}
 }
 

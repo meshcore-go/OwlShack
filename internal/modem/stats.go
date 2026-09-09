@@ -40,10 +40,11 @@ type LinkStats struct {
 	// InboundDroppedNew is a frame discarded because our inbound queue was full; the SPI driver's own drop count lands here.
 	InboundDroppedNew uint64
 	// HandlerSlow counts dispatches over the watchdog; DATA dispatch is serial, so one slow handler stalls RX for every consumer.
-	HandlerSlow    uint64
-	HwDecodeErrors uint64
+	HandlerSlow uint64
 
 	// KISS framing concepts: the SPI chip hands us a decoded packet with its metadata attached, so none of these can occur there.
+	// HwDecodeErrors is a malformed SETHARDWARE frame, i.e. the battery/temp/noise-floor channel, not a mesh packet.
+	HwDecodeErrors       *uint64
 	InboundDroppedOldest *uint64
 	// RxMetaTimeouts: metadata never arrived. RxMetaMisattributed: matched to the wrong packet, so its SNR/RSSI is wrong.
 	RxMetaTimeouts      *uint64
@@ -56,6 +57,11 @@ type LinkStats struct {
 	PacketsRecv *uint64
 	PacketsSent *uint64
 	CRCErrors   *uint64 // chip-level CRC and header errors: a noisy channel
+	// RecvErrors is the radio driver failing to read a packet it knew had arrived. This is the
+	// firmware's recv_errors (RadioLibWrapper::recvRaw increments it when readData fails after the
+	// interrupt), so it publishes under that name. Not reachable over KISS: the TNC keeps its
+	// driver counters to itself and only exposes them through the CLI stats reply.
+	RecvErrors *uint64
 	// DriverErrors is SPI transaction failures, busy timeouts and failed IRQ reads.
 	DriverErrors *uint64
 	// RecvRecoveries is the watchdog re-arming a stuck receiver.
@@ -125,7 +131,7 @@ func (p *kissStatsProvider) LinkStats() LinkStats {
 	return LinkStats{
 		InboundDroppedNew:    s.InboundDroppedNew,
 		HandlerSlow:          s.HandlerSlow,
-		HwDecodeErrors:       s.HwDecodeErrors,
+		HwDecodeErrors:       &s.HwDecodeErrors,
 		InboundDroppedOldest: &s.InboundDroppedOldest,
 		RxMetaTimeouts:       &s.RxMetaTimeouts,
 		RxMetaMisattributed:  &s.RxMetaMisattributed,
