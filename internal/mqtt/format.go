@@ -28,7 +28,7 @@ type packetMessage struct {
 	Route      string `json:"route"`
 	PayloadLen string `json:"payload_len"`
 	Raw        string `json:"raw"`
-	// RX-only, matching meshcoretomqtt: on a TX row these would report a measured 0 dB / 0 dBm for our own transmission.
+	// RX-only, matching Cisien/meshcoretomqtt (the Andrew-a-g fork has no duration at all): on a TX row these would report a measured 0 dB / 0 dBm for our own transmission.
 	SNR      string `json:"SNR,omitempty"`
 	RSSI     string `json:"RSSI,omitempty"`
 	Score    string `json:"score,omitempty"`

@@ -12,6 +12,7 @@ import (
 
 	"github.com/meshcore-go/OwlShack/internal/config"
 	meshcore "github.com/meshcore-go/meshcore-go"
+	"github.com/meshcore-go/meshcore-go/node"
 )
 
 // fakeBroker answers MQTT 3.1.1 CONNECT with CONNACK and ACKs what it can, which is all paho's Connect needs.
@@ -143,6 +144,46 @@ func waitFor(t *testing.T, what string, d time.Duration, cond func() bool) {
 	t.Fatalf("timed out waiting for %s", what)
 }
 
+// A broker that fails its FIRST connect must still be registered and still be retrying: Start appends
+// before it dials for exactly this reason, and an append moved below the dial would drop the broker
+// from o.brokers entirely, leaving nothing holding a reference and no path back but a SIGHUP.
+func TestStart_RegistersABrokerThatFailsItsFirstConnect(t *testing.T) {
+	shrinkBackoff(t)
+	_, port := freePort(t) // nothing listening: the first connect cannot succeed
+
+	o := testObserver(t)
+	o.radio = (&node.RadioMux{}).NewRadio()
+	o.cfg = config.MqttConfig{Brokers: []config.BrokerConfig{{
+		Name: "down", Host: "127.0.0.1", Port: port,
+		Transport: "tcp", AuthType: "basic", Enabled: true,
+	}}}
+
+	ctx, cancel := context.WithCancel(context.Background())
+	if err := o.Start(ctx); err != nil {
+		t.Fatalf("Start: %v", err)
+	}
+
+	brokers := o.brokerList()
+	if len(brokers) != 1 {
+		t.Fatalf("unreachable broker not registered: got %d brokers, want 1", len(brokers))
+	}
+	bc := brokers[0]
+
+	// The retry goroutine reads the backoff vars that shrinkBackoff restores on cleanup, so it has to be gone first.
+	t.Cleanup(func() {
+		o.Stop()
+		cancel()
+		for deadline := time.Now().Add(2 * time.Second); time.Now().Before(deadline) && bc.retrying.Load(); {
+			time.Sleep(5 * time.Millisecond)
+		}
+	})
+
+	if bc.currentClient() != nil {
+		t.Error("a broker that never connected must hold no client")
+	}
+	waitFor(t, "the retry loop to take ownership", time.Second, bc.retrying.Load)
+}
+
 // A broker down at startup must keep retrying: paho's SetAutoReconnect does not cover a client that never connected.
 func TestRetryConnect_RecoversWhenBrokerAppears(t *testing.T) {
 	shrinkBackoff(t)
@@ -245,8 +286,15 @@ func TestRetryConnect_SecondCallIsNoOp(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 
-	go o.retryConnect(ctx, bc)
+	first := make(chan struct{})
+	go func() { defer close(first); o.retryConnect(ctx, bc) }()
 	waitFor(t, "first loop running", 3*time.Second, bc.retrying.Load)
+
+	// The loop reads the backoff vars shrinkBackoff restores on cleanup, so it must be gone first.
+	t.Cleanup(func() {
+		cancel()
+		<-first
+	})
 
 	returned := make(chan struct{})
 	go func() { defer close(returned); o.retryConnect(ctx, bc) }()
