@@ -9,8 +9,9 @@ type Backend interface {
 	// SPIBoards lists the radio hats this build knows how to wire.
 	SPIBoards() []SPIBoardInfo
 
-	// RadioStats reports the modem's link counters; on the SPI path they are the radio's only health signal.
-	RadioStats() RadioStatsInfo
+	// RadioStats reports the modem's link counters; on the SPI path they are the radio's only health
+	// signal. False means there is no modem to report on, which must not be answered with zeroes.
+	RadioStats() (RadioStatsInfo, bool)
 
 	// ResetModem drops the modem and reconnects it, the same path a vanished serial port takes.
 	ResetModem()

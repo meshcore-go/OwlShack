@@ -5,6 +5,7 @@ import (
 	"encoding/binary"
 	"log/slog"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/meshcore-go/OwlShack/internal/logging"
@@ -79,12 +80,29 @@ type kissStatsProvider struct {
 	startTime time.Time
 	log       *slog.Logger
 
+	// lastReply is UnixNano of the modem's last answer to a hardware query; 0 means it has never
+	// answered one, which is how the liveness probe tells "unsupported" from "stopped talking".
+	lastReply atomic.Int64
+
 	mu          sync.Mutex
 	noiseFloor  int16
 	batteryMV   uint16
 	haveBattery bool
 	mcuTempC    float64
 	haveMCUTemp bool
+}
+
+// staleReadingAfter is how long a board reading survives without the modem answering. Longer than
+// one probe interval so a single dropped reply does not flap the value in and out of the payload.
+const staleReadingAfter = 45 * time.Second
+
+// LastReply reports when the modem last answered a hardware query; the zero time means never.
+func (p *kissStatsProvider) LastReply() time.Time {
+	ns := p.lastReply.Load()
+	if ns == 0 {
+		return time.Time{}
+	}
+	return time.Unix(0, ns)
 }
 
 func NewKissStatsProvider(modem *hardware.KissModem, radio RadioInfo) *kissStatsProvider {
@@ -152,26 +170,39 @@ func (p *kissStatsProvider) Stats(ctx context.Context) DeviceStats {
 	case <-time.After(500 * time.Millisecond):
 	}
 
-	p.mu.Lock()
-	defer p.mu.Unlock()
-	ds := DeviceStats{
-		NoiseFloor:  p.noiseFloor,
-		BatteryMV:   p.batteryMV,
-		HaveBattery: p.haveBattery,
-		UptimeSecs:  uint32(time.Since(p.startTime).Seconds()),
-		MCUTempC:    p.mcuTempC,
-		HaveMCUTemp: p.haveMCUTemp,
-	}
+	ds := p.snapshot()
 	p.log.Log(ctx, logging.LevelTrace, "stats polled",
 		"noise_floor", ds.NoiseFloor, "battery_mv", ds.BatteryMV,
-		"mcu_temp_c", ds.MCUTempC, "uptime_secs", ds.UptimeSecs)
+		"mcu_temp_c", ds.MCUTempC, "uptime_secs", ds.UptimeSecs,
+		"readings_current", ds.HaveBattery || ds.HaveMCUTemp)
 	return ds
+}
+
+// snapshot builds the reading set without touching the modem, so a board reading is only reported
+// while the modem is still answering. The reply flags are sticky: a modem whose serial port had gone
+// away kept publishing its last battery voltage and temperature, so a consumer saw a healthy 4.1 V
+// board at the moment the port was closed.
+func (p *kissStatsProvider) snapshot() DeviceStats {
+	last := p.LastReply()
+	fresh := !last.IsZero() && time.Since(last) <= staleReadingAfter
+
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	return DeviceStats{
+		NoiseFloor:  p.noiseFloor,
+		BatteryMV:   p.batteryMV,
+		HaveBattery: p.haveBattery && fresh,
+		UptimeSecs:  uint32(time.Since(p.startTime).Seconds()),
+		MCUTempC:    p.mcuTempC,
+		HaveMCUTemp: p.haveMCUTemp && fresh,
+	}
 }
 
 func (p *kissStatsProvider) onNoiseFloor(_ byte, data []byte) {
 	if len(data) < 2 {
 		return
 	}
+	p.lastReply.Store(time.Now().UnixNano())
 	p.mu.Lock()
 	p.noiseFloor = int16(binary.LittleEndian.Uint16(data[:2]))
 	p.mu.Unlock()
@@ -182,6 +213,7 @@ func (p *kissStatsProvider) onMCUTemp(_ byte, data []byte) {
 	if len(data) < 2 {
 		return
 	}
+	p.lastReply.Store(time.Now().UnixNano())
 	p.mu.Lock()
 	p.mcuTempC = float64(int16(binary.LittleEndian.Uint16(data[:2]))) / 10
 	p.haveMCUTemp = true
@@ -192,6 +224,7 @@ func (p *kissStatsProvider) onBattery(_ byte, data []byte) {
 	if len(data) < 2 {
 		return
 	}
+	p.lastReply.Store(time.Now().UnixNano())
 	p.mu.Lock()
 	p.batteryMV = binary.LittleEndian.Uint16(data[:2])
 	p.haveBattery = true
