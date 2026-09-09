@@ -5,7 +5,8 @@ The published MQTT wire schema (shared with meshcore-bot), the TX duty cycle, an
 ## MQTT wire schema
 
 **Verify a name against the consumer, not just the firmware.** CoreScope
-(<https://github.com/Kpa-clawbot/corescope>) is open source and its
+(<https://github.com/Kpa-clawbot/CoreScope>, default branch **master**
+not `main` — a raw fetch of a `main` path 404s) is open source and its
 `cmd/ingestor/main.go` is the readable record of what a real consumer parses:
 `nestedOrTopLevel` checks `stats` first then top level (so a field's placement
 is forgiving, its *name* is not), and `toFloat64` accepts numbers **and numeric
@@ -13,6 +14,12 @@ strings** via `ParseFloat`. Two consequences worth remembering: moving a field
 into `stats` breaks nothing there, and a decimal SNR string is not rejected —
 integer SNR is right because it is the firmware/bridge convention, not because
 CoreScope would choke on `"4.75"`.
+
+**"meshcoretomqtt" is two forks, so cite the one you checked.**
+`Cisien/meshcoretomqtt` is the packaged layout (`bridge/message_parser.py`,
+`bridge/serial_connection.py`) and is the one this doc quotes;
+`Andrew-a-g/meshcoretomqtt` is a single root `mctomqtt.py` whose field set
+differs — it has no `duration` at all. Paths below are Cisien's.
 
 **meshcoretomqtt scrapes the firmware's serial output, but it does NOT forward
 it whole.** The packet payload comes from the `MESH_PACKET_LOGGING` line via one
@@ -94,7 +101,7 @@ observed parse.
 | Packet (meshcoretomqtt) | 18 | **18 — complete** |
 | Status top level (meshcoretomqtt) | 8 | **8 — complete** |
 | Status `stats` (meshcoretomqtt) | 8 | 6 — missing `debug_flags`, `tx_air_secs` |
-| Status (CoreScope ingest) | 9 | 7 — missing `tx_air_secs`, `repeat` |
+| Status (CoreScope ingest) | 9 | 8 — missing `tx_air_secs` |
 
 Plus 22 `stats` extensions of our own that no consumer reads yet.
 
@@ -119,7 +126,7 @@ Two coverage gaps that are not field-shaped:
 - **`path` is not a route.** It reproduces `Dispatcher.cpp`'s `[%02X -> %02X]` trailer — `payload[1] -> payload[0]`, i.e. source then destination hash prefix — for the four addressed payload types on a direct route only. Published without brackets, RX only.
 - **Packet counters ship under two names, and both have a reader.** `recv`/`sent` are the firmware's `stats-packets` names, also the vocabulary of CoreScope's client-RF topic; `packets_recv`/`packets_sent` are what CoreScope's *observer-status* ingest reads (`extractObserverMeta`, `cmd/ingestor/main.go`), with no alternative accepted. Publishing only one set silently drops the counters for one of them. The pre-release name `packets_received` was read by nothing — the key that consumer needs is `packets_recv`, so our RX count had never been ingested. `format_test.go` asserts all four keys and that the aliases agree.
 - **Absent on purpose**, because nothing here can populate them: `errors` (firmware `_err_flags`), `flood_tx` / `direct_tx`, `tx_air_secs` — the observer taps the mux's RX side only and the mux exposes no airtime total. A permanent 0 reads as a silent radio. **CoreScope does read `tx_air_secs`**, so this one costs a real consumer a real field; populating it needs an outbound handler on the modem, the way `wirePacketLogger` does. CoreScope's own client-RF spec takes the same position we do ("Absent stays SQL NULL, never 0 — storing 0 would read as a perfectly clean channel").
-- **`repeat` is a gap we could close cheaply**: firmware 1.16 publishes a top-level `repeat` flag and CoreScope reads it into `CanRelay`. We publish nothing, so our node never advertises that it relays. Near-collision: our `hw_errors` is the KISS driver's HW_RESP_ERROR frame count, **not** the firmware's `errors`.
+- **`repeat` is published** top-level from `obs.Relaying` (`SetRelaying`, pushed before `Start` and re-pushed after a SIGHUP reload), matching firmware 1.16 and CoreScope's `CanRelay`. It must stay at the top level, never inside `stats`: CoreScope reads `msg` directly, and a missing field leaves `CanRelay` nil so the prior value persists. Tests pin both halves. Near-collision: our `hw_errors` is the KISS driver's HW_RESP_ERROR frame count, **not** the firmware's `errors`.
 - `rx_meta_misattributed` is the one to watch: signal metadata matched to the wrong packet means the `snr`/`rssi` we published was wrong, and we feed LetsMesh/CoreScope — that corrupts other people's link budgets.
 - `handler_slow` is non-zero only because `modem.Setup` passes `hardware.WithHandlerWatchdog(500ms)` — a constant, not a knob. With `WithRxDelay` set (the repeater does) the real work runs on the library's `runInbound` goroutine, so it measures the companion's and observer's handlers, not the repeater's.
 

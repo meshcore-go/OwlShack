@@ -314,18 +314,9 @@ func (o *Observer) Start(ctx context.Context) error {
 		o.brokers = append(o.brokers, bc)
 		o.brokersMu.Unlock()
 
-		client, err := o.connectBroker(bcfg, iata)
-		if err != nil {
-			o.log.Error("broker connect failed, retrying in background",
-				"broker", bcfg.Name, "error", err, "retry_in", connectRetryMin)
-			o.recordBrokerErr(bcfg.Name, err)
-			go o.retryConnect(ctx, bc)
-			continue
-		}
-		bc.swapClient(client)
-		o.recordConnected(bcfg.Name)
-		o.publishStatus(ctx, bc, "online")
-		o.log.Info("connected", "broker", bcfg.Name)
+		// Dialled off the caller's goroutine: connectBroker blocks up to connectWaitTimeout, so N
+		// unreachable brokers would cost the companion N x that on startup and on every SIGHUP reload.
+		go o.retryConnect(ctx, bc)
 	}
 
 	o.radio.SetPacketFilter(func(_ *meshcore.Packet) bool { return true })
@@ -546,7 +537,9 @@ func (o *Observer) retryConnect(ctx context.Context, bc *brokerClient) {
 	}
 	defer bc.retrying.Store(false)
 
-	delay := connectRetryMin
+	// The first attempt is immediate; backoff applies only once one has failed.
+	var delay time.Duration
+	firstFailure := true
 	for {
 		select {
 		case <-ctx.Done():
@@ -563,10 +556,24 @@ func (o *Observer) retryConnect(ctx context.Context, bc *brokerClient) {
 		client, err := o.connectBroker(bc.cfg, bc.iata)
 		if err != nil {
 			o.recordBrokerErr(bc.cfg.Name, err)
-			delay = min(delay*2, connectRetryMax)
-			o.log.Debug("broker connect retry failed",
-				"broker", bc.cfg.Name, "error", err, "retry_in", delay)
+			delay = min(max(delay*2, connectRetryMin), connectRetryMax)
+			// The first failure is the one an operator needs to see; the rest are a loop.
+			if firstFailure {
+				firstFailure = false
+				o.log.Error("broker connect failed, retrying in background",
+					"broker", bc.cfg.Name, "error", err, "retry_in", delay)
+			} else {
+				o.log.Debug("broker connect retry failed",
+					"broker", bc.cfg.Name, "error", err, "retry_in", delay)
+			}
 			continue
+		}
+		// Stop may have run while we were dialling; adopting the client now would leak a live connection.
+		select {
+		case <-bc.stop:
+			client.Disconnect(0)
+			return
+		default:
 		}
 		if old := bc.currentClient(); old != nil {
 			old.Disconnect(0)
@@ -610,11 +617,12 @@ func (o *Observer) refreshToken(ctx context.Context, bc *brokerClient) bool {
 		return false
 	}
 	o.log.Debug("refreshing token", "broker", bc.cfg.Name)
-	// Disconnect first: the new client reuses the ClientID, so the broker would kick each in turn.
-	c.Disconnect(250)
 
 	newClient, err := o.connectBroker(bc.cfg, bc.iata)
 	if err != nil {
+		// Drop the stale client only here, not before the dial: its token has minutes left, so
+		// retryConnect's already-connected guard would see it healthy and return without dialling.
+		c.Disconnect(250)
 		o.log.Error("token refresh reconnect failed, retrying in background",
 			"broker", bc.cfg.Name, "error", err)
 		o.recordBrokerErr(bc.cfg.Name, err)
@@ -622,7 +630,12 @@ func (o *Observer) refreshToken(ctx context.Context, bc *brokerClient) bool {
 		go o.retryConnect(ctx, bc)
 		return false
 	}
+	// Swap before dropping the old one: the new client is already live, so publishes never see the
+	// dial as a gap, and the duplicate-ClientID overlap lasts only as long as the swap. Disconnecting
+	// here rather than after publishStatus keeps that overlap far inside paho's 1s reconnect delay,
+	// so the kicked old session cannot come back and fight for the ClientID.
 	bc.swapClient(newClient)
+	c.Disconnect(250)
 	o.publishStatus(ctx, bc, "online")
 	o.log.Info("token refreshed", "broker", bc.cfg.Name)
 	return true
