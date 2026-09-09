@@ -22,7 +22,7 @@ import {
 } from "@/components/ui/dropdown-menu";
 import { PeerDetailSheet } from "@/components/PeerDetailSheet";
 import { deletePeers, deletedPeersMessage } from "@/lib/peerApi";
-import { themeTileLayer, useThemeTiles } from "@/lib/leaflet";
+import { peerLatLon, themeTileLayer, useThemeTiles, wrapLon } from "@/lib/leaflet";
 import { snrFill } from "@/components/SignalStrength";
 import { cn } from "@/lib/utils";
 
@@ -57,10 +57,6 @@ function isPeer(value: unknown): value is Peer {
   if (!value || typeof value !== "object") return false;
   const v = value as Record<string, unknown>;
   return typeof v.pubkey === "string" && typeof v.name === "string";
-}
-
-function wrapLon(lon: number): number {
-  return ((lon + 180) % 360 + 360) % 360 - 180;
 }
 
 function dotIcon(color: string): L.DivIcon {
@@ -249,8 +245,7 @@ export function MapPage() {
     }
 
     for (const p of visible) {
-      const lat = p.lat / 1e6;
-      const lon = wrapLon(p.lon / 1e6);
+      const [lat, lon] = peerLatLon(p.lat, p.lon);
       const icon = PEER_ICONS[p.type] || PEER_ICONS.NONE;
       const existing = markers.get(p.pubkey);
       if (existing) {
@@ -267,7 +262,7 @@ export function MapPage() {
 
     if (!fittedRef.current && visible.length > 0) {
       const bounds = L.latLngBounds(
-        visible.map((p) => [p.lat / 1e6, wrapLon(p.lon / 1e6)] as [number, number]),
+        visible.map((p) => peerLatLon(p.lat, p.lon)),
       );
       if (bounds.isValid()) {
         map.fitBounds(bounds, { padding: [40, 40], maxZoom: 12 });
@@ -287,8 +282,8 @@ export function MapPage() {
     const STAGGER = [0.35, 0.5, 0.65] as const;
 
     links.forEach((l, i) => {
-      const a: [number, number] = [l.aLat / 1e6, wrapLon(l.aLon / 1e6)];
-      const b: [number, number] = [l.bLat / 1e6, wrapLon(l.bLon / 1e6)];
+      const a = peerLatLon(l.aLat, l.aLon);
+      const b = peerLatLon(l.bLat, l.bLon);
       const worstSnr = Math.min(
         l.snrAtoB ?? Infinity,
         l.snrBtoA ?? Infinity,
