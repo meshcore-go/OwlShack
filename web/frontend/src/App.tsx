@@ -1,5 +1,5 @@
 import { lazy, Suspense } from "react";
-import { Navigate, Route, Routes } from "react-router-dom";
+import { Route, Routes } from "react-router-dom";
 import { AppShell } from "@/components/AppShell";
 import { useApiList } from "@/hooks/useApiList";
 import { useApiObject } from "@/hooks/useApiObject";
@@ -64,6 +64,9 @@ const MqttPage = lazy(() =>
 const RadioPage = lazy(() =>
   import("@/pages/RadioPage").then((m) => ({ default: m.RadioPage })),
 );
+const RadioHealthPage = lazy(() =>
+  import("@/pages/RadioHealthPage").then((m) => ({ default: m.RadioHealthPage })),
+);
 const RepeaterNodePage = lazy(() =>
   import("@/pages/RepeaterNodePage").then((m) => ({
     default: m.RepeaterNodePage,
@@ -122,8 +125,8 @@ export function App() {
           <Route path="/monitoring/:pubkey" element={<MonitoringDetailPage />} />
           <Route path="/bots" element={<BotsPage />} />
           <Route path="/mqtt" element={<MqttPage />} />
+          <Route path="/radio" element={<RadioHealthPage />} />
           <Route path="/settings" element={<RadioPage />} />
-          <Route path="/radio" element={<Navigate to="/settings" replace />} />
           <Route path="/repeater" element={<RepeaterNodePage />} />
           <Route path="/companions" element={<CompanionsPage />} />
           <Route path="/companions/:name" element={<CompanionDetailPage />} />

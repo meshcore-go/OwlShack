@@ -484,3 +484,25 @@ func (s *Server) handleSPIBoards(w http.ResponseWriter, r *http.Request) {
 	}
 	writeJSON(w, http.StatusOK, b.SPIBoards())
 }
+
+// handleRadioStatus reports the modem's link counters; a backend that is not up yet errors rather than answering zeroes, which would read as a healthy radio.
+func (s *Server) handleRadioStatus(w http.ResponseWriter, r *http.Request) {
+	b := s.backendRef()
+	if b == nil {
+		writeError(w, http.StatusServiceUnavailable, "modem not connected")
+		return
+	}
+	writeJSON(w, http.StatusOK, b.RadioStats())
+}
+
+// handleRadioReset drops the modem and reconnects it. Returns 202: the reconnect runs in the
+// supervisor with its own backoff, so it has not necessarily finished when this returns.
+func (s *Server) handleRadioReset(w http.ResponseWriter, r *http.Request) {
+	b := s.backendRef()
+	if b == nil {
+		writeError(w, http.StatusServiceUnavailable, "modem not connected")
+		return
+	}
+	b.ResetModem()
+	w.WriteHeader(http.StatusAccepted)
+}

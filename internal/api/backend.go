@@ -9,6 +9,12 @@ type Backend interface {
 	// SPIBoards lists the radio hats this build knows how to wire.
 	SPIBoards() []SPIBoardInfo
 
+	// RadioStats reports the modem's link counters; on the SPI path they are the radio's only health signal.
+	RadioStats() RadioStatsInfo
+
+	// ResetModem drops the modem and reconnects it, the same path a vanished serial port takes.
+	ResetModem()
+
 	// ChannelByHash resolves a channel hash byte across every companion; nil when unknown.
 	ChannelByHash(hash byte) *ChannelInfo
 
@@ -116,6 +122,47 @@ type SPIBoardInfo struct {
 	// Unsupported is why this build refuses the board, empty when it can drive it.
 	Unsupported string `json:"unsupported,omitempty"`
 	HasLEDs     bool   `json:"hasLeds"`
+}
+
+// RadioStatsInfo mirrors modem.LinkStats plus the radio's configuration; the pointer counters are absent when the backend cannot measure them, 0 when it measured none.
+type RadioStatsInfo struct {
+	FreqHz  uint32 `json:"freqHz"`
+	BwHz    uint32 `json:"bwHz"`
+	SF      uint8  `json:"sf"`
+	CR      uint8  `json:"cr"`
+	TxPower uint8  `json:"txPower"`
+
+	InboundDroppedOldest uint64 `json:"inboundDroppedOldest"`
+	InboundDroppedNew    uint64 `json:"inboundDroppedNew"`
+	RxMetaTimeouts       uint64 `json:"rxMetaTimeouts"`
+	RxMetaMisattributed  uint64 `json:"rxMetaMisattributed"`
+	HandlerSlow          uint64 `json:"handlerSlow"`
+	HwDecodeErrors       uint64 `json:"hwDecodeErrors"`
+	HwErrors             uint64 `json:"hwErrors"`
+	TxOutcomeLost        uint64 `json:"txOutcomeLost"`
+
+	PacketsRecv    *uint64 `json:"packetsRecv,omitempty"`
+	PacketsSent    *uint64 `json:"packetsSent,omitempty"`
+	CRCErrors      *uint64 `json:"crcErrors,omitempty"`
+	DriverErrors   *uint64 `json:"driverErrors,omitempty"`
+	RecvRecoveries *uint64 `json:"recvRecoveries,omitempty"`
+
+	// Transport is "kiss" or "spi": which counters above can move at all depends on it.
+	Transport string `json:"transport"`
+
+	// TX outcomes, from the mux's own queue rather than the modem.
+	TxSent         uint64 `json:"txSent"`
+	TxFailed       uint64 `json:"txFailed"`
+	TxRequeued     uint64 `json:"txRequeued"`
+	TxDroppedBusy  uint64 `json:"txDroppedBusy"`
+	TxDroppedQueue uint64 `json:"txDroppedQueue"`
+	TxQueueLen     int    `json:"txQueueLen"`
+
+	// Board readings, absent when this hardware has no such sensor or has stopped answering.
+	UptimeSecs uint32   `json:"uptimeSecs"`
+	NoiseFloor *int16   `json:"noiseFloor,omitempty"`
+	BatteryMV  *uint16  `json:"batteryMv,omitempty"`
+	MCUTempC   *float64 `json:"mcuTempC,omitempty"`
 }
 
 type SettingsInput struct {

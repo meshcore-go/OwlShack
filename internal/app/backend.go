@@ -25,11 +25,18 @@ type backend struct {
 	companions []*companion.Companion
 	repeater   *repeater.Repeater // the single running repeater node, or nil
 	db         *store.Store
+	stats      modem.StatsProvider
+	mux        *node.RadioMux
 	reload     func() error
+	// resetModem asks the supervisor for a reconnect; the same path a vanished serial port takes.
+	resetModem func()
 }
 
-func newBackend(companions []*companion.Companion, rep *repeater.Repeater, db *store.Store, reload func() error) *backend {
-	return &backend{companions: companions, repeater: rep, db: db, reload: reload}
+func newBackend(companions []*companion.Companion, rep *repeater.Repeater, db *store.Store, stats modem.StatsProvider, mux *node.RadioMux, reload func() error, resetModem func()) *backend {
+	return &backend{
+		companions: companions, repeater: rep, db: db,
+		stats: stats, mux: mux, reload: reload, resetModem: resetModem,
+	}
 }
 
 func (b *backend) find(name string) (*companion.Companion, bool) {
@@ -320,4 +327,66 @@ func (b *backend) SPIBoards() []api.SPIBoardInfo {
 		})
 	}
 	return out
+}
+
+// RadioStats reports the modem's link counters, so the SPI path's fault counters are readable with MQTT off.
+func (b *backend) RadioStats() api.RadioStatsInfo {
+	rc := b.stats.RadioConfig()
+	ls := b.stats.LinkStats()
+	out := api.RadioStatsInfo{
+		FreqHz:               rc.FreqHz,
+		BwHz:                 rc.BwHz,
+		SF:                   rc.SF,
+		CR:                   rc.CR,
+		TxPower:              rc.TxPower,
+		InboundDroppedNew:    ls.InboundDroppedNew,
+		HandlerSlow:          ls.HandlerSlow,
+		HwDecodeErrors:       ls.HwDecodeErrors,
+		InboundDroppedOldest: ls.InboundDroppedOldest,
+		RxMetaTimeouts:       ls.RxMetaTimeouts,
+		RxMetaMisattributed:  ls.RxMetaMisattributed,
+		HwErrors:             ls.HwErrors,
+		TxOutcomeLost:        ls.TxOutcomeLost,
+		PacketsRecv:          ls.PacketsRecv,
+		PacketsSent:          ls.PacketsSent,
+		CRCErrors:            ls.CRCErrors,
+		DriverErrors:         ls.DriverErrors,
+		RecvRecoveries:       ls.RecvRecoveries,
+		Transport:            b.stats.Transport(),
+	}
+
+	// Polls the board over the wire, so it is the slow part of this endpoint; the readings drop out
+	// on their own once the modem stops answering rather than reporting the last known values.
+	ds := b.stats.Stats(context.Background())
+	out.UptimeSecs = ds.UptimeSecs
+	if ds.HaveBattery {
+		mv := ds.BatteryMV
+		out.BatteryMV = &mv
+	}
+	if ds.HaveMCUTemp {
+		c := ds.MCUTempC
+		out.MCUTempC = &c
+	}
+	if nf := ds.NoiseFloor; nf != 0 {
+		out.NoiseFloor = &nf
+	}
+
+	if b.mux != nil {
+		tx := b.mux.TxStats()
+		out.TxSent = tx.Sent
+		out.TxFailed = tx.Failed
+		out.TxRequeued = tx.BusyRequeued
+		out.TxDroppedBusy = tx.BusyDropped
+		out.TxDroppedQueue = tx.QueueRejected
+	}
+	if r, ok := b.stats.(interface{ TxQueueLen() int }); ok {
+		out.TxQueueLen = r.TxQueueLen()
+	}
+	return out
+}
+
+func (b *backend) ResetModem() {
+	if b.resetModem != nil {
+		b.resetModem()
+	}
 }

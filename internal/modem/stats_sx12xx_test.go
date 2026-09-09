@@ -43,6 +43,13 @@ func TestSx12xxStats_KeepsCRCAndDriverErrorsSeparate(t *testing.T) {
 	if ls.HwDecodeErrors != 3 {
 		t.Errorf("HwDecodeErrors = %d, want 3 (PacketsRecvErrors)", ls.HwDecodeErrors)
 	}
+	// Without PacketsRecv a 0 CRC count reads the same on a healthy quiet channel and a deaf radio.
+	if ls.PacketsRecv == nil || *ls.PacketsRecv != 100 {
+		t.Errorf("PacketsRecv = %v, want 100", ls.PacketsRecv)
+	}
+	if ls.PacketsSent == nil || *ls.PacketsSent != 20 {
+		t.Errorf("PacketsSent = %v, want 20", ls.PacketsSent)
+	}
 	// HandlerSlow is absent here because it comes off the modem, not RadioStats.
 	if ls.RxMetaTimeouts != 0 || ls.RxMetaMisattributed != 0 || ls.HwErrors != 0 ||
 		ls.TxOutcomeLost != 0 || ls.InboundDroppedOldest != 0 {

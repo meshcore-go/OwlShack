@@ -288,6 +288,9 @@ GET  /api/config/triggers[?companionId=N]
 POST /api/config/triggers              PUT|DELETE /api/config/triggers/{id}
 
 GET  /api/mqtt/status                                        (live broker connection state; runtime, not config)
+GET  /api/radio/status                                       (link counters; packetsRecv/packetsSent/crcErrors/driverErrors/recvRecoveries are SPI-only and absent on KISS)
+POST /api/radio/reset                                        (202; drops the modem and reconnects in the background)
+GET  /api/spi/boards                                         (the board registry; [] when the backend is not up yet)
 
 POST /api/backup                                             (options JSON -> .db file download)
 POST /api/backup/estimate                                    (same body; row counts, no file built)
