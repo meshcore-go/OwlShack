@@ -3,7 +3,7 @@
 Notable changes per release. Dates are the tag date; unreleased work sits at the
 top until tagged.
 
-## v1.3.0 — unreleased
+## v1.3.0
 
 Drive a bare SX12xx LoRa chip directly on the host SPI bus: no companion MCU, no
 KISS firmware in between. Plus zero-hop node discovery that no longer needs a
@@ -53,6 +53,10 @@ Baseline `v1.2.0` · schema `user_version` 9 → 10 · `meshcore-go` v1.4.0 · G
 - **`meshcore-go` v1.4.0**, with `hardware/transport` and the new
   `hardware/sx12xx` at the same tag. Activity-LED blinking moved into the
   library's chip drivers, where every consumer gets it.
+- **A new owl mark** replaces the radio glyph in the sidebar, the favicon and
+  every PWA icon. An installed app picks up the new icon on its next launch.
+  The maskable and iOS icons are opaque on purpose: Android crops the maskable
+  to a circle, and iOS renders transparency in an `apple-touch-icon` as black.
 - **Zero-hop node discovery**, on a Discover page and at `POST /api/discover` /
   `GET /api/discover`, with each answer also broadcast on the new `discovered`
   websocket topic. It asks every repeater and sensor in direct radio range to
@@ -163,6 +167,9 @@ scans, which is the type filter proven over RF rather than only in a test.
   reintroducing the bug and confirming the test fails.
 - The suite runs clean under `-race -shuffle=on`, which is what exposed retry
   goroutines outliving their tests and racing across test boundaries.
+- README rewritten around what the app now does, with screenshots and a
+  supported-hardware section whose figures come from `GET /api/spi/boards`
+  rather than a hand count.
 - Documentation corrections: the MQTT bridge exists as two forks with different
   field sets, so references now name which one; and one reference doc claimed a
   shipped feature was still missing.
@@ -173,7 +180,10 @@ scans, which is the type filter proven over RF rather than only in a test.
   tool that can reconfigure a repeater. Do not expose it to an untrusted
   network.
 - Repeater and room sessions live in memory, so a restart drops every login.
-- 19 of 21 board definitions are unverified against hardware.
+- Of 21 SPI board definitions, two are verified on hardware and ten are
+  untested presets. The other nine cannot be selected at all: seven need a
+  non-default `gpiochip` the GPIO library cannot address, and two have no
+  confirmed RF-switch control.
 - No autostart unit ships with the binary; a host that reboots does not bring
   its node back.
 - A companion or repeater that fails to *restart* on a config reload is still
