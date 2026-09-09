@@ -76,6 +76,8 @@ import { cn } from "@/lib/utils";
 
 const LOOP_LEVELS = ["off", "minimal", "moderate", "strict"];
 
+const DISCOVER_COOLDOWN_SECS = 30;
+
 type TabKey = "status" | "neighbors" | "access" | "settings";
 
 interface Live {
@@ -95,6 +97,7 @@ export function RepeaterNodePage() {
 
   const [tab, setTab] = useState<TabKey>("status");
   const [busy, setBusy] = useState<"advert" | "discover" | null>(null);
+  const [cooldown, setCooldown] = useState(0);
   const [live, setLive] = useState<Live>({ stats: null, neighbors: [], acl: [] });
   const [refreshing, setRefreshing] = useState(false);
 
@@ -155,6 +158,7 @@ export function RepeaterNodePage() {
     setBusy("discover");
     try {
       await configApi.repeaterDiscover();
+      setCooldown(DISCOVER_COOLDOWN_SECS);
       toast.success("Discovery sent · neighbours may take ~60s to respond");
     } catch (e) {
       toast.error(e instanceof Error ? e.message : "Discovery failed");
@@ -162,6 +166,12 @@ export function RepeaterNodePage() {
       setBusy(null);
     }
   };
+
+  useEffect(() => {
+    if (cooldown <= 0) return;
+    const id = setTimeout(() => setCooldown((c) => c - 1), 1000);
+    return () => clearTimeout(id);
+  }, [cooldown]);
 
   const configured = rep?.configured ?? false;
 
@@ -282,6 +292,7 @@ export function RepeaterNodePage() {
                 peers={peers ?? []}
                 running={running}
                 busy={busy === "discover" ? "discover" : refreshing ? "refresh" : null}
+                cooldown={cooldown}
                 onRefresh={refreshLive}
                 onDiscover={onDiscover}
                 onSelect={selectPeer}
@@ -476,6 +487,7 @@ function NeighborsTab({
   peers,
   running,
   busy,
+  cooldown,
   onRefresh,
   onDiscover,
   onSelect,
@@ -484,6 +496,7 @@ function NeighborsTab({
   peers: PeerLike[];
   running: boolean;
   busy: "refresh" | "discover" | null;
+  cooldown: number;
   onRefresh: () => void;
   onDiscover: () => void;
   onSelect: (pubkey: string) => void;
@@ -501,7 +514,7 @@ function NeighborsTab({
           variant="outline"
           size="sm"
           onClick={onDiscover}
-          disabled={!running || busy !== null}
+          disabled={!running || busy !== null || cooldown > 0}
           className="rounded-none font-mono text-[10px] uppercase tracking-[0.12em]"
         >
           {busy === "discover" ? (
@@ -509,7 +522,7 @@ function NeighborsTab({
           ) : (
             <Network className="size-3" />
           )}
-          discover
+          {cooldown > 0 ? `discover ${cooldown}s` : "discover"}
         </Button>
         <RefreshButton
           spinning={busy === "refresh"}
