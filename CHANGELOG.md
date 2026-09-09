@@ -1,0 +1,154 @@
+# Changelog
+
+Notable changes per release. Dates are the tag date; unreleased work sits at the
+top until tagged.
+
+## v1.3.0 — unreleased
+
+Drive a bare SX12xx LoRa chip directly on the host SPI bus: no companion MCU, no
+KISS firmware in between. Plus a radio-health endpoint, a dead-receiver
+watchdog, and an MQTT layer that no longer blocks startup on brokers that are
+not there.
+
+Baseline `v1.2.0` · schema `user_version` 9 → 10 · `meshcore-go` v1.4.0 · Go 1.26+
+
+### Upgrading
+
+- **The database migrates itself** on first start, adding `settings.spi_board`.
+  Existing installs get `NULL`, which means "KISS modem" — the previous
+  behaviour. No manual SQL.
+- **Absent is not zero.** Counters a transport cannot measure are now *omitted*
+  from `GET /api/radio/status` instead of published as `0`. A KISS modem has no
+  chip-level CRC count; an SPI radio has no KISS framing errors. Read a missing
+  key as "not measurable" and `0` as "measured none" — a consumer that treats
+  absent as zero will report a healthy radio for one that cannot answer. On the
+  SPI path `inboundDroppedOldest`, `rxMetaTimeouts`, `rxMetaMisattributed`,
+  `hwErrors` and `txOutcomeLost` are the newly omitted keys, alongside
+  `batteryMv` and `mcuTempC`.
+- **The MQTT status schema is unchanged.** Those same counters still publish `0`
+  there, because that payload is shared with meshcore-bot and CoreScope; making
+  it omit them is a coordinated change, not a local one.
+- **The first MQTT `online` status arrives slightly later**, once the broker
+  connection completes, rather than during startup. Same message and topic; no
+  longer ordered before the node starts serving.
+
+### Added
+
+- **SPI radio support.** A `spi://` connection scheme drives the LoRa chip itself
+  — SX1262 and SX127x — over the host's SPI bus and GPIO lines.
+- **Board registry** of 21 definitions, as JSON rather than buried in Go,
+  selectable in Settings and the setup wizard and served at
+  `GET /api/spi/boards`. Two are verified against hardware; the other 19 are
+  transcribed from vendor documentation and marked as such, because a wrong
+  `RESET` pin looks exactly like a dead radio.
+- **`GET /api/radio/status`** reports the modem's link counters: frames dropped,
+  decode and hardware errors, slow-handler stalls, and on the SPI path the
+  chip's own packet totals, CRC errors, driver faults and receiver recoveries.
+  On a hat with no battery and no MCU temperature sensor these are the only
+  health signal the radio has.
+- **Dead-receiver watchdog.** An SX126x can be left deaf by a failed
+  `ResumeReceive` while every other indicator still reads healthy. The driver
+  now reports a stuck receiver, OwlShack reconnects the modem, and each recovery
+  is counted so a flapping radio is visible rather than merely quiet.
+- **`meshcore-go` v1.4.0**, with `hardware/transport` and the new
+  `hardware/sx12xx` at the same tag. Activity-LED blinking moved into the
+  library's chip drivers, where every consumer gets it.
+
+### Fixed
+
+- **A radio that will not start no longer takes the web UI down with it.** `modem.Setup` ran before
+  the HTTP server and its failure was fatal, so a node whose modem had moved, been unplugged or been
+  swapped for a different board exited before serving the page that would have fixed it — and the
+  log said "complete setup in the web UI" while guaranteeing there was none. Recovery meant a shell,
+  `sqlite3`, or deleting the database. The server now starts first; a radio that cannot open is
+  reported, retried with capped backoff, and corrected from Settings, which reconnects it in place.
+  `GET /api/radio/status` answers `503` while there is no modem rather than a page of zeroes. This
+  also covers a first run on an SPI host, where the bootstrapped default is a KISS modem on
+  `/dev/ttyACM0` that does not exist — previously the setup wizard could not be reached at all.
+- **MQTT startup no longer waits for absent brokers.** Connections were dialled
+  in line, serially, with a 10 s timeout each — on boot and again on every
+  `SIGHUP` reload. Three unreachable brokers cost 30 s before the mesh node
+  started. The dial now runs in the background; the first connect failure is
+  still logged at error level so an unreachable broker stays visible.
+- **Token refresh no longer drops publishes.** Refreshing a broker token
+  disconnected the old client before dialling the new one, leaving nothing to
+  publish through for the whole dial — up to 10 s, every 8 minutes, per token
+  broker. The new client is established first and the old one dropped
+  immediately after the swap.
+- **A failed token refresh now retries.** When the reconnect failed, the retry
+  loop found the stale client still reporting connected and returned without
+  dialling; the broker stayed dead until the next refresh tick, by which point
+  its token had expired. The stale client is dropped on the failure path, which
+  is what lets the retry work.
+- **A KISS modem that goes quiet without erroring is now detected.** A serial
+  read timeout returns `(0, nil)` rather than an error, so a device that stays
+  enumerated but stops talking — a USB autosuspend that never resumes, wedged
+  firmware, a stalled hypervisor passthrough — left the read loop spinning every
+  100 ms with nothing to report. No error, no reconnect, no log line: the node
+  looked healthy and simply never heard another packet. A liveness probe now
+  asks the modem for its status every 30 s and reconnects after three
+  consecutive unanswered probes. Inbound silence is deliberately *not* the
+  trigger — a quiet mesh is normal — and the probe stays disarmed until the
+  modem has answered at least once, so firmware that does not implement the
+  status queries is never reconnected in a loop.
+- **Board readings are no longer published after the modem stops answering.**
+  The reply flags were sticky, so once the serial port went away the status
+  payload kept carrying the last battery voltage and MCU temperature — a user
+  log showed `battery_mv=4148` and `mcu_temp_c=20.5` being published while every
+  query was returning `write frame: input/output error` and the port was closed.
+  A reading now drops out of the payload if the modem has not answered for 45 s.
+- **Five counters no longer publish `0` on an SPI node.** Queue-full-oldest,
+  the two signal-metadata pairing counts, hardware errors and lost TX outcomes
+  are KISS framing concepts with no analogue on the SPI path, so they read as a
+  radio measuring them and finding nothing wrong. They are now absent there and
+  render as `—`. Decode errors, queue-full-new and handler-slow *are* measured
+  on both paths and keep their numbers.
+- **The SPI radio's slow-handler count** was read from the wrong source and
+  always reported `0`, which looks like a modem keeping up comfortably.
+- **Battery and MCU temperature no longer publish `0`** on hats that have
+  neither, which reported a flat cell and a freezing board.
+
+### Verified on hardware
+
+| Board | Host | Build | Radio |
+|---|---|---|---|
+| Zindello UltraPeaterZero (E22P, 1 W) | Raspberry Pi 4 | `linux/arm64` | SF7 · 62.5 kHz · 22 dBm |
+| Zindello UltraPeaterZero (E22, 1 W) | Raspberry Pi Zero W | `linux/arm` v6 | SF7 · 62.5 kHz · 22 dBm |
+
+Both nodes transmit and receive each other's traffic, which is the only real
+proof the external PA radiates — `TX_DONE` fires whether or not anything leaves
+the antenna. Reset recovery was exercised by pulling the chip's `NRST` line and
+watching the receiver re-arm.
+
+### Internal
+
+- Comments cut to one line or none across 174 files, a net reduction of ~2,400
+  lines. A comment that restates its code is a second thing to keep true.
+- New tests for the non-blocking startup, the refresh failure path, the
+  dead-radio watcher and one-instant status sampling, each mutation-checked by
+  reintroducing the bug and confirming the test fails.
+- The suite runs clean under `-race -shuffle=on`, which is what exposed retry
+  goroutines outliving their tests and racing across test boundaries.
+- Documentation corrections: the MQTT bridge exists as two forks with different
+  field sets, so references now name which one; and one reference doc claimed a
+  shipped feature was still missing.
+
+### Known limitations
+
+- **No authentication on the REST API or web UI** — the largest real gap for a
+  tool that can reconfigure a repeater. Do not expose it to an untrusted
+  network.
+- Repeater and room sessions live in memory, so a restart drops every login.
+- 19 of 21 board definitions are unverified against hardware.
+- No autostart unit ships with the binary; a host that reboots does not bring
+  its node back.
+- A companion or repeater that fails to *restart* on a config reload is still
+  fatal; only the radio's own failure is now survivable.
+
+## v1.2.0
+
+Repeater, sensor and room parity with firmware 1.17.1; backup and restore; MQTT
+observability. CI extended to run checks on pull requests into `dev` as well as
+`main`, and `CLAUDE.md` split into a lean map plus `docs/` reference.
+
+Schema `user_version` 9.

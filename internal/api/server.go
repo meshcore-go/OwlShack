@@ -108,6 +108,7 @@ func (s *Server) routes() {
 	s.mux.HandleFunc("GET /api/config/mqtt/brokers", s.handleGetBrokers)
 	s.mux.HandleFunc("GET /api/mqtt/status", s.handleMqttStatus)
 	s.mux.HandleFunc("GET /api/spi/boards", s.handleSPIBoards)
+	s.mux.HandleFunc("GET /api/serial/ports", s.handleSerialPorts)
 	s.mux.HandleFunc("GET /api/radio/status", s.handleRadioStatus)
 	s.mux.HandleFunc("POST /api/radio/reset", s.handleRadioReset)
 
