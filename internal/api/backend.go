@@ -16,6 +16,12 @@ type Backend interface {
 	// ResetModem drops the modem and reconnects it, the same path a vanished serial port takes.
 	ResetModem()
 
+	// StartDiscovery broadcasts a zero-hop discovery for the given firmware ADV_TYPEs. False means
+	// there is no node to send it from, which is a different answer from finding nothing.
+	StartDiscovery(types []int) (DiscoveryState, bool)
+	// DiscoveryState reports the current scan without starting one.
+	DiscoveryState() (DiscoveryState, bool)
+
 	// ChannelByHash resolves a channel hash byte across every companion; nil when unknown.
 	ChannelByHash(hash byte) *ChannelInfo
 
@@ -123,6 +129,29 @@ type SPIBoardInfo struct {
 	// Unsupported is why this build refuses the board, empty when it can drive it.
 	Unsupported string `json:"unsupported,omitempty"`
 	HasLEDs     bool   `json:"hasLeds"`
+}
+
+// DiscoveryInfo is one node that answered a zero-hop discovery.
+type DiscoveryInfo struct {
+	PubKey string `json:"pubkey"`
+	// Name is resolved from peers we have already heard advert; empty for a node we only know by key.
+	Name string `json:"name"`
+	Type int    `json:"type"`
+	// SNR is how well we heard them; ReportedSNR is how well they heard us, so an asymmetric link is visible.
+	SNR         float64 `json:"snr"`
+	ReportedSNR float64 `json:"reportedSnr"`
+}
+
+// DiscoveryState is a scan and whatever has answered so far.
+type DiscoveryState struct {
+	Running bool `json:"running"`
+	// SecsLeft counts down the collection window; responders answer after a random delay, so an
+	// empty list before it reaches 0 means "not yet", not "nothing there".
+	SecsLeft int `json:"secsLeft"`
+	// ScanStartedAt is empty until a scan has run, so results are never shown without saying how old
+	// they are: a finished scan's table looks identical to a live one.
+	ScanStartedAt string          `json:"scanStartedAt"`
+	Results       []DiscoveryInfo `json:"results"`
 }
 
 // RadioStatsInfo mirrors modem.LinkStats plus the radio's configuration; the pointer counters are absent when the backend cannot measure them, 0 when it measured none.

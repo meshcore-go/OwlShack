@@ -67,6 +67,9 @@ const RadioPage = lazy(() =>
 const RadioHealthPage = lazy(() =>
   import("@/pages/RadioHealthPage").then((m) => ({ default: m.RadioHealthPage })),
 );
+const DiscoverPage = lazy(() =>
+  import("@/pages/DiscoverPage").then((m) => ({ default: m.DiscoverPage })),
+);
 const RepeaterNodePage = lazy(() =>
   import("@/pages/RepeaterNodePage").then((m) => ({
     default: m.RepeaterNodePage,
@@ -126,6 +129,7 @@ export function App() {
           <Route path="/bots" element={<BotsPage />} />
           <Route path="/mqtt" element={<MqttPage />} />
           <Route path="/radio" element={<RadioHealthPage />} />
+          <Route path="/discover" element={<DiscoverPage />} />
           <Route path="/settings" element={<RadioPage />} />
           <Route path="/repeater" element={<RepeaterNodePage />} />
           <Route path="/companions" element={<CompanionsPage />} />

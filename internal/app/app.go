@@ -18,6 +18,7 @@ import (
 
 	"github.com/meshcore-go/OwlShack/internal/api"
 	"github.com/meshcore-go/OwlShack/internal/config"
+	"github.com/meshcore-go/OwlShack/internal/discover"
 	"github.com/meshcore-go/OwlShack/internal/echo"
 	"github.com/meshcore-go/OwlShack/internal/logging"
 	"github.com/meshcore-go/OwlShack/internal/modem"
@@ -158,7 +159,27 @@ func Run(ctx context.Context, importPath string, verbosity int) error {
 		mux        *node.RadioMux
 		companions []*companion.Companion
 		rep        *repeater.Repeater
+		disc       *discover.Service
 	)
+	// newDiscovery attaches zero-hop discovery to whichever node is running. The request carries no
+	// identity, so any node will do and the answers describe our radio's range, not that node's.
+	newDiscovery := func() *discover.Service {
+		var send discover.Sender
+		switch {
+		case rep != nil:
+			send = rep.Node()
+		case len(companions) > 0:
+			send = companions[0].Node()
+		default:
+			return nil
+		}
+		return discover.New(send, slog.Default().With("component", "discover"), func(r discover.Result) {
+			srv.Hub().Broadcast("discovered", api.DiscoveryInfo{
+				PubKey: r.PubKey, Name: peerName(ctx, db, r.PubKey), Type: r.Type,
+				SNR: r.SNR, ReportedSNR: r.ReportedSNR,
+			})
+		})
+	}
 	// startRadio brings up the modem and everything that hangs off it, leaving ms nil if it cannot.
 	// Failing is not fatal: exiting here would take away the page an operator uses to fix the connection.
 	startRadio := func(c *config.Config) error {
@@ -179,6 +200,7 @@ func Run(ctx context.Context, importPath string, verbosity int) error {
 		}
 		ms, mux, companions, rep = newMs, newMux, newComps, newRep
 		compReg.set(companions)
+		disc = newDiscovery()
 		return nil
 	}
 
@@ -189,7 +211,7 @@ func Run(ctx context.Context, importPath string, verbosity int) error {
 		if ms != nil {
 			ms.Close()
 		}
-		ms, mux, companions, rep = nil, nil, nil, nil
+		ms, mux, companions, rep, disc = nil, nil, nil, nil, nil
 	}
 
 	// retryTimer is nil whenever no retry is pending, and a nil channel blocks forever in a select —
@@ -212,7 +234,7 @@ func Run(ctx context.Context, importPath string, verbosity int) error {
 			"error", err, "addr", listenAddr)
 		radioUp(err)
 	}
-	srv.SetBackend(newBackend(companions, rep, db, statsOf(ms), mux, reload, resetModem))
+	srv.SetBackend(newBackend(companions, rep, db, statsOf(ms), mux, reload, resetModem, disc))
 
 	for {
 		select {
@@ -265,7 +287,8 @@ func Run(ctx context.Context, importPath string, verbosity int) error {
 			}
 			cfg = newCfg
 			compReg.set(companions)
-			srv.SetBackend(newBackend(companions, rep, db, statsOf(ms), mux, reload, resetModem))
+			disc = newDiscovery()
+			srv.SetBackend(newBackend(companions, rep, db, statsOf(ms), mux, reload, resetModem, disc))
 			slog.Info("config reloaded", "started", stats.started, "stopped", stats.stopped, "kept", stats.kept, "reloaded", stats.reloaded)
 
 		// One arm for both: the dead-radio watcher (and the UI's reset button) signal reconnectCh, and
@@ -282,14 +305,14 @@ func Run(ctx context.Context, importPath string, verbosity int) error {
 			} else {
 				radioUp(err)
 			}
-			srv.SetBackend(newBackend(companions, rep, db, statsOf(ms), mux, reload, resetModem))
+			srv.SetBackend(newBackend(companions, rep, db, statsOf(ms), mux, reload, resetModem, disc))
 
 		case <-retryTimer:
 			retryTimer = nil
 			if err := startRadio(cfg); err == nil {
 				slog.Info("modem connected")
 				radioUp(nil)
-				srv.SetBackend(newBackend(companions, rep, db, statsOf(ms), mux, reload, resetModem))
+				srv.SetBackend(newBackend(companions, rep, db, statsOf(ms), mux, reload, resetModem, disc))
 			} else {
 				radioUp(err)
 			}
