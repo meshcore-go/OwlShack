@@ -29,6 +29,8 @@ export interface DiscoveryInfo {
   // snr is how well we heard them; reportedSnr is how well they heard us. Both are real dB.
   snr: number;
   reportedSnr: number;
+  // When this node answered. A timestamp, not an age, so the page can tick it without refetching.
+  heard: string;
 }
 
 export interface DiscoveryState {

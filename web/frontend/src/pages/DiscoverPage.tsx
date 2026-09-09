@@ -10,12 +10,13 @@ import { Skeleton } from "@/components/ui/skeleton";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { useWebSocket } from "@/hooks/useWebSocket";
 import { useApiList } from "@/hooks/useApiList";
+import { useOwnPosition } from "@/hooks/useOwnPosition";
 import { useCompanions } from "@/hooks/useCompanions";
 import { usePeerDetailSheet } from "@/hooks/usePeerDetailSheet";
 import { PeerDetailSheet, type PeerLike } from "@/components/PeerDetailSheet";
 import { DiscoverMap, type DiscoverMapNode } from "@/components/DiscoverMap";
 import { peerLatLon } from "@/lib/leaflet";
-import { formatClockTime, timeAgo } from "@/lib/format";
+import { formatClockTime, formatSecsAgo } from "@/lib/format";
 import {
   discoverApi,
   nodeTypeLabel,
@@ -50,12 +51,14 @@ export function DiscoverPage() {
   // answered" line must describe the scan that ran, not the one the user is about to run.
   const [scanned, setScanned] = useState<number[]>([]);
   const secsLeft = useRef(0);
+  const [now, setNow] = useState(() => Date.now());
 
   // A discovery response carries only a key and two SNRs, so position and everything the detail
   // sheet shows comes from the peers we have already heard advert from.
   const { items } = useApiList<PeerLike>("/api/peers", "Failed to load peers");
   const peers = items ?? NO_PEERS;
   const companions = useCompanions();
+  const origin = useOwnPosition();
   const { selectPeer, sheetProps } = usePeerDetailSheet(peers);
 
   const load = useCallback(async () => {
@@ -74,6 +77,11 @@ export function DiscoverPage() {
   useEffect(() => {
     load();
   }, [load]);
+
+  useEffect(() => {
+    const id = setInterval(() => setNow(Date.now()), 1000);
+    return () => clearInterval(id);
+  }, []);
 
   // Tick the countdown locally rather than polling: the answers arrive over the socket, and the only
   // thing that changes every second is how long is left to wait.
@@ -171,7 +179,7 @@ export function DiscoverPage() {
         title="Discover"
         meta={
           <span className="font-mono text-xs text-muted-foreground">
-            zero-hop · direct radio range only
+            direct radio range only
             {scannedAt && ` · scanned ${scannedAt}`}
           </span>
         }
@@ -273,7 +281,9 @@ export function DiscoverPage() {
                       <SnrRow arrow="↓" title="we hear them" snr={r.snr} />
                       <SnrRow arrow="↑" title="they hear us" snr={r.reportedSnr} />
                       <div className="font-mono text-[10px] text-muted-foreground/70 tabular-nums">
-                        {peer ? timeAgo(peer.lastSeen) : "never"}
+                        {formatSecsAgo(
+                          Math.max(0, Math.floor((now - new Date(r.heard).getTime()) / 1000)),
+                        )}
                       </div>
                     </div>
                   </button>
@@ -284,11 +294,17 @@ export function DiscoverPage() {
 
           <TabsContent value="map" className="mt-0 space-y-2">
             {mapNodes.length > 0 ? (
-              <DiscoverMap nodes={mapNodes} onSelect={selectPeer} />
+              <DiscoverMap nodes={mapNodes} origin={origin} onSelect={selectPeer} />
             ) : (
               <div className="bg-card border border-border rounded-md px-4 py-6 text-sm text-muted-foreground">
                 Nothing that answered has a known position, so there is nothing to plot.
               </div>
+            )}
+            {mapNodes.length > 0 && !origin && (
+              <p className="text-xs text-warning">
+                No link lines: this node has no position configured, so there is nothing to draw
+                them from. Set one on the companion or repeater.
+              </p>
             )}
             {unplaced > 0 && (
               <p className="text-xs text-warning">

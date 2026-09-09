@@ -435,6 +435,7 @@ func (b *backend) discoveryState() api.DiscoveryState {
 			Type:        r.Type,
 			SNR:         r.SNR,
 			ReportedSNR: r.ReportedSNR,
+			Heard:       r.Heard.Format(time.RFC3339),
 		})
 	}
 	return out

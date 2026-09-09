@@ -176,7 +176,7 @@ func Run(ctx context.Context, importPath string, verbosity int) error {
 		return discover.New(send, slog.Default().With("component", "discover"), func(r discover.Result) {
 			srv.Hub().Broadcast("discovered", api.DiscoveryInfo{
 				PubKey: r.PubKey, Name: peerName(ctx, db, r.PubKey), Type: r.Type,
-				SNR: r.SNR, ReportedSNR: r.ReportedSNR,
+				SNR: r.SNR, ReportedSNR: r.ReportedSNR, Heard: r.Heard.Format(time.RFC3339),
 			})
 		})
 	}

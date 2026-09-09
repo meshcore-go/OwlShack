@@ -140,6 +140,8 @@ type DiscoveryInfo struct {
 	// SNR is how well we heard them; ReportedSNR is how well they heard us, so an asymmetric link is visible.
 	SNR         float64 `json:"snr"`
 	ReportedSNR float64 `json:"reportedSnr"`
+	// Heard is when this node answered, as a timestamp so the page can age it without polling.
+	Heard string `json:"heard"`
 }
 
 // DiscoveryState is a scan and whatever has answered so far.
