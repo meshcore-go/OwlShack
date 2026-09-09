@@ -39,6 +39,16 @@ export function tileUrlForTheme(): string {
   return `https://basemaps.cartocdn.com/rastertiles/${style}/{z}/{x}/{y}{r}.png${key}`;
 }
 
+export function wrapLon(lon: number): number {
+  return (((lon + 180) % 360) + 360) % 360 - 180;
+}
+
+// Peer coordinates are firmware fixed-point at 1e6 degrees. Passing the raw values to Leaflet puts
+// the marker nowhere at all.
+export function peerLatLon(lat: number, lon: number): [number, number] {
+  return [lat / 1e6, wrapLon(lon / 1e6)];
+}
+
 export function themeTileLayer(): L.TileLayer {
   const layer = L.tileLayer(tileUrlForTheme(), {
     attribution: TILE_ATTRIBUTION,

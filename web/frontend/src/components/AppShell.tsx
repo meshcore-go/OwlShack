@@ -95,6 +95,12 @@ const TELEMETRY: NavItem[] = [
     icon: Antenna,
     match: (p) => p === "/radio",
   },
+  {
+    to: "/discover",
+    label: "Discover",
+    icon: Radar,
+    match: (p) => p === "/discover",
+  },
 ];
 
 const COMMS_EXTRA: NavItem[] = [

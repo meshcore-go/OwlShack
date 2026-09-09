@@ -78,7 +78,15 @@ export function SignalStrength({
         ))}
       </svg>
       {showLabel && (
-        <span className={cn(isSm ? "text-[10px]" : "text-xs", snrTextClass(snr))}>
+        // Fixed width so the bars line up down a column: "0.0dB" is narrower than "-6.3dB", and
+        // without this the icon shifts with the digit count.
+        <span
+          className={cn(
+            "min-w-[7ch] text-right tabular-nums",
+            isSm ? "text-[10px]" : "text-xs",
+            snrTextClass(snr),
+          )}
+        >
           {snr.toFixed(1)}dB
         </span>
       )}

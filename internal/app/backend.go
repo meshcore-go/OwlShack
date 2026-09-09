@@ -9,6 +9,7 @@ import (
 
 	"github.com/meshcore-go/OwlShack/internal/api"
 	"github.com/meshcore-go/OwlShack/internal/config"
+	"github.com/meshcore-go/OwlShack/internal/discover"
 	"github.com/meshcore-go/OwlShack/internal/modem"
 	"github.com/meshcore-go/OwlShack/internal/node/companion"
 	"github.com/meshcore-go/OwlShack/internal/node/repeater"
@@ -30,12 +31,14 @@ type backend struct {
 	reload     func() error
 	// resetModem asks the supervisor for a reconnect; the same path a vanished serial port takes.
 	resetModem func()
+	// discover is nil when no node is running to carry a request.
+	discover *discover.Service
 }
 
-func newBackend(companions []*companion.Companion, rep *repeater.Repeater, db *store.Store, stats modem.StatsProvider, mux *node.RadioMux, reload func() error, resetModem func()) *backend {
+func newBackend(companions []*companion.Companion, rep *repeater.Repeater, db *store.Store, stats modem.StatsProvider, mux *node.RadioMux, reload func() error, resetModem func(), disc *discover.Service) *backend {
 	return &backend{
 		companions: companions, repeater: rep, db: db,
-		stats: stats, mux: mux, reload: reload, resetModem: resetModem,
+		stats: stats, mux: mux, reload: reload, resetModem: resetModem, discover: disc,
 	}
 }
 
@@ -394,4 +397,64 @@ func (b *backend) ResetModem() {
 	if b.resetModem != nil {
 		b.resetModem()
 	}
+}
+
+// StartDiscovery broadcasts a zero-hop discovery. It needs any running node to carry the request,
+// not a repeater: the firmware's request is anonymous, so what answers is whatever hears our radio.
+func (b *backend) StartDiscovery(types []int) (api.DiscoveryState, bool) {
+	if b.discover == nil {
+		return api.DiscoveryState{}, false
+	}
+	if err := b.discover.Start(discover.FilterFor(types...), time.Time{}); err != nil {
+		slog.Error("discovery scan failed to send", "error", err)
+		return api.DiscoveryState{}, false
+	}
+	return b.discoveryState(), true
+}
+
+func (b *backend) DiscoveryState() (api.DiscoveryState, bool) {
+	if b.discover == nil {
+		return api.DiscoveryState{}, false
+	}
+	return b.discoveryState(), true
+}
+
+func (b *backend) discoveryState() api.DiscoveryState {
+	running, endsAt, results := b.discover.State()
+	out := api.DiscoveryState{Running: running, Results: make([]api.DiscoveryInfo, 0, len(results))}
+	if running {
+		out.SecsLeft = int(time.Until(endsAt).Seconds())
+	}
+	if !endsAt.IsZero() {
+		out.ScanStartedAt = endsAt.Add(-discover.Window).Format(time.RFC3339)
+	}
+	for _, r := range results {
+		out.Results = append(out.Results, api.DiscoveryInfo{
+			PubKey:      r.PubKey,
+			Name:        b.peerName(r.PubKey),
+			Type:        r.Type,
+			SNR:         r.SNR,
+			ReportedSNR: r.ReportedSNR,
+			Heard:       r.Heard.Format(time.RFC3339),
+		})
+	}
+	return out
+}
+
+func (b *backend) peerName(pubkeyHex string) string {
+	return peerName(context.Background(), b.db, pubkeyHex)
+}
+
+// peerName resolves a key against peers we have heard advert from; a node we have never heard from
+// stays nameless rather than borrowing one.
+func peerName(ctx context.Context, db *store.Store, pubkeyHex string) string {
+	raw, err := hex.DecodeString(pubkeyHex)
+	if err != nil {
+		return ""
+	}
+	p, err := db.Peers.GetByPubKey(ctx, raw)
+	if err != nil || p == nil {
+		return ""
+	}
+	return p.Name
 }

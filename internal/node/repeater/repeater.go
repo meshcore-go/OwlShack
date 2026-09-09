@@ -218,6 +218,10 @@ func (r *Repeater) runContext() context.Context {
 	return r.runCtx
 }
 
+// Node exposes the running node so callers that only need to send or observe packets - node
+// discovery, for one - do not have to be part of the repeater personality.
+func (r *Repeater) Node() *node.Node { return r.node }
+
 func (r *Repeater) Start(ctx context.Context) error {
 	ctx, cancel := context.WithCancel(ctx)
 	r.mu.Lock()
