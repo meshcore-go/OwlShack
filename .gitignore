@@ -211,3 +211,5 @@ CLAUDE.local.md
 *~
 *.swp
 *.swo
+# Playwright writes a bare relative filename to the repo root when given one.
+/*.png
