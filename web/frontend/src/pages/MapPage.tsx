@@ -22,8 +22,8 @@ import {
 } from "@/components/ui/dropdown-menu";
 import { PeerDetailSheet } from "@/components/PeerDetailSheet";
 import { deletePeers, deletedPeersMessage } from "@/lib/peerApi";
-import { peerLatLon, themeTileLayer, useThemeTiles, wrapLon } from "@/lib/leaflet";
-import { snrFill } from "@/components/SignalStrength";
+import { peerLatLon, themeTileLayer, useThemeTiles } from "@/lib/leaflet";
+import { drawLink, LINK_STAGGER } from "@/lib/mapLinks";
 import { cn } from "@/lib/utils";
 
 interface Peer {
@@ -123,6 +123,8 @@ export function MapPage() {
   const focusMarkerRef = useRef<L.Marker | null>(null);
   const linksLayerRef = useRef<L.LayerGroup | null>(null);
   const fittedRef = useRef(false);
+  // Bumped on zoom so the links redraw: whether a label fits depends on the current scale.
+  const [zoomTick, setZoomTick] = useState(0);
 
   const handleMessage = useCallback(
     (topic: string, data: unknown) => {
@@ -160,6 +162,7 @@ export function MapPage() {
     });
     tileLayerRef.current = themeTileLayer().addTo(map);
     linksLayerRef.current = L.layerGroup().addTo(map);
+    map.on("zoomend", () => setZoomTick((t) => t + 1));
     mapRef.current = map;
 
     return () => {
@@ -273,70 +276,24 @@ export function MapPage() {
 
   // Full clear-and-redraw: links are cheap and have no per-link identity to diff against.
   useEffect(() => {
+    const map = mapRef.current;
     const layer = linksLayerRef.current;
-    if (!layer) return;
+    if (!map || !layer) return;
     layer.clearLayers();
     if (!showLinks || !links) return;
 
-    // Cycling by index keeps labels on lines sharing an endpoint at distinct distances.
-    const STAGGER = [0.35, 0.5, 0.65] as const;
-
     links.forEach((l, i) => {
-      const a = peerLatLon(l.aLat, l.aLon);
-      const b = peerLatLon(l.bLat, l.bLon);
-      const worstSnr = Math.min(
-        l.snrAtoB ?? Infinity,
-        l.snrBtoA ?? Infinity,
+      drawLink(
+        map,
+        linksLayerRef.current!,
+        peerLatLon(l.aLat, l.aLon),
+        peerLatLon(l.bLat, l.bLon),
+        l.snrAtoB ?? null,
+        l.snrBtoA ?? null,
+        LINK_STAGGER[i % LINK_STAGGER.length],
       );
-
-      // Mercator-corrected screen-space angle, so the label aligns at any latitude.
-      const cosLat = Math.cos(((a[0] + b[0]) / 2) * (Math.PI / 180));
-      const dxScreen = (b[1] - a[1]) * cosLat;
-      const dyScreen = -(b[0] - a[0]); // screen Y is inverted vs latitude
-      let angleDeg = Math.atan2(dyScreen, dxScreen) * (180 / Math.PI);
-
-      // A right-to-left line would render the label upside-down, so flip it 180°.
-      let flipped = false;
-      if (angleDeg > 90 || angleDeg < -90) {
-        angleDeg += angleDeg > 0 ? -180 : 180;
-        flipped = true;
-      }
-
-      // After a flip the label's local "→" points toward A, not B, so swap.
-      const snrFwd = flipped ? l.snrBtoA : l.snrAtoB;
-      const snrBwd = flipped ? l.snrAtoB : l.snrBtoA;
-
-      let rows: string;
-      if (snrFwd != null && snrBwd != null) {
-        rows = `<div>→ ${snrFwd.toFixed(1)} dB</div><div>← ${snrBwd.toFixed(1)} dB</div>`;
-      } else if (snrFwd != null) {
-        rows = `<div>→ ${snrFwd.toFixed(1)} dB</div>`;
-      } else {
-        rows = `<div>← ${(snrBwd ?? 0).toFixed(1)} dB</div>`;
-      }
-
-      L.polyline([a, b], {
-        color: snrFill(worstSnr),
-        weight: 2,
-        opacity: 0.7,
-        interactive: false,
-      }).addTo(layer);
-
-      const t = STAGGER[i % 3];
-      const labelLat = a[0] + (b[0] - a[0]) * t;
-      const labelLon = wrapLon(a[1] + (b[1] - a[1]) * t);
-
-      L.marker([labelLat, labelLon], {
-        icon: L.divIcon({
-          className: "",
-          html: `<div class="meshcore-link-label" style="transform:translate(-50%,-50%) rotate(${angleDeg.toFixed(1)}deg)">${rows}</div>`,
-          iconSize: [0, 0],
-          iconAnchor: [0, 0],
-        }),
-        interactive: false,
-      }).addTo(layer);
     });
-  }, [links, showLinks]);
+  }, [links, showLinks, zoomTick]);
 
   const toggleType = useCallback((type: string) => {
     setHidden((prev) => {
