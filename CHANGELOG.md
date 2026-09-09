@@ -54,8 +54,10 @@ Baseline `v1.3.1` · no schema change
 
 ### Known limitations
 
-- The rename is invisible to a consumer that does not parse `client_version`. Whoever runs
-  CoreScope or LetsMesh is better told than left to notice.
+- The rename is invisible to a consumer that does not parse `client_version`: the key stays
+  present, nothing errors, and a delta computed over `recv_errors` steps once per node at upgrade.
+  Nothing on the wire distinguishes the two meanings, and no transport field is published either,
+  so an SPI node's `hw_decode_errors: 0` reads the same as a KISS node measuring zero.
 - **`packets_recv` and `packets_sent` on MQTT are still the observer's own tallies**, not the
   radio's, so they undercount by exactly the parse failures `packet_parse_errors` now counts. The
   firmware's counters are polled and reach `GET /api/radio/status`, but feeding them onto the wire
