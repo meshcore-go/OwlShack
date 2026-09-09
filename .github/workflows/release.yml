@@ -112,15 +112,32 @@ jobs:
     needs: build
     runs-on: ubuntu-latest
     steps:
+      # The release job otherwise never checks out, so CHANGELOG.md would not be here to read.
+      - uses: actions/checkout@v6
+
       - uses: actions/download-artifact@v8
         with:
           pattern: OwlShack-*
           path: artifacts
           merge-multiple: true
 
+      # Take the tag's own section, not the whole file. An unknown tag leaves the
+      # file empty, which just falls back to the generated notes below.
+      - name: Extract release notes for this tag
+        run: |
+          awk -v tag="${GITHUB_REF_NAME}" '
+            BEGIN { gsub(/\./, "\\.", tag) }
+            $0 ~ "^## " tag "([^0-9.]|$)" { p = 1; next }
+            p && /^## / { exit }
+            p
+          ' CHANGELOG.md > RELEASE_NOTES.md
+          echo "::notice::release body is $(wc -l < RELEASE_NOTES.md) lines from CHANGELOG.md"
+
       - name: Create GitHub Release
         uses: softprops/action-gh-release@v3
         with:
+          body_path: RELEASE_NOTES.md
+          # Appended below the hand-written notes: the commit list stays useful.
           generate_release_notes: true
           # Mark SemVer pre-releases (tag contains a '-') as pre-releases so
           # they never show as "Latest release" or outrank the stable v1.x line.
