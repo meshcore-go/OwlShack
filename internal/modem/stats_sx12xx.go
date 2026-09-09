@@ -52,7 +52,7 @@ func (p *sx12xxStatsProvider) Stats(context.Context) DeviceStats {
 	return ds
 }
 
-// LinkStats leaves the KISS-only fields at zero: those events cannot occur on the SPI path, since the chip hands us a decoded packet with its RSSI and SNR attached.
+// LinkStats leaves the KISS-only fields nil: those events cannot occur on the SPI path, since the chip hands us a decoded packet with its RSSI and SNR attached.
 func (p *sx12xxStatsProvider) LinkStats() LinkStats {
 	driver := p.driverErrors.Load()
 	m := p.modem.Load()

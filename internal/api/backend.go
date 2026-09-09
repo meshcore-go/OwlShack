@@ -132,14 +132,15 @@ type RadioStatsInfo struct {
 	CR      uint8  `json:"cr"`
 	TxPower uint8  `json:"txPower"`
 
-	InboundDroppedOldest uint64 `json:"inboundDroppedOldest"`
-	InboundDroppedNew    uint64 `json:"inboundDroppedNew"`
-	RxMetaTimeouts       uint64 `json:"rxMetaTimeouts"`
-	RxMetaMisattributed  uint64 `json:"rxMetaMisattributed"`
-	HandlerSlow          uint64 `json:"handlerSlow"`
-	HwDecodeErrors       uint64 `json:"hwDecodeErrors"`
-	HwErrors             uint64 `json:"hwErrors"`
-	TxOutcomeLost        uint64 `json:"txOutcomeLost"`
+	InboundDroppedNew uint64 `json:"inboundDroppedNew"`
+	HandlerSlow       uint64 `json:"handlerSlow"`
+	HwDecodeErrors    uint64 `json:"hwDecodeErrors"`
+
+	InboundDroppedOldest *uint64 `json:"inboundDroppedOldest,omitempty"`
+	RxMetaTimeouts       *uint64 `json:"rxMetaTimeouts,omitempty"`
+	RxMetaMisattributed  *uint64 `json:"rxMetaMisattributed,omitempty"`
+	HwErrors             *uint64 `json:"hwErrors,omitempty"`
+	TxOutcomeLost        *uint64 `json:"txOutcomeLost,omitempty"`
 
 	PacketsRecv    *uint64 `json:"packetsRecv,omitempty"`
 	PacketsSent    *uint64 `json:"packetsSent,omitempty"`

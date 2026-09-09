@@ -14,10 +14,11 @@ func TestFormatStatus_CountersMapDistinctly(t *testing.T) {
 		Sent: 1, QueueLen: 2, BusyRequeued: 3,
 		BusyDropped: 4, QueueRejected: 5, Failed: 6,
 	}
+	u := func(v uint64) *uint64 { return &v }
 	link := modem.LinkStats{
-		InboundDroppedOldest: 7, InboundDroppedNew: 8,
-		RxMetaTimeouts: 9, RxMetaMisattributed: 10,
-		HandlerSlow: 11, HwDecodeErrors: 12, HwErrors: 13, TxOutcomeLost: 14,
+		InboundDroppedNew: 8, HandlerSlow: 11, HwDecodeErrors: 12,
+		InboundDroppedOldest: u(7), RxMetaTimeouts: u(9), RxMetaMisattributed: u(10),
+		HwErrors: u(13), TxOutcomeLost: u(14),
 	}
 
 	raw, err := formatStatus("online", "n", "id", modem.RadioInfo{}, modem.DeviceStats{},
@@ -184,6 +185,34 @@ func TestFormatStatus_SPICountersAreOmittedUnlessMeasured(t *testing.T) {
 	stats = read(modem.LinkStats{DriverErrors: &zero})
 	if got, ok := stats["driver_errors"]; !ok || got != float64(0) {
 		t.Errorf("driver_errors = %v (present %v), want a published 0", got, ok)
+	}
+}
+
+// The KISS-only counters went to pointers internally; this schema is shared with meshcore-bot and
+// CoreScope, so a nil must still publish 0 there rather than silently dropping the key.
+func TestFormatStatus_KISSCountersStayOnTheWireWhenUnmeasured(t *testing.T) {
+	raw, err := formatStatus("online", "n", "id", modem.RadioInfo{}, modem.DeviceStats{},
+		PacketCounts{}, TxCounts{}, modem.LinkStats{}, ObserverCounts{}, 0)
+	if err != nil {
+		t.Fatalf("formatStatus: %v", err)
+	}
+	var got struct {
+		Stats map[string]any `json:"stats"`
+	}
+	if err := json.Unmarshal(raw, &got); err != nil {
+		t.Fatalf("unmarshal: %v", err)
+	}
+	for _, field := range []string{
+		"rx_dropped", "rx_meta_timeouts", "rx_meta_misattributed", "hw_errors", "tx_outcome_lost",
+	} {
+		v, ok := got.Stats[field]
+		if !ok {
+			t.Errorf("%q dropped off the published schema", field)
+			continue
+		}
+		if v != float64(0) {
+			t.Errorf("%q = %v, want 0", field, v)
+		}
 	}
 }
 

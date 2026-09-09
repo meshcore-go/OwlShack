@@ -208,24 +208,20 @@ export function RadioHealthPage() {
 
       <section className="flex flex-col gap-2">
         <SectionTitle eyebrow="Receive" title="Losses and stalls" />
-        <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-6 gap-px bg-border rounded-md overflow-hidden">
+        <div className="grid grid-cols-2 sm:grid-cols-4 gap-px bg-border rounded-md overflow-hidden">
           <StatTile label="Queue full (new)" value={num(status.inboundDroppedNew)} band={faultBand(status.inboundDroppedNew)} />
-          <StatTile label="Queue full (oldest)" value={num(status.inboundDroppedOldest)} band={faultBand(status.inboundDroppedOldest)} />
+          <StatTile label="Queue full (oldest)" value={opt(status.inboundDroppedOldest)} band={faultBand(status.inboundDroppedOldest ?? 0)} />
           <StatTile label="Decode errors" value={num(status.hwDecodeErrors)} band={faultBand(status.hwDecodeErrors)} />
-          <StatTile label="Hardware errors" value={num(status.hwErrors)} band={faultBand(status.hwErrors)} />
           <StatTile label="Handler slow" value={num(status.handlerSlow)} band={faultBand(status.handlerSlow)} />
-          <StatTile label="TX outcome lost" value={num(status.txOutcomeLost)} band={faultBand(status.txOutcomeLost)} />
+          <StatTile label="Hardware errors" value={opt(status.hwErrors)} band={faultBand(status.hwErrors ?? 0)} />
+          <StatTile label="TX outcome lost" value={opt(status.txOutcomeLost)} band={faultBand(status.txOutcomeLost ?? 0)} />
+          <StatTile label="Signal meta timeouts" value={opt(status.rxMetaTimeouts)} band={faultBand(status.rxMetaTimeouts ?? 0)} />
+          <StatTile
+            label="Signal meta misattributed"
+            value={opt(status.rxMetaMisattributed)}
+            band={faultBand(status.rxMetaMisattributed ?? 0)}
+          />
         </div>
-        {!spi && (
-          <div className="grid grid-cols-2 gap-px bg-border rounded-md overflow-hidden">
-            <StatTile label="Signal meta timeouts" value={num(status.rxMetaTimeouts)} band={faultBand(status.rxMetaTimeouts)} />
-            <StatTile
-              label="Signal meta misattributed"
-              value={num(status.rxMetaMisattributed)}
-              band={faultBand(status.rxMetaMisattributed)}
-            />
-          </div>
-        )}
       </section>
 
       {spi && (
