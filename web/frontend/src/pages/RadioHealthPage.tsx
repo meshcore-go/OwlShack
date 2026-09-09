@@ -208,7 +208,7 @@ export function RadioHealthPage() {
 
       <section className="flex flex-col gap-2">
         <SectionTitle eyebrow="Receive" title="Losses and stalls" />
-        <div className="grid grid-cols-2 sm:grid-cols-4 gap-px bg-border rounded-md overflow-hidden">
+        <div className="grid grid-cols-2 sm:grid-cols-5 gap-px bg-border rounded-md overflow-hidden">
           <StatTile label="Queue full (new)" value={num(status.inboundDroppedNew)} band={faultBand(status.inboundDroppedNew)} />
           <StatTile label="Queue full (oldest)" value={opt(status.inboundDroppedOldest)} band={faultBand(status.inboundDroppedOldest ?? 0)} />
           <StatTile label="Board frame decode" value={opt(status.hwDecodeErrors)} band={faultBand(status.hwDecodeErrors ?? 0)} />

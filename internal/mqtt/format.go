@@ -120,7 +120,8 @@ type statsBlock struct {
 	DirectDups uint64 `json:"direct_dups"`
 	// recv_errors is the RADIO DRIVER failing to read a packet it knew had arrived, matching the
 	// firmware's own field (driver.getPacketsRecvErrors) that meshcoretomqtt forwards to these same
-	// brokers. It is 0 on KISS, where the TNC does not expose its driver counters.
+	// brokers. Polled over HW_CMD_GET_STATS on KISS and read from the chip on SPI; 0 only when the
+	// modem does not answer that query at all.
 	RecvErrors uint64 `json:"recv_errors"`
 	// PacketParseErrors is bytes that arrived intact and did not decode as a MeshCore packet. This
 	// is what recv_errors carried until v1.3.2, which was a different measurement under a name the

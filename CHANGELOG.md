@@ -17,14 +17,17 @@ Baseline `v1.3.1` · no schema change
 - **`recv_errors` changes meaning.** It now carries radio-driver receive failures, matching the
   firmware's own field (`driver.getPacketsRecvErrors()`, which `RadioLibWrapper::recvRaw`
   increments when `readData` fails after the interrupt). It was carrying packet parse failures.
-  On a KISS modem it is now **0**: the TNC does not expose its driver counters over telemetry
-  frames, only through the CLI stats reply.
+  Both transports report it: the KISS firmware answers `HW_CMD_GET_STATS` with the same counter,
+  which OwlShack now polls at status-publish time.
 - **`packet_parse_errors` is new** and carries what `recv_errors` used to: bytes that arrived
   intact and did not decode as a MeshCore packet. The radio did its job; something else sent
   malformed bytes.
-- **A dashboard keyed on `recv_errors` will see OwlShack nodes change**, in most cases dropping to
-  0 on KISS. Nothing errors and no key disappears, so the change is invisible on the wire. Read
-  `client_version` if you need to tell the versions apart.
+- **A dashboard keyed on `recv_errors` will see OwlShack nodes change**, usually downwards, since
+  a radio-driver failure is far rarer than a malformed packet. Nothing errors and no key
+  disappears, so the change is invisible on the wire. Read `client_version` to tell the versions
+  apart.
+- **KISS nodes gain real `packets_recv` and `packets_sent`** from the same query, where they were
+  previously the observer's own tallies only.
 - No database migration; `user_version` stays 11.
 
 ### Fixed
@@ -41,8 +44,12 @@ Baseline `v1.3.1` · no schema change
   `driver_errors` and the parse count, so `driver_errors` was a strict subset of `recv_errors` and
   the same event was counted twice. `recv_errors` also meant different things on the two
   transports: parse failures on KISS, parse plus driver failures on SPI.
+- **The KISS firmware's own packet counters were never polled.** `HW_CMD_GET_STATS` has always
+  answered with rx, tx and `getPacketsRecvErrors()`, and `meshcore-go` has wrapped it as
+  `FirmwareCounters` since v1.4.0. Not asking meant publishing a 0 that read as a radio hearing
+  everything cleanly. Polled now, and still absent rather than 0 when a modem does not answer.
 - `GET /api/radio/status` omits `hwDecodeErrors` on SPI rather than reporting a 0 it never
-  measured, and gains `recvErrors` on SPI. The MQTT payload keeps publishing both keys on both
+  measured, and gains `recvErrors` on both transports. The MQTT payload keeps publishing both keys on both
   transports, because omitting a key there is a coordinated change and dropping to 0 is not.
 
 ### Known limitations

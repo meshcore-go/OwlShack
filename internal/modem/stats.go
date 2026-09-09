@@ -59,8 +59,8 @@ type LinkStats struct {
 	CRCErrors   *uint64 // chip-level CRC and header errors: a noisy channel
 	// RecvErrors is the radio driver failing to read a packet it knew had arrived. This is the
 	// firmware's recv_errors (RadioLibWrapper::recvRaw increments it when readData fails after the
-	// interrupt), so it publishes under that name. Not reachable over KISS: the TNC keeps its
-	// driver counters to itself and only exposes them through the CLI stats reply.
+	// interrupt), so it publishes under that name. Both transports can measure it: the KISS
+	// firmware answers HW_CMD_GET_STATS with the same counter.
 	RecvErrors *uint64
 	// DriverErrors is SPI transaction failures, busy timeouts and failed IRQ reads.
 	DriverErrors *uint64
@@ -91,6 +91,7 @@ type kissStatsProvider struct {
 	lastReply atomic.Int64
 
 	mu          sync.Mutex
+	fwCounters  *hardware.FirmwareStats // nil until the modem answers HW_CMD_GET_STATS
 	noiseFloor  int16
 	batteryMV   uint16
 	haveBattery bool
@@ -128,7 +129,11 @@ func NewKissStatsProvider(modem *hardware.KissModem, radio RadioInfo) *kissStats
 
 func (p *kissStatsProvider) LinkStats() LinkStats {
 	s := p.modem.Stats()
-	return LinkStats{
+	p.mu.Lock()
+	fw := p.fwCounters
+	p.mu.Unlock()
+
+	ls := LinkStats{
 		InboundDroppedNew:    s.InboundDroppedNew,
 		HandlerSlow:          s.HandlerSlow,
 		HwDecodeErrors:       &s.HwDecodeErrors,
@@ -138,6 +143,11 @@ func (p *kissStatsProvider) LinkStats() LinkStats {
 		HwErrors:             &s.HwErrors,
 		TxOutcomeLost:        &s.TxOutcomeLost,
 	}
+	if fw != nil {
+		recv, sent, errs := uint64(fw.PacketsRecv), uint64(fw.PacketsSent), uint64(fw.PacketsErrors)
+		ls.PacketsRecv, ls.PacketsSent, ls.RecvErrors = &recv, &sent, &errs
+	}
+	return ls
 }
 
 func (p *kissStatsProvider) Transport() string { return "kiss" }
@@ -160,6 +170,17 @@ func (p *kissStatsProvider) PacketScore(snrDB float64, packetLen int) float64 {
 }
 
 func (p *kissStatsProvider) Stats(ctx context.Context) DeviceStats {
+	// A synchronous round-trip, unlike the fire-and-forget queries below, so it runs first and its
+	// reply is cached for LinkStats, which has no ctx to poll with. Firmware without
+	// HW_CMD_GET_STATS errors here and the counters stay nil, which is the honest answer: this
+	// modem cannot report them, rather than a 0 that reads as a radio hearing everything cleanly.
+	if fw, err := p.modem.FirmwareCounters(ctx); err != nil {
+		p.log.Debug("firmware counters unavailable", "error", err)
+	} else {
+		p.mu.Lock()
+		p.fwCounters = &fw
+		p.mu.Unlock()
+	}
 	if err := p.modem.GetNoiseFloor(); err != nil {
 		p.log.Error("get noise floor", "error", err)
 	}

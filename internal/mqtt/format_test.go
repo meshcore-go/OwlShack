@@ -369,10 +369,11 @@ func TestFormatStatus_RecvErrorsIsTheRadioCounterNotTheParseCount(t *testing.T) 
 		t.Errorf("packet_parse_errors = %v, want 40", stats["packet_parse_errors"])
 	}
 
-	// KISS: the TNC does not expose its driver counters, so 0 rather than the parse count leaking in.
+	// A modem that does not answer HW_CMD_GET_STATS: 0 on the wire, and never the parse count
+	// leaking across. The key still ships because the schema is shared.
 	stats = read(modem.LinkStats{}, 40)
 	if stats["recv_errors"] != float64(0) {
-		t.Errorf("recv_errors = %v on KISS, want 0 and never the parse count", stats["recv_errors"])
+		t.Errorf("recv_errors = %v unmeasured, want 0 and never the parse count", stats["recv_errors"])
 	}
 	if stats["packet_parse_errors"] != float64(40) {
 		t.Errorf("packet_parse_errors = %v, want 40", stats["packet_parse_errors"])

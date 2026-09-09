@@ -66,7 +66,7 @@ type Companion struct {
 	runCtx context.Context
 }
 
-func NewCompanion(cfg config.CompanionConfig, mux *node.RadioMux, st *store.Store, hub *api.Hub, echoTracker *echo.Tracker, stats modem.StatsProvider, recvErrors *atomic.Uint64, nodeOpts ...node.Option) (*Companion, error) {
+func NewCompanion(cfg config.CompanionConfig, mux *node.RadioMux, st *store.Store, hub *api.Hub, echoTracker *echo.Tracker, stats modem.StatsProvider, parseErrors *atomic.Uint64, nodeOpts ...node.Option) (*Companion, error) {
 	name := strings.TrimSpace(cfg.Name)
 	if name == "" {
 		return nil, fmt.Errorf("companion name is required")
@@ -123,7 +123,7 @@ func NewCompanion(cfg config.CompanionConfig, mux *node.RadioMux, st *store.Stor
 	if companion.cfg.Mqtt != nil {
 		mqttCfg := *companion.cfg.Mqtt
 
-		obs, err := mqtt.NewObserver(mqttCfg, name, mux, companion.node.Identity(), stats, recvErrors)
+		obs, err := mqtt.NewObserver(mqttCfg, name, mux, companion.node.Identity(), stats, parseErrors)
 		if err != nil {
 			return nil, fmt.Errorf("creating mqtt observer: %w", err)
 		}
