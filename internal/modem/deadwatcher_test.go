@@ -33,7 +33,7 @@ func TestStartDeadWatcherIgnoresModemWithoutDead(t *testing.T) {
 
 type stubModem struct{}
 
-func (stubModem) SendData([]byte) error { return nil }
+func (stubModem) SendData([]byte) error                                                        { return nil }
 func (stubModem) SetDataHandler(func(data []byte, snr float32, rssi int8, hasSignalInfo bool)) {}
 func (stubModem) AddOutboundHandler(func([]byte))                                              {}
 
