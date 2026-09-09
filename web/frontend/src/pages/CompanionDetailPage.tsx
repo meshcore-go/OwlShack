@@ -2228,8 +2228,13 @@ function MessageBubble({
               <span className={snrTextClass(msg.snr)}>{msg.snr.toFixed(1)}dB</span>
             )}
             {msg.hops != null && msg.hops > 0 && (
-              <span className="text-muted-foreground/60">
+              // Hash size only means something alongside a path, so it rides the hops span.
+              <span
+                className="text-muted-foreground/60"
+                title={msg.pathHashSize != null ? `${msg.pathHashSize}-byte path hashes` : undefined}
+              >
                 {msg.hops} hop{msg.hops > 1 ? "s" : ""}
+                {msg.pathHashSize != null && ` · ${msg.pathHashSize}B`}
               </span>
             )}
             {msg.repeatCount != null && msg.repeatCount > 0 && (

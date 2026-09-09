@@ -12,6 +12,12 @@ already defined by the firmware and OwlShack was the one publishing something el
 
 Baseline `v1.3.1` · no schema change
 
+### Added
+
+- Chat bubbles show the path hash size next to the hop count, as `3 hops · 2B`. The field was
+  already stored and served; only the render was missing. Shown only where there is a path, since
+  a hash width describes nothing on a message heard direct.
+
 ### Upgrading
 
 - **`recv_errors` changes meaning.** It now carries radio-driver receive failures, matching the
