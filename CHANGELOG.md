@@ -6,9 +6,9 @@ top until tagged.
 ## v1.3.0 — unreleased
 
 Drive a bare SX12xx LoRa chip directly on the host SPI bus: no companion MCU, no
-KISS firmware in between. Plus a radio-health endpoint, a dead-receiver
-watchdog, and an MQTT layer that no longer blocks startup on brokers that are
-not there.
+KISS firmware in between. Plus zero-hop node discovery that no longer needs a
+repeater personality, a radio-health endpoint, a dead-receiver watchdog, and an
+MQTT layer that no longer blocks startup on brokers that are not there.
 
 Baseline `v1.2.0` · schema `user_version` 9 → 10 · `meshcore-go` v1.4.0 · Go 1.26+
 
@@ -53,6 +53,23 @@ Baseline `v1.2.0` · schema `user_version` 9 → 10 · `meshcore-go` v1.4.0 · G
 - **`meshcore-go` v1.4.0**, with `hardware/transport` and the new
   `hardware/sx12xx` at the same tag. Activity-LED blinking moved into the
   library's chip drivers, where every consumer gets it.
+- **Zero-hop node discovery**, on a Discover page and at `POST /api/discover` /
+  `GET /api/discover`, with each answer also broadcast on the new `discovered`
+  websocket topic. It asks every repeater and sensor in direct radio range to
+  answer and waits 30 s, because responders stagger their replies by a widened
+  random delay — an empty list before the window closes means "not yet", not
+  "nothing there". Results show as a list or on a map with a link line per
+  responder, and each known node opens the standard peer detail panel.
+  Two properties are worth stating plainly. It works from *whichever* node is
+  running: the firmware's request carries no sender identity, so finding what a
+  radio can hear no longer requires running a repeater. And every link is
+  reported in both directions — the SNR we measured on the reply beside the SNR
+  the responder reported for our request — because a link limited by our receive
+  looks identical to a healthy one if you only print a single number.
+  Only repeaters and sensors are offered. `simple_room_server` has no
+  `onControlDataRecv` override and `companion_radio` forwards the frame to its
+  phone app without ever replying, so listing those types would return an empty
+  result that reads as "none in range".
 
 ### Fixed
 
@@ -107,6 +124,15 @@ Baseline `v1.2.0` · schema `user_version` 9 → 10 · `meshcore-go` v1.4.0 · G
   always reported `0`, which looks like a modem keeping up comfortably.
 - **Battery and MCU temperature no longer publish `0`** on hats that have
   neither, which reported a flat cell and a freezing board.
+- **Signal-strength bars now line up down a column.** The dB label had no fixed
+  width, so the bar icon beside it shifted with the digit count — `0.0dB` is a
+  character shorter than `-6.3dB`. The rows knocked out of alignment were the
+  ones reading near zero, which is where the eye goes anyway.
+- **The repeater's Discover button now waits 30 s between requests.** Firing
+  again while the first request is still being answered only adds contention,
+  and the firmware allows each repeater four discovery responses every two
+  minutes (`discover_limiter(4, 120)`); past that it stays silent, which looks
+  exactly like it dropping out of radio range.
 
 ### Verified on hardware
 
@@ -119,6 +145,14 @@ Both nodes transmit and receive each other's traffic, which is the only real
 proof the external PA radiates — `TX_DONE` fires whether or not anything leaves
 the antenna. Reset recovery was exercised by pulling the chip's `NRST` line and
 watching the receiver re-arm.
+
+Discovery was exercised on air against four repeaters. The scan was run with the
+repeater personality deliberately out of the path, so the answers prove the
+feature does what it claims: three to four repeaters replied to a companion-only
+scan, within about three seconds each on SF7. One link came back asymmetric by
+roughly 15 dB, which is the case the two SNR columns exist for. A sensors-only
+scan returned nothing while those same repeaters were still answering repeater
+scans, which is the type filter proven over RF rather than only in a test.
 
 ### Internal
 
@@ -144,6 +178,15 @@ watching the receiver re-arm.
   its node back.
 - A companion or repeater that fails to *restart* on a config reload is still
   fatal; only the radio's own failure is now survivable.
+- **Sensor discovery is unproven on air.** The type filter is verified in both
+  directions, but no sensor was within radio range of the test bench, so a
+  sensor actually answering has only been read in the firmware source.
+- A discovery response carries no position, so the Discover map can only place
+  nodes whose advert is already on record. The page reports how many it could
+  not place rather than quietly showing fewer nodes than the list.
+- A node that answers discovery but has never been heard advertising has no
+  peer record, so it cannot be opened or mapped. Those rows read `never` and are
+  not clickable. This case has not been seen on the bench.
 
 ## v1.2.0
 
