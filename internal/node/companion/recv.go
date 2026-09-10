@@ -1,18 +1,21 @@
 package companion
 
 import (
+	"bytes"
 	"context"
 	"crypto/rand"
 	"encoding/binary"
 	"encoding/hex"
 	"fmt"
 	"strings"
+	"sync"
 	"time"
 	"unicode/utf8"
 
 	meshcore "github.com/meshcore-go/meshcore-go"
 	"github.com/meshcore-go/meshcore-go/node"
 
+	"github.com/meshcore-go/OwlShack/internal/meshpath"
 	"github.com/meshcore-go/OwlShack/internal/store"
 	"github.com/meshcore-go/OwlShack/internal/trigger"
 )
@@ -46,16 +49,12 @@ func (c *Companion) sendDMAck(pkt *meshcore.Packet, senderPubKey []byte, sharedS
 			Payload: ackPayload,
 		}
 
-		if len(senderPubKey) == 32 {
-			var pubkey [32]byte
-			copy(pubkey[:], senderPubKey)
-			peer := c.node.Peers().Lookup(pubkey)
-			if peer != nil && peer.OutPath != nil {
-				hs := max(peer.OutPathHashSize, 1)
-				ackPkt.Header = meshcore.MakeHeader(meshcore.RouteTypeDirect, meshcore.PayloadTypeAck, 0)
-				ackPkt.Path = peer.OutPath
-				ackPkt.PathLength = (hs-1)<<6 | byte(len(peer.OutPath)/int(hs))
-			}
+		// The contact row is where a learned route is persisted; hydratePeerTables leaves the peer
+		// table's OutPath nil on purpose, so reading only that floods every ack after a restart.
+		if outPath, hs, ok := c.learnedRoute(senderPubKey); ok {
+			ackPkt.Header = meshcore.MakeHeader(meshcore.RouteTypeDirect, meshcore.PayloadTypeAck, 0)
+			ackPkt.Path = outPath
+			ackPkt.PathLength = (hs-1)<<6 | byte(len(outPath)/int(hs))
 		}
 
 		if err := c.node.SendPacketDelayed(ackPkt, node.PriorityFloodRelay, dmAckDelay); err != nil {
@@ -64,41 +63,11 @@ func (c *Companion) sendDMAck(pkt *meshcore.Packet, senderPubKey []byte, sharedS
 	}
 }
 
-// buildPathReturn matches the firmware's Path payload: [dest_hash:1][src_hash:1][MAC:2][encrypted([pathLenByte][path_data][extra_type][extra_data])].
+// buildPathReturn is the shared builder bound to this companion's identity.
 func (c *Companion) buildPathReturn(destPubKey []byte, sharedSecret []byte, inPath []byte, pathLenByte byte, extraType byte, extraData []byte) (*meshcore.Packet, error) {
-	pathHashSize := int((pathLenByte>>6)&3) + 1
-	pathHashCount := int(pathLenByte & 63)
-	pathDataLen := pathHashCount * pathHashSize
-	if pathDataLen > len(inPath) {
-		pathDataLen = len(inPath)
-	}
-
-	plain := make([]byte, 0, 1+pathDataLen+1+len(extraData))
-	plain = append(plain, pathLenByte)
-	plain = append(plain, inPath[:pathDataLen]...)
-	plain = append(plain, extraType)
-	plain = append(plain, extraData...)
-
-	encrypted, err := meshcore.EncryptThenMAC(sharedSecret, plain)
-	if err != nil {
-		return nil, fmt.Errorf("encrypting path return: %w", err)
-	}
-
-	selfPubKey := c.node.Identity().PublicKey()
-	payload := make([]byte, 0, meshcore.PathHashSize+meshcore.PathHashSize+len(encrypted))
-	payload = append(payload, destPubKey[:meshcore.PathHashSize]...)
-	payload = append(payload, selfPubKey[:meshcore.PathHashSize]...)
-	payload = append(payload, encrypted...)
-
-	pkt := &meshcore.Packet{
-		Header:     meshcore.MakeHeader(meshcore.RouteTypeFlood, meshcore.PayloadTypePath, 0),
-		PathLength: (meshcore.PathHashSize - 1) << 6,
-		Payload:    payload,
-	}
-	return pkt, nil
+	return meshpath.BuildReturn(c.node.Identity().PublicKey(), destPubKey, sharedSecret, inPath, pathLenByte, extraType, extraData)
 }
 
-// handleRoomPush handles a TXT_TYPE_SIGNED_PLAIN room post: [post_timestamp:4][flags:1][author_pubkey_prefix:4][text:N].
 func (c *Companion) handleRoomPush(pkt *meshcore.Packet, roomPubKey []byte, roomPubKeyHex string, sharedSecret []byte, plaintext []byte) {
 	if len(plaintext) < 9 {
 		c.log.Debug("room push plaintext too short", "room", roomPubKeyHex[:12])
@@ -117,7 +86,15 @@ func (c *Companion) handleRoomPush(pkt *meshcore.Packet, roomPubKey []byte, room
 
 	channelKey := "dm:" + roomPubKeyHex
 
-	// The server's backlog holds at most 32 posts, so 50 recent rows cover the resync window.
+	// In memory first: a fast retry arrives while the previous insert is still on the writer queue,
+	// so the query below cannot see it yet and would store the post twice.
+	if c.recentDM(roomPubKey, postTs, text) {
+		c.log.Debug("room push duplicate ignored", "room", roomPubKeyHex[:12], "postTs", postTs)
+		return
+	}
+
+	// The server's backlog holds at most 32 posts, so 50 recent rows cover the resync window;
+	// this still catches a repost from before a restart, which the in-memory set has forgotten.
 	recent, err := c.store.Messages.List(c.runCtx, c.cfg.ID, channelKey, 50, 0)
 	if err == nil {
 		for _, m := range recent {
@@ -187,16 +164,10 @@ func (c *Companion) handleDMPathReturn(pkt *meshcore.Packet) {
 		return
 	}
 
-	contacts, err := c.store.Contacts.List(c.runCtx, c.cfg.ID)
-	if err != nil {
-		return
-	}
-
-	for _, ct := range contacts {
-		if len(ct.PeerPubKey) == 0 || ct.PeerPubKey[0] != path.Source {
-			continue
-		}
-		peerID, err := meshcore.NewIdentityFromBytes(ct.PeerPubKey)
+	// Same candidate set as an inbound DM: sendDM will route to a non-contact peer, so a path
+	// return from one has to be decryptable or its ack is missed and the route never learned.
+	for _, cand := range c.dmCandidates(path.Source) {
+		peerID, err := meshcore.NewIdentityFromBytes(cand.pubkey)
 		if err != nil {
 			continue
 		}
@@ -214,23 +185,31 @@ func (c *Companion) handleDMPathReturn(pkt *meshcore.Packet) {
 		returnPath, extraType, extraData := pp.Path, pp.ExtraType, pp.Extra
 
 		c.log.Debug("DM path return received",
-			"peer", hex.EncodeToString(ct.PeerPubKey[:6]),
+			"peer", hex.EncodeToString(cand.pubkey[:6]),
 			"hops", pp.PathHashCount(),
 			"pathHex", hex.EncodeToString(returnPath))
 		var pubkey [32]byte
-		copy(pubkey[:], ct.PeerPubKey)
+		copy(pubkey[:], cand.pubkey)
 		c.node.Peers().SetOutPath(pubkey, returnPath, pp.PathHashSize())
 		hs := pp.PathHashSize()
+		peerPubKey := cand.pubkey
 		c.store.WriteAsync(func() {
-			_ = c.store.Contacts.UpdateOutPath(context.Background(), c.cfg.ID, ct.PeerPubKey, returnPath, hs)
+			_ = c.store.Contacts.UpdateOutPath(context.Background(), c.cfg.ID, peerPubKey, returnPath, hs)
 		})
 
 		if extraType == meshcore.PayloadTypeAck && len(extraData) >= 4 {
 			ackCRC := binary.LittleEndian.Uint32(extraData[:4])
 			c.node.NotifyACK(ackCRC)
 			c.log.Debug("DM ACK received via path return",
-				"peer", hex.EncodeToString(ct.PeerPubKey[:6]),
+				"peer", hex.EncodeToString(cand.pubkey[:6]),
 				"ackCRC", fmt.Sprintf("%08x", ackCRC))
+		}
+
+		// Firmware Mesh.cpp:173-178: answer a FLOOD path return with a reciprocal one, sent direct
+		// along the route we just learned. Without it the peer never learns its route to us and
+		// keeps flooding every reply.
+		if pkt.IsRouteFlood() {
+			c.sendReciprocalPathReturn(cand.pubkey, secret, pkt, returnPath, hs)
 		}
 		return
 	}
@@ -496,7 +475,7 @@ func (c *Companion) registerPacketHandlers() {
 		}
 
 		flags := plaintext[4] >> 2
-		text := strings.TrimRight(string(plaintext[5:]), "\x00")
+		text, attemptByte := parseTextPlaintext(plaintext)
 
 		switch flags {
 		case txtTypeCliData:
@@ -533,24 +512,40 @@ func (c *Companion) registerPacketHandlers() {
 
 		// Plain-DM ack payload: [crc:4][attempt][random]
 		ackPlaintext := plaintext[:5+len(text)]
-		var attemptByte byte
-		if 5+len(text)+1 < len(plaintext) {
-			attemptByte = plaintext[5+len(text)+1]
-		}
 		var randomByte [1]byte
 		rand.Read(randomByte[:])
 		c.sendDMAck(pkt, senderPubKey, sharedSecret, meshcore.BuildAckPayload(ackPlaintext, senderPubKey, attemptByte, randomByte[0]))
 
+		// The ack goes out first: a retry means the sender never got one, and answering is the
+		// whole point. Past that a retransmission must not become a second message.
+		if c.recentDM(senderPubKey, binary.LittleEndian.Uint32(plaintext[:4]), text) {
+			c.log.Debug("duplicate DM ignored", "from", senderName, "attempt", attemptByte)
+			return
+		}
+
 		channelKey := "dm:" + senderPubKeyHex
 
+		// A direct-routed packet has had its path consumed hop by hop (Mesh.cpp removeSelfFromPath),
+		// so the count is unknown rather than zero; the firmware marks that case path_len 0xFF.
+		// Leaving these nil keeps "we could not measure" distinct from "we measured no hops".
+		var hopsPtr, sizePtr *int
+		if pkt.IsRouteFlood() {
+			hops := int(pkt.PathHashCount())
+			pathHashSize := int(pkt.PathHashSize())
+			hopsPtr, sizePtr = &hops, &pathHashSize
+		}
+
 		msg := &store.Message{
-			CompanionID: c.cfg.ID,
-			Channel:     channelKey,
-			ChannelHash: 0,
-			Sender:      senderName,
-			Text:        text,
-			Direction:   "rx",
-			Timestamp:   time.Now(),
+			CompanionID:  c.cfg.ID,
+			Channel:      channelKey,
+			ChannelHash:  0,
+			Sender:       senderName,
+			Text:         text,
+			Direction:    "rx",
+			Timestamp:    time.Now(),
+			PathHashes:   pkt.Path,
+			PathHashSize: sizePtr,
+			Hops:         hopsPtr,
 		}
 		if pkt.HasSignalInfo {
 			snr := float64(pkt.SNR)
@@ -575,6 +570,10 @@ func (c *Companion) registerPacketHandlers() {
 					"direction": "rx",
 					"timestamp": msg.Timestamp.UTC().Format(time.RFC3339),
 					"id":        msg.ID,
+				}
+				if hopsPtr != nil {
+					wsMsg["hops"] = *hopsPtr
+					wsMsg["pathHashSize"] = *sizePtr
 				}
 				if pkt.HasSignalInfo {
 					wsMsg["snr"] = pkt.SNR
@@ -743,4 +742,87 @@ func (c *Companion) dispatchDMTriggers(dm trigger.DirectMessage, pkt *meshcore.P
 			h.HandleDirectMessage(dm, pkt)
 		}
 	}
+}
+
+// parseTextPlaintext splits a TXT_MSG plaintext into its text and the sender's attempt number.
+// The text ends at the first NUL, as the firmware's strlen does (BaseChatMesh.cpp:241): a retry
+// past attempt 3 hides the attempt byte AFTER that terminator, so trimming trailing NULs instead
+// leaves the suffix in the message and computes the ack over the wrong bytes, which the sender
+// then never accepts.
+func parseTextPlaintext(plaintext []byte) (string, byte) {
+	body := plaintext[5:]
+	if i := bytes.IndexByte(body, 0); i >= 0 {
+		body = body[:i]
+	}
+	var attempt byte
+	if 5+len(body)+1 < len(plaintext) {
+		attempt = plaintext[5+len(body)+1]
+	}
+	return string(body), attempt
+}
+
+// dmRetryWindow bounds how long a message is remembered for retry collapsing. The firmware gives up
+// well inside this, so anything older is a genuine resend by a person, not a protocol retry.
+const dmRetryWindow = 10 * time.Minute
+
+type dmSeen struct {
+	sync.Mutex
+	at map[string]time.Time
+}
+
+// recentDM reports whether this exact message has already been handled, and records it if not.
+// A retry repeats the sender's timestamp and text and only bumps the attempt byte, so all three
+// name the message. The text has to be in the key: a plain DM's timestamp is the sending app's
+// clock at second resolution (MyMesh.cpp:1088 reads it from the frame, unlike the CLI_DATA branch
+// which calls getCurrentTimeUnique), so two different messages in one second share a timestamp and
+// keying without the text would ack the second and silently drop it.
+func (c *Companion) recentDM(senderPubKey []byte, timestamp uint32, text string) bool {
+	key := fmt.Sprintf("%x:%d:%s", senderPubKey[:min(8, len(senderPubKey))], timestamp, text)
+	now := time.Now()
+
+	c.dmSeen.Lock()
+	defer c.dmSeen.Unlock()
+	if c.dmSeen.at == nil {
+		c.dmSeen.at = make(map[string]time.Time)
+	}
+	for k, t := range c.dmSeen.at { // small map, swept on every DM rather than on a timer
+		if now.Sub(t) > dmRetryWindow {
+			delete(c.dmSeen.at, k)
+		}
+	}
+	_, seen := c.dmSeen.at[key]
+	c.dmSeen.at[key] = now
+	return seen
+}
+
+// learnedRoute returns the stored send-path to a peer, preferring the contact row: that is where a
+// path return is persisted, while hydratePeerTables deliberately leaves the peer table's OutPath
+// nil so a route is never assumed across a restart. ok is false when no route is known (flood).
+func (c *Companion) learnedRoute(pubkey []byte) ([]byte, uint8, bool) {
+	if ct, err := c.store.Contacts.Get(c.runCtx, c.cfg.ID, pubkey); err == nil && ct != nil && ct.OutPath != nil {
+		return ct.OutPath, max(ct.OutPathHashSize, 1), true
+	}
+	if p := c.knownPeer(pubkey); p != nil && p.OutPath != nil {
+		return p.OutPath, max(p.OutPathHashSize, 1), true
+	}
+	return nil, 0, false
+}
+
+// reciprocalPathDelay matches the firmware's 500 ms on a reciprocal path return (Mesh.cpp:177).
+const reciprocalPathDelay = 500 * time.Millisecond
+
+// sendReciprocalPathReturn teaches a peer its route to us, sent direct down the route they just
+// taught us. It carries no extra payload, so buildPathReturn salts it to keep the packet unique.
+func (c *Companion) sendReciprocalPathReturn(peerPubKey, secret []byte, pkt *meshcore.Packet, learnedPath []byte, hashSize uint8) {
+	rpath, err := c.buildPathReturn(peerPubKey, secret, pkt.Path, pkt.PathLength, 0, nil)
+	if err != nil {
+		c.log.Debug("failed to build reciprocal path return", "error", err)
+		return
+	}
+	meshpath.Direct(rpath, learnedPath, hashSize)
+	if err := c.node.SendPacketDelayed(rpath, node.PriorityFloodRelay, reciprocalPathDelay); err != nil {
+		c.log.Debug("failed to send reciprocal path return", "error", err)
+		return
+	}
+	c.log.Debug("sent reciprocal path return", "peer", hex.EncodeToString(peerPubKey[:min(6, len(peerPubKey))]), "hops", len(learnedPath)/int(max(hashSize, 1)))
 }

@@ -14,6 +14,10 @@ import (
 	"github.com/meshcore-go/OwlShack/internal/store"
 )
 
+// maxDMTextBytes is the firmware's MAX_TEXT_LEN (10 * CIPHER_BLOCK_SIZE), less the 2 bytes a
+// retry past attempt 3 appends, so a message that sends can also be retried.
+const maxDMTextBytes = 10*16 - 2
+
 // uniqueTimestamp mirrors the firmware's getCurrentTimeUnique(): a remote node drops a second post sharing a timestamp as a retry.
 func (c *Companion) uniqueTimestamp() uint32 { return c.repeaters.UniqueTimestamp() }
 
@@ -86,6 +90,38 @@ func (c *Companion) sendDMReply(pubkeyHex, text string, hashSize uint8, ackTimeo
 	return c.sendDM(pubkeyHex, text, hashSize, ackTimeout)
 }
 
+// dmAckTimeout mirrors the firmware's calcFloodTimeoutMillisFor / calcDirectTimeoutMillisFor
+// (MyMesh.cpp:851-858): the wait has to scale with airtime and hop count or a slow preset gives up
+// before the ack can physically arrive. floor keeps the caller's configured value as a minimum,
+// and is used outright when the radio params are unknown and airtime reads 0.
+// Library limitation: SendTextMessage applies one timeout to every attempt, while the firmware
+// recomputes per attempt, so a 0-hop neighbour that goes out of range mid-conversation runs its
+// flood fallback attempts on the shorter direct timeout.
+func (c *Companion) dmAckTimeout(textLen int, outPath []byte, hashSize uint8, floor time.Duration) time.Duration {
+	if c.stats == nil {
+		return floor
+	}
+	// [4 ts][1 flags][text] padded to an AES block, plus dest+src+MAC, header and path-length byte.
+	cipherLen := 5 + textLen
+	if rem := cipherLen % 16; rem != 0 {
+		cipherLen += 16 - rem
+	}
+	airtime := c.stats.EstAirtimeMs(2 + len(outPath) + 4 + cipherLen)
+	if airtime == 0 {
+		return floor
+	}
+
+	timeout := node.CalcFloodTimeout(airtime)
+	if outPath != nil { // non-nil, even empty, routes direct
+		hops := 0
+		if hashSize > 0 {
+			hops = len(outPath) / int(hashSize)
+		}
+		timeout = node.CalcDirectTimeout(airtime, uint8(min(hops, 255)))
+	}
+	return max(timeout, floor)
+}
+
 func (c *Companion) sendDM(pubkeyHex, text string, fallbackHashSize uint8, ackTimeout time.Duration) error {
 	pubkeyBytes, err := hex.DecodeString(pubkeyHex)
 	if err != nil {
@@ -97,21 +133,22 @@ func (c *Companion) sendDM(pubkeyHex, text string, fallbackHashSize uint8, ackTi
 		return fmt.Errorf("invalid pubkey: %w", err)
 	}
 
+	// The UI counts characters; the wire counts bytes, and a retry past attempt 3 appends 2 more.
+	if len(text) > maxDMTextBytes {
+		return fmt.Errorf("message is %d bytes, over the %d-byte limit (multibyte characters cost more than one)", len(text), maxDMTextBytes)
+	}
+
 	// SendTextMessage treats a nil path as a flood, so an unrouted contact still sends.
-	var outPath []byte
-	var hashSize uint8
-	if ct, cerr := c.store.Contacts.Get(c.runCtx, c.cfg.ID, pubkeyBytes); cerr == nil && ct != nil {
-		outPath, hashSize = ct.OutPath, ct.OutPathHashSize
-	} else if peer := c.node.Peers().Lookup(peerIdentity.PublicKey()); peer != nil {
-		outPath, hashSize = peer.OutPath, peer.OutPathHashSize
+	outPath, hashSize, haveRoute := c.learnedRoute(pubkeyBytes)
+	if !haveRoute {
+		outPath = nil // flood
 	}
-	// A stored 0 hash width (e.g. a migrated row) would frame a direct path wrong.
-	if len(outPath) > 0 && hashSize == 0 {
-		hashSize = meshcore.PathHashSize
-	}
+	// Nothing to frame on a flood or a 0-hop neighbour, so the caller's width decides the header.
 	if len(outPath) == 0 {
 		hashSize = fallbackHashSize
 	}
+
+	ackTimeout = c.dmAckTimeout(len(text), outPath, hashSize, ackTimeout)
 
 	channelKey := "dm:" + pubkeyHex
 	statusSending := "sending"
@@ -163,6 +200,17 @@ func (c *Companion) sendDM(pubkeyHex, text string, fallbackHashSize uint8, ackTi
 			} else {
 				status = "failed"
 				c.log.Warn("DM delivery failed", "peer", pubkeyHex[:12])
+				// Every attempt failed on a route we believed in, so stop believing in it: the
+				// official app issues CMD_RESET_PATH here. The next path return re-learns it.
+				if haveRoute {
+					c.node.Peers().ResetOutPath(peerIdentity.PublicKey())
+					c.store.WriteAsync(func() {
+						if err := c.store.Contacts.UpdateOutPath(context.Background(), c.cfg.ID, pubkeyBytes, nil, 0); err != nil {
+							c.log.Error("failed to clear stale route", "peer", pubkeyHex[:12], "error", err)
+						}
+					})
+					c.log.Info("cleared stale route after failed delivery", "peer", pubkeyHex[:12])
+				}
 			}
 
 			c.store.WriteAsync(func() {
