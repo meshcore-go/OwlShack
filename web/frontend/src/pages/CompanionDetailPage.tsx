@@ -158,7 +158,8 @@ interface PathHop {
 }
 
 interface PathInfo {
-  hops: number;
+  // Absent when the hop count could not be measured (a direct-routed packet consumes its path).
+  hops?: number | null;
   pathHashSize: number;
   sender: string;
   path: PathHop[];
@@ -178,15 +179,18 @@ interface EchoEntry {
 interface Hearing {
   key: string;
   receivedAt: string;
-  hops: number;
+  // Undefined means the hop count could not be measured, not that there were none.
+  hops?: number | null;
   path: PathHop[];
   snr?: number | null;
   isOriginal: boolean;
 }
 
-// The final repeater in the path is the one closest to us; no hops means we heard it off the air.
-function hearingVia(path: PathHop[]): string {
-  if (path.length === 0) return "Direct";
+// The final repeater in the path is the one closest to us. An empty path means we heard it off the
+// air, EXCEPT on a direct-routed packet: each hop consumes its entry, so the count is absent rather
+// than zero. Naming the routing mode says what happened without inventing a hop count.
+function hearingVia(path: PathHop[], hops?: number | null): string {
+  if (path.length === 0) return hops == null ? "Direct route · hops unknown" : "Direct";
   const last = path[path.length - 1];
   return last.peerNames?.[0] || `#${last.hash}`;
 }
@@ -2711,7 +2715,7 @@ function HearingRow({ hearing, first }: { hearing: Hearing; first: boolean }) {
           ) : (
             <Radar className="size-3 shrink-0 text-muted-foreground/60" />
           )}
-          <span className="truncate">{hearingVia(hearing.path)}</span>
+          <span className="truncate">{hearingVia(hearing.path, hearing.hops)}</span>
         </span>
         <span className="ml-auto flex items-center gap-2 font-mono text-[10px] tabular-nums uppercase tracking-widest text-muted-foreground shrink-0">
           {first && <span className="text-primary/70">first</span>}

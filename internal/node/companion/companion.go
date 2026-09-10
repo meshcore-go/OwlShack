@@ -21,6 +21,11 @@ import (
 	"github.com/meshcore-go/OwlShack/internal/trigger"
 )
 
+// airtimeEstimator is the one method a send needs off the modem, so the timeout logic can be tested without a radio.
+type airtimeEstimator interface {
+	EstAirtimeMs(packetLen int) uint32
+}
+
 type triggerEntry struct {
 	trigger  trigger.Trigger
 	config   config.TriggerConfig
@@ -51,6 +56,8 @@ type Companion struct {
 
 	echoTracker *echo.Tracker
 	repeaters   *repeater.Client
+	// stats is narrowed to what a send needs: modem.StatsProvider satisfies it.
+	stats airtimeEstimator
 
 	pendingOutbound struct {
 		sync.Mutex
@@ -59,6 +66,9 @@ type Companion struct {
 	}
 
 	traceWaiters traceWaiters
+
+	// dmSeen collapses a sender's retransmissions of one message; see recentDM.
+	dmSeen dmSeen
 
 	triggers []triggerEntry
 
@@ -106,6 +116,7 @@ func NewCompanion(cfg config.CompanionConfig, mux *node.RadioMux, st *store.Stor
 		store:       st,
 		hub:         hub,
 		echoTracker: echoTracker,
+		stats:       stats,
 		repeaters:   repeater.NewClient(n, st, cfg.ID, log),
 	}
 
