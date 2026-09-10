@@ -204,10 +204,12 @@ export function rolePillClass(perms: number): string {
   }
 }
 
-// No Read / Write: neither a repeater nor a sensor ever tests for it, so offering both roles
-// promised a boundary the node does not enforce. roleLabel still names it for entries holding it.
+// The three the official app offers, so a role set there can be set here too. A repeater tests
+// only isAdmin() and a guest check, so read-only and read/write grant it the same access; rooms
+// are where read/write means something.
 export const ROLE_OPTIONS: { value: string; label: string }[] = [
   { value: String(PERM_READ_ONLY), label: "Read only" },
+  { value: String(PERM_READ_WRITE), label: "Read / Write" },
   { value: String(PERM_ADMIN), label: "Admin" },
 ];
 

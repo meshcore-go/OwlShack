@@ -31,10 +31,10 @@ Baseline `v1.3.1` · no schema change
   actually holds. That also keeps the popover usable: Radix positions it by aligning the selected
   item over the trigger, so a value with no item put the whole list off-screen at the viewport
   corner, where nothing could be clicked.
-- **The role picker no longer offers Read / Write.** Neither a repeater nor a sensor ever tests
-  for it — only `isAdmin()` and a guest check exist — so the choice promised a capability boundary
-  the node does not enforce and both roles granted identical access. Newly granted non-admin
-  clients get read-only; entries already holding read/write keep it and still display correctly.
+- Granting access now defaults to **Read only** rather than Read / Write, matching the official
+  app. Note that on a repeater the two are the same access: the firmware tests only `isAdmin()`
+  and a guest check, and nothing anywhere tests `PERM_ACL_READ_WRITE`. The distinction is real on
+  a room server, where read/write is a member who may post.
 
 ### Added
 
