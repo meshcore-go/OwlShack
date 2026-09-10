@@ -103,7 +103,7 @@ func packetTypes(pkt *meshcore.Packet, parseErr error) (routeType, payloadType *
 func packetBroadcastMsg(direction string, receivedAt time.Time, data []byte, pkt *meshcore.Packet, parseErr error, channels api.ChannelLookup) map[string]any {
 	msg := map[string]any{
 		"direction":  direction,
-		"receivedAt": receivedAt.Format(time.RFC3339),
+		"receivedAt": receivedAt.Format(time.RFC3339Nano), // sub-second: the packets UI orders observations by this
 		"raw":        hex.EncodeToString(data),
 	}
 	if parseErr != nil {

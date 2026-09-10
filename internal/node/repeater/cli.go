@@ -532,7 +532,7 @@ func (r *Repeater) cliPassword(pass string) string {
 // cliNeighborRemove matches on the bytes supplied; the firmware accepts a prefix.
 // An empty pubkey is a zero-length prefix that matches every entry, which is how the app sends
 // "Remove all Neighbours": the firmware's fromHex(dest, 0, "") succeeds and its memcmp of 0 bytes
-// is always equal (CommonCLI.cpp:230-239, MyMesh.cpp:1134-1142). Rejecting it broke that button.
+// is always equal (CommonCLI.cpp:230-239, examples/simple_repeater/MyMesh.cpp:1134-1142). Rejecting it broke that button.
 func (r *Repeater) cliNeighborRemove(pubHex string) string {
 	pub, err := hex.DecodeString(strings.ToLower(pubHex))
 	if err != nil || len(pub) > 32 {

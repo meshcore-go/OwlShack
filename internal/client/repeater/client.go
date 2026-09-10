@@ -129,7 +129,7 @@ func (rm *Client) persistOutPath(pubkey []byte, path []byte, hashSize uint8) {
 // learnedRoute resolves the send-path to a peer: the live peer table first, then the contact row the
 // route was persisted to. Without that fallback every admin command floods after a restart, because
 // hydratePeerTables leaves the table's OutPath nil and only an inbound PATH refills it — and a flood
-// request makes the far end reply by flood too (RoutingPolicy.h:39 returns PATH_RETURN
+// request makes the far end reply by flood too (src/helpers/RoutingPolicy.h:39 returns PATH_RETURN
 // unconditionally), so one missing route costs both directions. The table wins when both hold one,
 // since persistOutPath writes the row asynchronously and so lags a freshly learned path.
 func (rm *Client) learnedRoute(pubkey [meshcore.PubKeySize]byte, peer *node.Peer) (path []byte, hashSize uint8) {
@@ -219,6 +219,22 @@ func (rm *Client) replyTimeout(reqLen int, path []byte, hashSize uint8, floor ti
 	return max(node.CalcDirectTimeout(airtime, uint8(min(hops, 255))), floor)
 }
 
+// routedPacket builds a packet already addressed down a peer's learned route. It exists so the
+// length byte and the hops can never come from different places: meshcore-go writes PathLength
+// from the field and the hops from Path, so a mismatch makes the receiver read that many bytes of
+// PAYLOAD as path — a well-formed-looking send that is garbage on air. One call site did exactly
+// that. It returns the route alongside, since callers also size their reply wait from it.
+func (rm *Client) routedPacket(peerPub [meshcore.PubKeySize]byte, peer *node.Peer, payloadType byte, payload []byte) (*meshcore.Packet, []byte, uint8) {
+	outPath, hashSize := rm.learnedRoute(peerPub, peer)
+	routeType, pathLen := routeForPeer(outPath, hashSize)
+	return &meshcore.Packet{
+		Header:     meshcore.MakeHeader(routeType, payloadType, 0),
+		PathLength: pathLen,
+		Path:       outPath,
+		Payload:    payload,
+	}, outPath, hashSize
+}
+
 // roundtripRequest awaits the tagged response; storeSecret puts the secret on the pending entry for sessionless matching.
 func (rm *Client) roundtripRequest(peerPub [32]byte, peer *node.Peer, sharedSecret []byte, localPubByte byte, body []byte, timeout time.Duration, label string, storeSecret bool) ([]byte, error) {
 	tag := rm.UniqueTimestamp()
@@ -264,15 +280,7 @@ func (rm *Client) roundtripRequest(peerPub [32]byte, peer *node.Peer, sharedSecr
 		rm.pendingMu.Unlock()
 	}()
 
-	outPath, hashSize := rm.learnedRoute(peerPub, peer)
-	routeType, pathLen := routeForPeer(outPath, hashSize)
-
-	pkt := &meshcore.Packet{
-		Header:     meshcore.MakeHeader(routeType, meshcore.PayloadTypeReq, 0),
-		PathLength: pathLen,
-		Path:       outPath,
-		Payload:    reqBytes,
-	}
+	pkt, outPath, hashSize := rm.routedPacket(peerPub, peer, meshcore.PayloadTypeReq, reqBytes)
 
 	if err := rm.node.SendPacket(pkt); err != nil {
 		return nil, fmt.Errorf("sending %s req: %w", label, err)

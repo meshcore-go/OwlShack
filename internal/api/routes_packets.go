@@ -54,7 +54,7 @@ func (s *Server) handleListPackets(w http.ResponseWriter, r *http.Request) {
 	for _, p := range packets {
 		j := packetJSON{
 			ID:          p.ID,
-			ReceivedAt:  p.ReceivedAt.UTC().Format(time.RFC3339),
+			ReceivedAt:  p.ReceivedAt.UTC().Format(time.RFC3339Nano),
 			Direction:   p.Direction,
 			Raw:         hex.EncodeToString(p.Raw),
 			RouteType:   p.RouteType,

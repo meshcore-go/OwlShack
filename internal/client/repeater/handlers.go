@@ -347,8 +347,8 @@ func (rm *Client) retryReciprocalPath(pkt *meshcore.Packet, peerPubKey [32]byte,
 	if !pkt.IsRouteFlood() || secret == nil {
 		return
 	}
-	peer := rm.node.Peers().Lookup(peerPubKey)
-	if peer == nil || peer.OutPath == nil {
+	outPath, hashSize := rm.learnedRoute(peerPubKey, rm.node.Peers().Lookup(peerPubKey))
+	if outPath == nil {
 		return // no route of ours for them to be ignoring
 	}
 	rpath, err := meshpath.BuildReturn(rm.node.Identity().PublicKey(), peerPubKey[:], secret, pkt.Path, pkt.PathLength, 0, nil)
@@ -356,7 +356,7 @@ func (rm *Client) retryReciprocalPath(pkt *meshcore.Packet, peerPubKey [32]byte,
 		rm.log.Debug("failed to build return path retry", "error", err)
 		return
 	}
-	meshpath.Direct(rpath, peer.OutPath, max(peer.OutPathHashSize, 1))
+	meshpath.Direct(rpath, outPath, hashSize)
 	if err := rm.node.SendPacketDelayed(rpath, node.PriorityFloodRelay, returnPathRetryDelay); err != nil {
 		rm.log.Debug("failed to send return path retry", "error", err)
 		return

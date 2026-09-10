@@ -795,15 +795,18 @@ func (c *Companion) recentDM(senderPubKey []byte, timestamp uint32, text string)
 	return seen
 }
 
-// learnedRoute returns the stored send-path to a peer, preferring the contact row: that is where a
-// path return is persisted, while hydratePeerTables deliberately leaves the peer table's OutPath
-// nil so a route is never assumed across a restart. ok is false when no route is known (flood).
+// learnedRoute returns the stored send-path to a peer: the live peer table first, then the contact
+// row it was persisted to, which is what survives a restart (hydratePeerTables deliberately leaves
+// the table's OutPath nil so a route is never assumed). The table wins because every writer sets it
+// synchronously and the row through WriteAsync, so the row is never the fresher of the two but does
+// lag a just-learned path — long enough for a DM arriving right behind a PATH to be sent down the
+// route we have already superseded. ok is false when no route is known (flood).
 func (c *Companion) learnedRoute(pubkey []byte) ([]byte, uint8, bool) {
-	if ct, err := c.store.Contacts.Get(c.runCtx, c.cfg.ID, pubkey); err == nil && ct != nil && ct.OutPath != nil {
-		return ct.OutPath, max(ct.OutPathHashSize, 1), true
-	}
 	if p := c.knownPeer(pubkey); p != nil && p.OutPath != nil {
 		return p.OutPath, max(p.OutPathHashSize, 1), true
+	}
+	if ct, err := c.store.Contacts.Get(c.runCtx, c.cfg.ID, pubkey); err == nil && ct != nil && ct.OutPath != nil {
+		return ct.OutPath, max(ct.OutPathHashSize, 1), true
 	}
 	return nil, 0, false
 }

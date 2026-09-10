@@ -131,3 +131,43 @@ func TestPersistOutPath_NilClearsTheRow(t *testing.T) {
 		t.Errorf("after a reset the route came back as %x, want nil (flood to rediscover)", path)
 	}
 }
+
+// routedPacket exists because the length byte and the hops must come from the same place:
+// meshcore-go writes PathLength from the field and the hops from Path, so a mismatch makes the
+// receiver read that many bytes of PAYLOAD as path — a send that logs as well-formed and is
+// garbage on air. SendRoomKeepAlive shipped exactly that, taking its header from learnedRoute and
+// its bytes from the peer table, which diverge after a restart when only the contact row has the
+// route. This pins the invariant on the constructor every send now uses.
+func TestRoutedPacket_LengthAlwaysDescribesTheBytesItCarries(t *testing.T) {
+	t.Parallel()
+
+	rm, companionID, pubkey := routeTestClient(t)
+	key := pubkeyArray(pubkey)
+
+	for _, tt := range []struct {
+		name  string
+		row   []byte
+		hs    uint8
+		table *node.Peer
+	}{
+		{"no route anywhere floods", nil, 0, nil},
+		{"contact row only, as after a restart", []byte{0xe6, 0x07, 0x1a}, 1, nil},
+		{"contact row, two-byte hashes", []byte{0xe6, 0x07, 0x1a, 0x45}, 2, nil},
+		{"zero-hop row", []byte{}, 1, nil},
+	} {
+		t.Run(tt.name, func(t *testing.T) {
+			if err := rm.store.Contacts.UpdateOutPath(t.Context(), companionID, pubkey, tt.row, tt.hs); err != nil {
+				t.Fatalf("UpdateOutPath: %v", err)
+			}
+			pkt, outPath, _ := rm.routedPacket(key, tt.table, meshcore.PayloadTypeReq, []byte{1, 2, 3, 4})
+
+			hs := int((pkt.PathLength>>6)&3) + 1
+			if got, want := int(pkt.PathLength&63)*hs, len(pkt.Path); got != want {
+				t.Errorf("PathLength describes %d bytes, Path carries %d", got, want)
+			}
+			if !bytes.Equal(pkt.Path, outPath) {
+				t.Errorf("Path %x is not the route that sized it (%x)", pkt.Path, outPath)
+			}
+		})
+	}
+}
