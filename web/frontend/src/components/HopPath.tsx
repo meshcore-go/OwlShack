@@ -24,16 +24,17 @@ interface Hop {
 
 // A hop hash is a pubkey prefix, not an identity. On this mesh 92 of 211 one-byte hashes match more
 // than one peer and the worst matches five, so resolveHop returns a best guess plus everything else
-// it could have been — never a bare name. Repeaters are preferred because only a forwarder appears
-// in a path, and the most recently heard of those wins as the least-bad tiebreak.
+// it could have been — never a bare name. Only a repeater forwards, so a hash whose only matches
+// are chat or sensor nodes has not been identified at all: the real forwarder is a repeater we hold
+// no advert for, and naming the phone that happens to share the prefix would be a confident lie.
+// Among repeaters the most recently heard wins, as the least-bad tiebreak.
 function resolveHop(hash: string, candidates: PathPeer[] | undefined): Hop {
-  if (!candidates || candidates.length === 0) return { hash, alternatives: [] };
-  const repeaters = candidates.filter((c) => c.type === "REPEATER");
-  const pool = repeaters.length > 0 ? repeaters : candidates;
-  const best = pool.reduce((a, b) =>
+  const repeaters = (candidates ?? []).filter((c) => c.type === "REPEATER");
+  if (repeaters.length === 0) return { hash, alternatives: [] };
+  const best = repeaters.reduce((a, b) =>
     (b.lastSeen ?? "") > (a.lastSeen ?? "") ? b : a,
   );
-  return { hash, peer: best, alternatives: candidates.filter((c) => c !== best) };
+  return { hash, peer: best, alternatives: repeaters.filter((c) => c !== best) };
 }
 
 function useHops(
@@ -114,6 +115,7 @@ export function HopPath({
   path,
   hashSize,
   direction,
+  route,
   peers,
   compact,
   className,
@@ -121,6 +123,7 @@ export function HopPath({
   path?: string;
   hashSize?: number;
   direction?: string;
+  route?: string;
   peers: PathPeer[] | null;
   compact?: boolean;
   className?: string;
@@ -130,7 +133,7 @@ export function HopPath({
   if (hops.length === 0) {
     return (
       <span className={cn("text-muted-foreground/60", className)}>
-        Direct — no hops recorded
+        No hops recorded
       </span>
     );
   }
@@ -141,28 +144,43 @@ export function HopPath({
       <HopName hop={h} />
     </span>
   ));
-  // Our own transmit lists the route outward, a reception the route inward, so "you" bookends the
-  // chain on the side we sit.
   const us = <span className="text-muted-foreground/60">you</span>;
 
+  // Where we sit on the chain, and whether we sit on it at all. A flood ACCUMULATES a hash at each
+  // relay, so a received one lists where the packet has been and it reached us from the last of
+  // them: "chain → you". Our own send leads: "you → chain". A direct route CONSUMES its hashes
+  // (Mesh.cpp:334-342), so a received one carries only the road ahead — a leg running from the
+  // relay we overheard to its next hop, with us on neither end. That gets no "you" at all: naming
+  // us at the head would claim we are forwarding it on, which is as wrong as the tail claiming the
+  // next hop delivered it to us.
+  const forward = direction === "tx" || route?.includes("DIRECT");
+  const lead = direction === "tx" ? us : null;
+  const tail = forward ? null : us;
+  const ahead = route?.includes("DIRECT") && direction !== "tx";
+
+  const body = (
+    <>
+      {lead && (
+        <>
+          {lead}
+          <span className="text-muted-foreground/40"> → </span>
+        </>
+      )}
+      {chain}
+      {tail && (
+        <>
+          <span className="text-muted-foreground/40"> → </span>
+          {tail}
+        </>
+      )}
+      {ahead && (
+        <span className="text-muted-foreground/50"> (still to go)</span>
+      )}
+    </>
+  );
+
   if (compact) {
-    return (
-      <span className={cn("text-[11px]", className)}>
-        {direction === "tx" && (
-          <>
-            {us}
-            <span className="text-muted-foreground/40"> → </span>
-          </>
-        )}
-        {chain}
-        {direction !== "tx" && (
-          <>
-            <span className="text-muted-foreground/40"> → </span>
-            {us}
-          </>
-        )}
-      </span>
-    );
+    return <span className={cn("text-[11px]", className)}>{body}</span>;
   }
 
   return (
@@ -177,21 +195,7 @@ export function HopPath({
           </span>
         ))}
       </div>
-      <div className="text-xs leading-relaxed">
-        {direction === "tx" && (
-          <>
-            {us}
-            <span className="text-muted-foreground/40"> → </span>
-          </>
-        )}
-        {chain}
-        {direction !== "tx" && (
-          <>
-            <span className="text-muted-foreground/40"> → </span>
-            {us}
-          </>
-        )}
-      </div>
+      <div className="text-xs leading-relaxed">{body}</div>
     </div>
   );
 }

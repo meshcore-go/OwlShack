@@ -107,15 +107,7 @@ func (rm *Client) sendLogin(pubkeyHex, password string, roomSyncSince *uint32, t
 		rm.loginMu.Unlock()
 	}()
 
-	outPath, hashSize := rm.learnedRoute(peerIdentity.PublicKey(), peer)
-	routeType, pathLen := routeForPeer(outPath, hashSize)
-
-	pkt := &meshcore.Packet{
-		Header:     meshcore.MakeHeader(routeType, meshcore.PayloadTypeAnonReq, 0),
-		PathLength: pathLen,
-		Path:       outPath,
-		Payload:    payload,
-	}
+	pkt, outPath, hashSize := rm.routedPacket(peerIdentity.PublicKey(), peer, meshcore.PayloadTypeAnonReq, payload)
 
 	if err := rm.node.SendPacket(pkt); err != nil {
 		return nil, fmt.Errorf("sending login: %w", err)

@@ -125,7 +125,10 @@ const NO_PACKETS: Packet[] = [];
 // A repeat never rewrites the row, it only joins the observation list. Row id beats timestamp where
 // both are known, being insertion order rather than a clock — live socket packets carry no id yet,
 // hence the fallback. Observations arrive newest-first from the API but oldest-first over the
-// socket, so neither comparison can trust arrival order.
+// socket, so neither comparison can trust arrival order. receivedAt must therefore carry sub-second
+// precision (both surfaces send RFC3339Nano): at second resolution a relay's echo and our own
+// transmit tie, the strict comparison cannot break the tie, and whichever the loop happened to meet
+// first became the row — the exact flapping this function exists to stop.
 function beatsOrigin(p: Packet, ts: number, g: PacketGroup): boolean {
   if (p.id != null && g.origin.id != null) return p.id < g.origin.id;
   return ts < g.originTs;
@@ -698,6 +701,7 @@ function PacketDetail({
                 path={p.path}
                 hashSize={p.pathHashSize}
                 direction={p.direction}
+                route={p.route}
                 peers={peers}
               />
             </dd>
@@ -798,6 +802,7 @@ function PacketDetail({
                           path={o.path}
                           hashSize={o.pathHashSize}
                           direction={o.direction}
+                          route={o.route}
                           peers={peers}
                           compact
                         />
