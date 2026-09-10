@@ -204,18 +204,14 @@ export function rolePillClass(perms: number): string {
   }
 }
 
-// The three the official app offers, so a role set there can be set here too. A repeater tests
-// only isAdmin() and a guest check, so read-only and read/write grant it the same access; rooms
-// are where read/write means something.
+// The three the official app offers, so a role set there can be set here too.
 export const ROLE_OPTIONS: { value: string; label: string }[] = [
   { value: String(PERM_READ_ONLY), label: "Read only" },
   { value: String(PERM_READ_WRITE), label: "Read / Write" },
   { value: String(PERM_ADMIN), label: "Admin" },
 ];
 
-// A role the picker cannot grant still has to render: Radix aligns the popover on the selected
-// item, so a value with no item puts the whole list off-screen and nothing can be clicked. Covers
-// guest and any entry still holding read/write.
+// Radix aligns the popover on the selected item, so a value with no item renders it off-screen.
 export function CurrentRoleItem({ perms }: { perms: number }) {
   const role = String(perms & PERM_ROLE_MASK);
   if (ROLE_OPTIONS.some((o) => o.value === role)) return null;
@@ -266,9 +262,7 @@ export function AddAccessDialog({
   }, [open]);
 
   const candidates = useMemo(() => {
-    // Only a companion can log in: ANON_REQ is sent from BaseChatMesh, which repeater, room and
-    // sensor firmware do not inherit. An unclassified peer stays listed, since hiding a real
-    // client is worse than showing one extra.
+    // Only a companion can log in; ANON_REQ is sent from BaseChatMesh, which the others lack.
     const pool = peers.filter(
       (p) =>
         !knownPrefixes.has(p.pubkey.toLowerCase().slice(0, 12)) &&
@@ -360,9 +354,6 @@ export function AddAccessDialog({
                 className="pl-8 rounded-none font-mono text-base md:text-xs h-8"
               />
             </div>
-            <p className="font-mono text-[10px] uppercase tracking-[0.12em] text-muted-foreground/60">
-              companions only · a repeater or room server cannot log in
-            </p>
             <div className="border border-border max-h-64 overflow-y-auto divide-y divide-border">
               {candidates.length === 0 ? (
                 <div className="px-4 py-8 text-center">

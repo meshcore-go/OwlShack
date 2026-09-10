@@ -32,10 +32,10 @@ Baseline `v1.3.1` · no schema change
   item over the trigger, so a value with no item put the whole list off-screen at the viewport
   corner, where nothing could be clicked.
 - **Granting access lists companions only.** A repeater, room server or sensor has no login
-  client at all — `ANON_REQ` is only ever sent from `BaseChatMesh`, which none of them inherit —
-  so offering them was offering access that could never be used. On this bench that cut the list
-  from 329 peers to 32. A peer whose type is unknown stays listed, and the manual pubkey field is
-  unrestricted.
+  client at all, since `ANON_REQ` is only ever sent from `BaseChatMesh` and none of them inherit
+  it, so offering them was offering access that could never be used. On this bench that cut the
+  list from 329 peers to 32. A peer whose type is unknown stays listed, and the manual pubkey
+  field is unrestricted.
 - Granting access now defaults to **Read only** rather than Read / Write, matching the official
   app. Note that on a repeater the two are the same access: the firmware tests only `isAdmin()`
   and a guest check, and nothing anywhere tests `PERM_ACL_READ_WRITE`. The distinction is real on
