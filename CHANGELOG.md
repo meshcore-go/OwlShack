@@ -67,6 +67,9 @@ Baseline `v1.3.1` · schema `user_version` 12
 - The peer picker behind the repeater ACL's Grant access is now shared with both DM surfaces
   (`PeerPicker`), so all three filter to companions, exclude what is already listed, and validate
   a manual key the same way.
+- `formatPathBytes` takes an optional separator, so a template can render a path as `A1 > B2 > C3`
+  rather than only the hardcoded `A1, B2, C3`. Omitted keeps the old output, and a second
+  separator is an error rather than silently ignored, matching what `date` does with a zone.
 
 ### Upgrading
 
