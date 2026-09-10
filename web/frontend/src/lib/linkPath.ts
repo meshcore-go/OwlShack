@@ -5,6 +5,37 @@ export interface NamedPeer {
   name: string;
 }
 
+// PathPeer is a NamedPeer with the two fields hop resolution needs to choose between candidates.
+export interface PathPeer extends NamedPeer {
+  type?: string;
+  lastSeen?: string;
+}
+
+export interface ResolvedHop {
+  hash: string;
+  peer?: PathPeer;
+  alternatives: PathPeer[];
+}
+
+// resolveHopPeer names a hop hash, or declines to. A hash is a pubkey prefix, not an identity: on a
+// 338-peer mesh 92 of 211 one-byte hashes match more than one peer and the worst matches five. Only
+// a repeater forwards, so a hash whose only matches are chat or sensor nodes has not been
+// identified at all — the real forwarder is a repeater we hold no advert for, and naming the phone
+// that shares the prefix would be a confident lie. Among repeaters the most recently heard wins as
+// the least-bad tiebreak, and every other candidate comes back in alternatives so a caller can show
+// that the answer was a guess.
+export function resolveHopPeer(
+  hash: string,
+  candidates: PathPeer[] | undefined,
+): ResolvedHop {
+  const repeaters = (candidates ?? []).filter((c) => c.type === "REPEATER");
+  if (repeaters.length === 0) return { hash, alternatives: [] };
+  const best = repeaters.reduce((a, b) =>
+    (b.lastSeen ?? "") > (a.lastSeen ?? "") ? b : a,
+  );
+  return { hash, peer: best, alternatives: repeaters.filter((c) => c !== best) };
+}
+
 export function hexToHopHashes(pathHex: string, hashSize: number): string[] {
   const step = hashSize * 2;
   if (step <= 0) return [];
@@ -28,19 +59,6 @@ export function buildPeerCandidatesByHash(
     const at = map.get(k);
     if (at) at.push(p);
     else map.set(k, [p]);
-  }
-  return map;
-}
-
-// buildPeerByHash keeps the first peer per hash, discarding the rest. Prefer
-// buildPeerCandidatesByHash where the display can show that a hash was ambiguous.
-export function buildPeerByHash(
-  peers: NamedPeer[],
-  hashSize: number,
-): Map<string, NamedPeer> {
-  const map = new Map<string, NamedPeer>();
-  for (const [k, v] of buildPeerCandidatesByHash(peers, hashSize)) {
-    map.set(k, v[0]);
   }
   return map;
 }
@@ -83,12 +101,18 @@ export function filterMetricNames(
 export function hopDirectionLabel(
   pathHex: string,
   hashSize: number,
-  peers: NamedPeer[],
+  peers: PathPeer[],
   originName = "you",
 ): (hop: number) => string {
   const hashes = hexToHopHashes(pathHex, hashSize);
-  const byHash = buildPeerByHash(peers, hashSize);
-  const nameFor = (hash: string) => byHash.get(hash)?.name || hash;
+  const byHash = buildPeerCandidatesByHash(peers, hashSize);
+  // A hash naming no repeater stays hex, and one naming several says so — a link label that reads
+  // "A → B" is otherwise an assertion about which node relayed, which the hash cannot support.
+  const nameFor = (hash: string) => {
+    const { peer, alternatives } = resolveHopPeer(hash, byHash.get(hash));
+    if (!peer) return hash;
+    return alternatives.length > 0 ? `${peer.name} +${alternatives.length}` : peer.name;
+  };
   return (hop: number) => {
     const toHash = hashes[hop - 1];
     if (!toHash) return `Hop ${hop}`;
