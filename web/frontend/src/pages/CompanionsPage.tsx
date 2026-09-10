@@ -26,7 +26,15 @@ import { PageHeader } from "@/components/PageHeader";
 import { InlineConfirm } from "@/components/InlineConfirm";
 import { PATH_HASH_SIZE_OPTIONS, SelectField, TextField } from "@/components/ConfigFields";
 import { PositionPicker, round6 } from "@/components/PositionPicker";
+import { PeerListField, type PickablePeer } from "@/components/PeerPicker";
 import { truncateMid } from "@/lib/format";
+
+// A companion decrypts a DM against every peer it has heard advertise, so the policy is the only gate.
+const DM_POLICY_OPTIONS = [
+  { value: "contacts", label: "Contacts only" },
+  { value: "allowlist", label: "Allowlist" },
+  { value: "anyone", label: "Anyone" },
+];
 
 // Runtime roster (/api/companions), keyed by the live identity, not the config id.
 interface RuntimeCompanion {
@@ -254,6 +262,12 @@ function CompanionEditor({
   const [advertInterval, setAdvertInterval] = useState(
     companion?.advertInterval != null ? String(companion.advertInterval) : "",
   );
+  const { items: peers } = useApiList<PickablePeer>(
+    "/api/peers",
+    "Failed to load peers",
+  );
+  const [dmPolicy, setDmPolicy] = useState(companion?.dmPolicy || "contacts");
+  const [dmAllow, setDmAllow] = useState<string[]>(companion?.dmAllow ?? []);
   const [saving, setSaving] = useState(false);
 
   const renamed = companion != null && name.trim() !== companion.name;
@@ -271,6 +285,8 @@ function CompanionEditor({
           advertInterval:
             advertInterval === "" ? null : parseInt(advertInterval, 10) || 0,
           pathHashSize: pathHashSize === "" ? null : parseInt(pathHashSize, 10),
+          dmPolicy,
+          dmAllow: dmAllow.map((k) => k.trim()).filter(Boolean),
         },
         companion?.id,
       );
@@ -367,6 +383,28 @@ function CompanionEditor({
               hint="width of each hop hash in our flood packets"
             />
           </div>
+
+          <SelectField
+            label="Who can DM this companion"
+            value={dmPolicy}
+            options={DM_POLICY_OPTIONS}
+            onChange={setDmPolicy}
+            hint="a DM from anyone else is dropped without an ack, so the sender sees it fail"
+          />
+          {dmPolicy === "allowlist" && (
+            <PeerListField
+              label="Allowed senders"
+              values={dmAllow}
+              onChange={setDmAllow}
+              peers={peers ?? []}
+              addLabel="add contact"
+              emptyHint="no contacts added: an empty allowlist turns every DM away"
+              hint="matched on public key, never on name, since anyone can advertise a name"
+              dialogTitle="Allow a sender"
+              dialogDescription="Pick who may DM this companion. Only companions are listed: a repeater, room server or sensor never sends a plain DM."
+              idPrefix="dm-allow"
+            />
+          )}
 
           <div className="flex justify-end gap-2 pt-1">
             <Button

@@ -4,6 +4,7 @@ import (
 	"encoding/hex"
 	"fmt"
 	"regexp"
+	"strings"
 	"text/template"
 
 	"github.com/robfig/cron/v3"
@@ -42,8 +43,10 @@ func (t *TriggerConfig) Validate() error {
 		if _, err := cron.ParseStandard(t.Schedule); err != nil {
 			return fmt.Errorf("invalid cron schedule %q: %w", t.Schedule, err)
 		}
+	case "dm":
+		// No channel or contact is required: an empty contact list listens to every sender the DM policy already let through.
 	default:
-		return fmt.Errorf("unknown trigger type %q (supported: group, cron)", t.Type)
+		return fmt.Errorf("unknown trigger type %q (supported: group, dm, cron)", t.Type)
 	}
 
 	if t.Template == "" {
@@ -71,6 +74,14 @@ func (t *TriggerConfig) Validate() error {
 		for _, ch := range *t.Channels {
 			if err := ch.Validate(); err != nil {
 				return err
+			}
+		}
+	}
+
+	if t.Contacts != nil {
+		for _, c := range *t.Contacts {
+			if strings.TrimSpace(c) == "" {
+				return fmt.Errorf("contacts must not contain a blank entry")
 			}
 		}
 	}

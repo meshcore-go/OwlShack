@@ -10,7 +10,7 @@ their name promises. The schema is shared: `meshcoretomqtt` forwards real firmwa
 same brokers under the same topic, and it is the client LetsMesh recommends, so the names were
 already defined by the firmware and OwlShack was the one publishing something else into them.
 
-Baseline `v1.3.1` · no schema change
+Baseline `v1.3.1` · schema `user_version` 12
 
 ### Fixed
 
@@ -46,6 +46,27 @@ Baseline `v1.3.1` · no schema change
 - Chat bubbles show the path hash size next to the hop count, as `3 hops · 2B`. The field was
   already stored and served; only the render was missing. Shown only where there is a path, since
   a hash width describes nothing on a message heard direct.
+- **DM triggers.** A trigger of type `dm` matches an incoming direct message and answers the
+  sender. `TriggerConfig.Contacts` was persisted, served, backed up and documented since the
+  first release with nothing reading it; it is now the sender filter, and an empty list answers
+  everyone the DM policy allows. The Bots page picks senders from the known companions rather
+  than taking typed text, so what is stored is a public key; a hand-written config may still use
+  a peer name or a key prefix. Templates get the
+  group variables minus `{{.Channel}}`, plus `{{.SenderPubKey}}`, since a DM reply is addressed
+  by key rather than by name.
+- **A companion accepts DMs from any peer it has heard, not only saved contacts.** Decryption
+  tried the contact list alone, so a message from anyone else was unreadable and silently
+  dropped. The firmware has no such limit: `BaseChatMesh` auto-adds every advert it hears into
+  `contacts[]` and decrypts against that, which is the table OwlShack keeps as `discovered_peers`.
+  A sender the policy accepts is filed as a contact on their first message, which is also what
+  puts the thread in the conversation list.
+- **`dmPolicy` on a companion decides who may DM it**: `contacts` (only saved contacts, which is
+  what every install did before and stays the default), `allowlist` (only the public keys in
+  `dmAllow`, full or a leading prefix), or `anyone`. A rejected DM is dropped before the ack, so
+  the sender sees a failed send rather than silence.
+- The peer picker behind the repeater ACL's Grant access is now shared with both DM surfaces
+  (`PeerPicker`), so all three filter to companions, exclude what is already listed, and validate
+  a manual key the same way.
 
 ### Upgrading
 
@@ -61,7 +82,7 @@ Baseline `v1.3.1` · no schema change
   a radio-driver failure is far rarer than a malformed packet. Nothing errors and no key
   disappears, so the change is invisible on the wire. Read `client_version` to tell the versions
   apart.
-- No database migration; `user_version` stays 11.
+- The MQTT change needs no migration of its own. `user_version` does go to 12, for the DM policy below.
 
 ### Fixed
 

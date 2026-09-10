@@ -61,7 +61,7 @@ Installable as a PWA, with a mobile layout and a light theme.
 | Radio | Modem diagnostics: TX outcomes, RX losses, board readings, faults |
 | Discover | Zero-hop scan: which repeaters and sensors are in direct range |
 | Companions | Per-companion chat, contacts, channels, remote repeaters, rooms, sensors |
-| Bots | Create and edit triggers across every companion (group and cron) |
+| Bots | Create and edit triggers across every companion (group, dm and cron) |
 | Repeater | The repeater this instance runs: relay stats, neighbours, access, settings |
 | MQTT | Broker management and the companion that feeds the bridge |
 | Settings | Connection, radio parameters, presets, listen address, log level |
@@ -293,6 +293,8 @@ Companions page.
 | `advertInterval` | Seconds between adverts; `0` = never |
 | `channels` | Channels to join |
 | `trigger` | Triggers attached to this companion |
+| `dmPolicy` | Who may DM this companion: `contacts` (default), `allowlist` or `anyone` |
+| `dmAllow` | Public keys the `allowlist` policy accepts, full or a leading prefix |
 
 ### Triggers
 
@@ -300,12 +302,12 @@ Auto-responders and scheduled messages, managed on the Bots page.
 
 | Field | Description |
 |-------|-------------|
-| `type` | `group` (channel messages) or `cron` |
+| `type` | `group` (channel messages), `dm` (direct messages) or `cron` |
 | `template` | Go `text/template` for the response |
 | `channels` | Channels to listen on / send to |
-| `match` | [Go regexps](https://pkg.go.dev/regexp/syntax) matched against incoming messages (group) |
+| `match` | [Go regexps](https://pkg.go.dev/regexp/syntax) matched against incoming messages (group, dm) |
 | `schedule` | Cron expression, e.g. `"*/5 * * * *"` (cron) |
-| `contacts` | Contact names to answer DMs from |
+| `contacts` | Who a `dm` trigger answers. The Bots page picks from known companions and stores public keys; a hand-written config may also use a peer name or a key prefix. Empty answers everyone the DM policy let through |
 | `retryTimeout` / `maxRetries` | Repeater-echo timeout in seconds (`5`) and resend cap (`3`) |
 | `charLimitBehaviour` | `truncate` or `split` past the character limit |
 | `pathHashSize` | `0` = copy the sender's setting, `1`/`2`/`3` = bytes per hash |
@@ -322,6 +324,9 @@ every companion joins.
 Group triggers: `{{.Sender}}` `{{.Channel}}` `{{.Message}}` `{{.Match}}` (named
 capture groups) `{{.Timestamp}}` `{{.SNR}}` `{{.RSSI}}` `{{.Hops}}`
 `{{.PathHashes}}` `{{.PathHashSize}}`.
+
+DM triggers: the same, minus `{{.Channel}}`, plus `{{.SenderPubKey}}`, the
+sender's full public key, which is how the reply is addressed.
 
 Cron triggers: `{{.Time}}` and `{{.Schedule}}`. `{{.BotName}}` is in every
 template.

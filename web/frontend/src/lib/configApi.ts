@@ -117,6 +117,8 @@ export interface ConfigCompanion {
   longitude: number | null;
   advertInterval: number | null;
   pathHashSize: number | null; // null = inherit the global default
+  dmPolicy: string; // contacts | allowlist | anyone
+  dmAllow: string[] | null;
 }
 
 export interface ConfigChannel {
@@ -272,6 +274,8 @@ export interface CompanionInput {
   longitude?: number | null;
   advertInterval?: number | null;
   pathHashSize?: number | null; // null = inherit the global default
+  dmPolicy?: string;
+  dmAllow?: string[] | null;
 }
 
 export interface ChannelInput {

@@ -14,6 +14,7 @@ import (
 	"github.com/meshcore-go/meshcore-go/node"
 
 	"github.com/meshcore-go/OwlShack/internal/store"
+	"github.com/meshcore-go/OwlShack/internal/trigger"
 )
 
 const dmAckDelay = 200 * time.Millisecond
@@ -453,23 +454,15 @@ func (c *Companion) registerPacketHandlers() {
 			return
 		}
 
-		contacts, err := c.store.Contacts.List(c.runCtx, c.cfg.ID)
-		if err != nil {
-			c.log.Error("failed to list contacts for DM decryption", "error", err)
-			return
-		}
-
 		var senderPubKeyHex string
 		var senderPubKey []byte
 		var senderName string
+		var senderIsContact bool
 		var sharedSecret []byte
 		var plaintext []byte
 
-		for _, ct := range contacts {
-			if len(ct.PeerPubKey) == 0 || ct.PeerPubKey[0] != txtMsg.Source {
-				continue
-			}
-			peerID, err := meshcore.NewIdentityFromBytes(ct.PeerPubKey)
+		for _, cand := range c.dmCandidates(txtMsg.Source) {
+			peerID, err := meshcore.NewIdentityFromBytes(cand.pubkey)
 			if err != nil {
 				continue
 			}
@@ -481,20 +474,19 @@ func (c *Companion) registerPacketHandlers() {
 				continue
 			}
 			plaintext = txtMsg.Decrypt(secret)
-			senderPubKey = ct.PeerPubKey
-			senderPubKeyHex = hex.EncodeToString(ct.PeerPubKey)
+			senderPubKey = cand.pubkey
+			senderPubKeyHex = hex.EncodeToString(cand.pubkey)
+			senderIsContact = cand.isContact
 			sharedSecret = secret
-			peer := c.node.Peers().Lookup(peerID.PublicKey())
-			if peer != nil && peer.Name != "" {
-				senderName = peer.Name
-			} else {
+			senderName = cand.name
+			if senderName == "" {
 				senderName = senderPubKeyHex[:12] + "…"
 			}
 			break
 		}
 
 		if plaintext == nil {
-			c.log.Debug("could not decrypt DM from any contact")
+			c.log.Debug("could not decrypt DM from any known peer")
 			return
 		}
 
@@ -526,6 +518,17 @@ func (c *Companion) registerPacketHandlers() {
 		default:
 			c.log.Debug("unsupported DM text type", "flags", flags)
 			return
+		}
+
+		// Gate before the ACK, so a sender the policy turns away sees a failed send rather than silence.
+		if !c.cfg.AllowsDMFrom(senderPubKeyHex, senderIsContact) {
+			c.log.Info("DM rejected", "from", senderName, "policy", c.cfg.DMPolicyOrDefault())
+			return
+		}
+
+		// Mirrors the firmware, which files any sender it can decrypt in contacts[]; here it is also what puts the thread in the conversation list.
+		if !senderIsContact {
+			c.addDMSenderAsContact(senderPubKey, senderName)
 		}
 
 		// Plain-DM ack payload: [crc:4][attempt][random]
@@ -580,6 +583,14 @@ func (c *Companion) registerPacketHandlers() {
 				c.hub.Broadcast("messages", wsMsg)
 			}
 		})
+
+		// After the insert is queued, so a reply's WriteSync lands behind it and gets the higher row id chat ordering needs.
+		c.dispatchDMTriggers(trigger.DirectMessage{
+			SenderPubKey: senderPubKeyHex,
+			SenderName:   senderName,
+			Text:         text,
+			Timestamp:    uint32(msg.Timestamp.Unix()),
+		}, pkt)
 	})
 
 	c.node.OnPacket(meshcore.PayloadTypeTrace, func(pkt *meshcore.Packet) {
@@ -646,4 +657,90 @@ func (c *Companion) registerPacketHandlers() {
 		}
 		c.handleDMPathReturn(pkt)
 	})
+}
+
+// dmCandidate is one identity a DM's 1-byte source hash could belong to.
+type dmCandidate struct {
+	pubkey    []byte
+	name      string
+	isContact bool
+}
+
+// dmCandidates lists every key that could have sent this DM; the peer table is what the firmware decrypts against, its contacts[] auto-adding every advert heard.
+func (c *Companion) dmCandidates(source byte) []dmCandidate {
+	var out []dmCandidate
+	seen := make(map[string]bool)
+
+	contacts, err := c.store.Contacts.List(c.runCtx, c.cfg.ID)
+	if err != nil {
+		c.log.Error("failed to list contacts for DM decryption", "error", err)
+	}
+	for _, ct := range contacts {
+		if len(ct.PeerPubKey) == 0 || ct.PeerPubKey[0] != source {
+			continue
+		}
+		key := hex.EncodeToString(ct.PeerPubKey)
+		seen[key] = true
+		name := ct.Name
+		if p := c.knownPeer(ct.PeerPubKey); p != nil && p.Name != "" {
+			name = p.Name
+		}
+		out = append(out, dmCandidate{pubkey: ct.PeerPubKey, name: name, isContact: true})
+	}
+
+	for _, p := range c.node.Peers().LookupByHash([]byte{source}) {
+		pub := p.Identity.PublicKey()
+		if seen[hex.EncodeToString(pub[:])] {
+			continue
+		}
+		out = append(out, dmCandidate{pubkey: append([]byte(nil), pub[:]...), name: p.Name})
+	}
+	return out
+}
+
+// knownPeer resolves a key against the peer table, nil when it was never heard advertising.
+func (c *Companion) knownPeer(pubkey []byte) *node.Peer {
+	id, err := meshcore.NewIdentityFromBytes(pubkey)
+	if err != nil {
+		return nil
+	}
+	return c.node.Peers().Lookup(id.PublicKey())
+}
+
+// addDMSenderAsContact files an accepted stranger, which is what surfaces the thread in the conversation list.
+func (c *Companion) addDMSenderAsContact(pubkey []byte, name string) {
+	var peerType string
+	var stored *store.Peer
+	if p := c.knownPeer(pubkey); p != nil {
+		peerType = p.Type
+	}
+	if p, err := c.store.Peers.GetByPubKey(c.runCtx, pubkey); err == nil {
+		stored = p
+	}
+
+	c.store.WriteAsync(func() {
+		ctx := context.Background()
+		if err := c.store.Contacts.Add(ctx, c.cfg.ID, pubkey, name, peerType); err != nil {
+			c.log.Error("failed to add DM sender as contact", "error", err)
+			return
+		}
+		if stored != nil {
+			_ = c.store.Contacts.RefreshFromAdvert(ctx, pubkey, stored.Name, stored.Type,
+				stored.Lat, stored.Lon, stored.Feat1, stored.Feat2,
+				stored.LastSeen, stored.LastAdvertTS, stored.HasLocation())
+		}
+		c.log.Info("added DM sender as contact", "peer", name)
+	})
+}
+
+// dispatchDMTriggers fans an accepted DM out to the trigger set; non-implementers (channel, cron) are skipped.
+func (c *Companion) dispatchDMTriggers(dm trigger.DirectMessage, pkt *meshcore.Packet) {
+	c.mu.Lock()
+	entries := c.triggers
+	c.mu.Unlock()
+	for _, e := range entries {
+		if h, ok := e.trigger.(dmTextHandler); ok {
+			h.HandleDirectMessage(dm, pkt)
+		}
+	}
 }

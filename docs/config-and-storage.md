@@ -66,6 +66,14 @@ radio/connection change still restarts everything (modem reconnect);
   `configMutate` runs this on the assembled config before persisting.
   `TriggerConfig.Validate` parse-checks templates with stubbed trigger funcs
   (`formatPathBytes`) — extend the stubs if the templater gains functions.
+- **DM acceptance is `companions.dm_policy`** (`contacts` | `allowlist` |
+  `anyone`, default `contacts`) with `companions.dm_allow` holding the
+  allowlist's pubkeys newline-encoded, the same encoding `triggers.contacts`
+  uses. The decision is `CompanionConfig.AllowsDMFrom`, applied in the
+  companion's TxtMsg handler to plain DMs only: a CLI reply or room push is a
+  response to a session we opened, so it is never gated. Changing either field
+  restarts the companion, since `triggersOnlyChange` only spares a trigger-only
+  edit — so the RX path reads them without a lock.
 - **MQTT is top-level, one node.** `Config.Mqtt` (`mqtt.node` selects the
   feeding companion, empty = first; `enabled` nil = on). Stored as
   `mqtt_settings.node_companion_id` (a real FK, ON DELETE SET NULL) and

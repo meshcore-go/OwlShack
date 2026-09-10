@@ -76,7 +76,17 @@ func (c *Companion) sendGroupReply(ch *meshcore.ChannelEntry, text string, hashS
 	)
 }
 
+// SendContactMessage is the chat API's DM send: framing comes from the learned route alone, as it always has.
 func (c *Companion) SendContactMessage(pubkeyHex, text string) error {
+	return c.sendDM(pubkeyHex, text, 0, 5*time.Second)
+}
+
+// sendDMReply is a DM trigger's answer: the trigger's pathHashSize frames it only when no route is stored, since a stored path already fixes its own hash width.
+func (c *Companion) sendDMReply(pubkeyHex, text string, hashSize uint8, ackTimeout time.Duration) error {
+	return c.sendDM(pubkeyHex, text, hashSize, ackTimeout)
+}
+
+func (c *Companion) sendDM(pubkeyHex, text string, fallbackHashSize uint8, ackTimeout time.Duration) error {
 	pubkeyBytes, err := hex.DecodeString(pubkeyHex)
 	if err != nil {
 		return fmt.Errorf("invalid pubkey hex: %w", err)
@@ -98,6 +108,9 @@ func (c *Companion) SendContactMessage(pubkeyHex, text string) error {
 	// A stored 0 hash width (e.g. a migrated row) would frame a direct path wrong.
 	if len(outPath) > 0 && hashSize == 0 {
 		hashSize = meshcore.PathHashSize
+	}
+	if len(outPath) == 0 {
+		hashSize = fallbackHashSize
 	}
 
 	channelKey := "dm:" + pubkeyHex
@@ -141,7 +154,7 @@ func (c *Companion) SendContactMessage(pubkeyHex, text string) error {
 		time.Unix(int64(c.uniqueTimestamp()), 0),
 		outPath,
 		hashSize,
-		5*time.Second,
+		ackTimeout,
 		func(result node.DMSendResult) {
 			var status string
 			if result.Confirmed {

@@ -189,6 +189,7 @@ func (b *backend) SaveCompanion(ctx context.Context, in api.CompanionInput) (int
 				ID: in.ID, Name: in.Name,
 				Latitude: in.Latitude, Longitude: in.Longitude, AdvertInterval: in.AdvertInterval,
 				PathHashSize: in.PathHashSize,
+				DMPolicy:     in.DMPolicy, DMAllow: in.DMAllow,
 			}
 			row.PrivateKey = key
 			if row.PrivateKey == "" && in.ID != 0 { // update without a key change → keep existing

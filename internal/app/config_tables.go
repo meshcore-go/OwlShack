@@ -148,6 +148,8 @@ func assembleFromRows(rows *configRows) *config.Config {
 			Longitude:      c.Longitude,
 			AdvertInterval: c.AdvertInterval,
 			PathHashSize:   c.PathHashSize,
+			DMPolicy:       emptyToNil(c.DMPolicy),
+			DMAllow:        sliceToPtr(c.DMAllow),
 		}
 		if chs := chansByComp[c.ID]; len(chs) > 0 {
 			list := make(config.ChannelList, 0, len(chs))
@@ -320,6 +322,8 @@ func writeConfigToTables(ctx context.Context, st *store.Store, cfg *config.Confi
 			Longitude:      cc.Longitude,
 			AdvertInterval: cc.AdvertInterval,
 			PathHashSize:   cc.PathHashSize,
+			DMPolicy:       cc.DMPolicyOrDefault(),
+			DMAllow:        ptrToSlice(cc.DMAllow),
 		}
 		if prev, ok := byName[cc.Name]; ok {
 			row.ID = prev.ID
@@ -562,3 +566,10 @@ func persistToTables(ctx context.Context, st *store.Store, cfg *config.Config) e
 }
 
 func boolPtr(b bool) *bool { return &b }
+
+func ptrToSlice(p *[]string) []string {
+	if p == nil {
+		return nil
+	}
+	return *p
+}
