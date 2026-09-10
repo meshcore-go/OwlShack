@@ -8,34 +8,12 @@ import {
 import {
   hexToHopHashes,
   buildPeerCandidatesByHash,
-  type NamedPeer,
+  resolveHopPeer,
+  type PathPeer,
+  type ResolvedHop as Hop,
 } from "@/lib/linkPath";
 
-export interface PathPeer extends NamedPeer {
-  type?: string;
-  lastSeen?: string;
-}
-
-interface Hop {
-  hash: string;
-  peer?: PathPeer;
-  alternatives: PathPeer[];
-}
-
-// A hop hash is a pubkey prefix, not an identity. On this mesh 92 of 211 one-byte hashes match more
-// than one peer and the worst matches five, so resolveHop returns a best guess plus everything else
-// it could have been — never a bare name. Only a repeater forwards, so a hash whose only matches
-// are chat or sensor nodes has not been identified at all: the real forwarder is a repeater we hold
-// no advert for, and naming the phone that happens to share the prefix would be a confident lie.
-// Among repeaters the most recently heard wins, as the least-bad tiebreak.
-function resolveHop(hash: string, candidates: PathPeer[] | undefined): Hop {
-  const repeaters = (candidates ?? []).filter((c) => c.type === "REPEATER");
-  if (repeaters.length === 0) return { hash, alternatives: [] };
-  const best = repeaters.reduce((a, b) =>
-    (b.lastSeen ?? "") > (a.lastSeen ?? "") ? b : a,
-  );
-  return { hash, peer: best, alternatives: repeaters.filter((c) => c !== best) };
-}
+export type { PathPeer };
 
 function useHops(
   path: string | undefined,
@@ -46,7 +24,7 @@ function useHops(
   return useMemo(() => {
     if (!path) return [];
     const byHash = buildPeerCandidatesByHash(peers ?? [], size);
-    return hexToHopHashes(path, size).map((h) => resolveHop(h, byHash.get(h)));
+    return hexToHopHashes(path, size).map((h) => resolveHopPeer(h, byHash.get(h)));
   }, [path, size, peers]);
 }
 
