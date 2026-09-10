@@ -25,6 +25,21 @@ Baseline `v1.3.1` · no schema change
 - Build dates now use the firmware's own `%d-%b-%Y` (`10-Sep-2026`) rather than ISO, so a `ver`
   reply reads the same beside a real MeshCore node. `build.sh` previously stamped the UTC date,
   which in NZ meant a morning build claimed yesterday; it follows the firmware's local clock now.
+- **The repeater access list showed a blank role for a guest.** The dropdown renders the matching
+  option's label and there was no guest option, so the one role that cannot be granted was the one
+  that displayed as nothing. The list now carries an unselectable item for whatever role the entry
+  actually holds. That also keeps the popover usable: Radix positions it by aligning the selected
+  item over the trigger, so a value with no item put the whole list off-screen at the viewport
+  corner, where nothing could be clicked.
+- **Granting access lists companions only.** A repeater, room server or sensor has no login
+  client at all, since `ANON_REQ` is only ever sent from `BaseChatMesh` and none of them inherit
+  it, so offering them was offering access that could never be used. On this bench that cut the
+  list from 329 peers to 32. A peer whose type is unknown stays listed, and the manual pubkey
+  field is unrestricted.
+- Granting access now defaults to **Read only** rather than Read / Write, matching the official
+  app. Note that on a repeater the two are the same access: the firmware tests only `isAdmin()`
+  and a guest check, and nothing anywhere tests `PERM_ACL_READ_WRITE`. The distinction is real on
+  a room server, where read/write is a member who may post.
 
 ### Added
 

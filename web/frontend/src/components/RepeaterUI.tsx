@@ -204,11 +204,23 @@ export function rolePillClass(perms: number): string {
   }
 }
 
+// The three the official app offers, so a role set there can be set here too.
 export const ROLE_OPTIONS: { value: string; label: string }[] = [
   { value: String(PERM_READ_ONLY), label: "Read only" },
   { value: String(PERM_READ_WRITE), label: "Read / Write" },
   { value: String(PERM_ADMIN), label: "Admin" },
 ];
+
+// Radix aligns the popover on the selected item, so a value with no item renders it off-screen.
+export function CurrentRoleItem({ perms }: { perms: number }) {
+  const role = String(perms & PERM_ROLE_MASK);
+  if (ROLE_OPTIONS.some((o) => o.value === role)) return null;
+  return (
+    <SelectItem value={role} disabled className="rounded-none font-mono text-xs">
+      {roleLabel(perms)}
+    </SelectItem>
+  );
+}
 
 const HEX64_RE = /^[0-9a-fA-F]{64}$/;
 
@@ -223,14 +235,14 @@ export function AddAccessDialog({
 }: {
   open: boolean;
   onOpenChange: (v: boolean) => void;
-  peers: { pubkey: string; name: string }[];
+  peers: { pubkey: string; name: string; type?: string }[];
   knownPrefixes: Set<string>;
   onAdd: (pubkey: string, perms: number) => Promise<void>;
   kind?: "repeater" | "sensor" | "room";
 }) {
   const [search, setSearch] = useState("");
   const [manualKey, setManualKey] = useState("");
-  const [role, setRole] = useState<string>(String(PERM_READ_WRITE));
+  const [role, setRole] = useState<string>(String(PERM_READ_ONLY));
   // Sensors: what a password login grants, so an added client behaves the same.
   const [alertHi, setAlertHi] = useState(true);
   const [alertLo, setAlertLo] = useState(true);
@@ -242,7 +254,7 @@ export function AddAccessDialog({
     if (!open) {
       setSearch("");
       setManualKey("");
-      setRole(String(PERM_READ_WRITE));
+      setRole(String(PERM_READ_ONLY));
       setAlertHi(true);
       setAlertLo(true);
       setSubmitting(false);
@@ -250,8 +262,11 @@ export function AddAccessDialog({
   }, [open]);
 
   const candidates = useMemo(() => {
+    // Only a companion can log in; ANON_REQ is sent from BaseChatMesh, which the others lack.
     const pool = peers.filter(
-      (p) => !knownPrefixes.has(p.pubkey.toLowerCase().slice(0, 12)),
+      (p) =>
+        !knownPrefixes.has(p.pubkey.toLowerCase().slice(0, 12)) &&
+        ["CHAT", ""].includes((p.type ?? "").toUpperCase()),
     );
     const q = search.trim().toLowerCase();
     const filtered = q
