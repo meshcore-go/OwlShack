@@ -239,7 +239,7 @@ export function AddAccessDialog({
 }: {
   open: boolean;
   onOpenChange: (v: boolean) => void;
-  peers: { pubkey: string; name: string }[];
+  peers: { pubkey: string; name: string; type?: string }[];
   knownPrefixes: Set<string>;
   onAdd: (pubkey: string, perms: number) => Promise<void>;
   kind?: "repeater" | "sensor" | "room";
@@ -266,8 +266,13 @@ export function AddAccessDialog({
   }, [open]);
 
   const candidates = useMemo(() => {
+    // Only a companion can log in: ANON_REQ is sent from BaseChatMesh, which repeater, room and
+    // sensor firmware do not inherit. An unclassified peer stays listed, since hiding a real
+    // client is worse than showing one extra.
     const pool = peers.filter(
-      (p) => !knownPrefixes.has(p.pubkey.toLowerCase().slice(0, 12)),
+      (p) =>
+        !knownPrefixes.has(p.pubkey.toLowerCase().slice(0, 12)) &&
+        ["CHAT", ""].includes((p.type ?? "").toUpperCase()),
     );
     const q = search.trim().toLowerCase();
     const filtered = q
@@ -355,6 +360,9 @@ export function AddAccessDialog({
                 className="pl-8 rounded-none font-mono text-base md:text-xs h-8"
               />
             </div>
+            <p className="font-mono text-[10px] uppercase tracking-[0.12em] text-muted-foreground/60">
+              companions only · a repeater or room server cannot log in
+            </p>
             <div className="border border-border max-h-64 overflow-y-auto divide-y divide-border">
               {candidates.length === 0 ? (
                 <div className="px-4 py-8 text-center">
