@@ -109,6 +109,7 @@ import {
   PERM_READ_WRITE,
   PERM_ROLE_MASK,
   ROLE_OPTIONS,
+  CurrentRoleItem,
   RepeaterTab,
   RepeaterTabsList,
   StatTile,
@@ -2022,9 +2023,10 @@ function AccessTab({
                       disabled={isBusy}
                     >
                       <SelectTrigger className="rounded-none font-mono text-[10px] uppercase tracking-widest h-7 w-32 border-border bg-background">
-                        {roleLabel(entry.permissions)}
+                        <SelectValue />
                       </SelectTrigger>
                       <SelectContent className="rounded-none font-mono text-xs">
+                        <CurrentRoleItem perms={entry.permissions} />
                         {ROLE_OPTIONS.map((opt) => (
                           <SelectItem
                             key={opt.value}

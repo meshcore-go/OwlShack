@@ -211,6 +211,19 @@ export const ROLE_OPTIONS: { value: string; label: string }[] = [
   { value: String(PERM_ADMIN), label: "Admin" },
 ];
 
+// A role the picker cannot grant still has to render: Radix aligns the popover on the selected
+// item, so a value with no item puts the whole list off-screen and nothing can be clicked. Covers
+// guest and any entry still holding read/write.
+export function CurrentRoleItem({ perms }: { perms: number }) {
+  const role = String(perms & PERM_ROLE_MASK);
+  if (ROLE_OPTIONS.some((o) => o.value === role)) return null;
+  return (
+    <SelectItem value={role} disabled className="rounded-none font-mono text-xs">
+      {roleLabel(perms)}
+    </SelectItem>
+  );
+}
+
 const HEX64_RE = /^[0-9a-fA-F]{64}$/;
 
 // knownPrefixes: lowercase 12-hex prefixes already in the ACL.
