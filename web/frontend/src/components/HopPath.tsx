@@ -146,13 +146,15 @@ export function HopPath({
   ));
   const us = <span className="text-muted-foreground/60">you</span>;
 
-  // Which end of the chain we sit on, and whether we can claim an end at all. A flood ACCUMULATES a
-  // hash at each relay, so a received one lists where the packet has been and it reached us from
-  // the last of them. A direct route CONSUMES its hashes (Mesh.cpp:334-342), so what remains is the
-  // road ahead and the node that handed it to us is no longer in the path at all — bookending that
-  // with "you" claimed the next hop had forwarded it to us, which is backwards.
+  // Where we sit on the chain, and whether we sit on it at all. A flood ACCUMULATES a hash at each
+  // relay, so a received one lists where the packet has been and it reached us from the last of
+  // them: "chain → you". Our own send leads: "you → chain". A direct route CONSUMES its hashes
+  // (Mesh.cpp:334-342), so a received one carries only the road ahead — a leg running from the
+  // relay we overheard to its next hop, with us on neither end. That gets no "you" at all: naming
+  // us at the head would claim we are forwarding it on, which is as wrong as the tail claiming the
+  // next hop delivered it to us.
   const forward = direction === "tx" || route?.includes("DIRECT");
-  const lead = forward ? us : null;
+  const lead = direction === "tx" ? us : null;
   const tail = forward ? null : us;
   const ahead = route?.includes("DIRECT") && direction !== "tx";
 
