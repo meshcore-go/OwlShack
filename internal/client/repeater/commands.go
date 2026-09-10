@@ -43,7 +43,8 @@ func (rm *Client) SendRoomKeepAlive(pubkeyHex string, since uint32) error {
 	if sess == nil || sess.sharedSecret == nil {
 		return fmt.Errorf("not logged in to this room")
 	}
-	routeType, pathLen := routeForPeer(peer)
+	outPath, hashSize := rm.learnedRoute(peerIdentity.PublicKey(), peer)
+	routeType, pathLen := routeForPeer(outPath, hashSize)
 	if routeType != meshcore.RouteTypeDirect {
 		return fmt.Errorf("no direct route to the room yet — it ignores flooded keep-alives; log in (flood) to learn one")
 	}
@@ -290,12 +291,13 @@ func (rm *Client) SendCLI(pubkeyHex, command string, timeout time.Duration) (str
 		return "", fmt.Errorf("encoding text message: %w", err)
 	}
 
-	routeType, pathLen := routeForPeer(peer)
+	outPath, hashSize := rm.learnedRoute(peerIdentity.PublicKey(), peer)
+	routeType, pathLen := routeForPeer(outPath, hashSize)
 
 	pkt := &meshcore.Packet{
 		Header:     meshcore.MakeHeader(routeType, meshcore.PayloadTypeTxtMsg, 0),
 		PathLength: pathLen,
-		Path:       peer.OutPath,
+		Path:       outPath,
 		Payload:    msgBytes,
 	}
 
@@ -303,12 +305,13 @@ func (rm *Client) SendCLI(pubkeyHex, command string, timeout time.Duration) (str
 		return "", fmt.Errorf("sending CLI: %w", err)
 	}
 
-	rm.log.Debug("CLI sent", "peer", pubkeyHex[:12], "prefix", prefix, "command", command)
+	wait := rm.replyTimeout(len(msgBytes), outPath, hashSize, timeout)
+	rm.log.Debug("CLI sent", "peer", pubkeyHex[:12], "prefix", prefix, "command", command, "wait", wait)
 
 	select {
 	case response := <-resultCh:
 		return response, nil
-	case <-time.After(timeout):
-		return "", fmt.Errorf("CLI command timed out")
+	case <-time.After(wait):
+		return "", fmt.Errorf("CLI command timed out after %s", wait)
 	}
 }

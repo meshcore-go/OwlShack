@@ -117,7 +117,7 @@ func NewCompanion(cfg config.CompanionConfig, mux *node.RadioMux, st *store.Stor
 		hub:         hub,
 		echoTracker: echoTracker,
 		stats:       stats,
-		repeaters:   repeater.NewClient(n, st, cfg.ID, log),
+		repeaters:   repeater.NewClient(n, st, cfg.ID, log, stats),
 	}
 
 	// The companion's channels are the only ones this node listens on; triggers reference them by name and register none of their own.

@@ -107,12 +107,13 @@ func (rm *Client) sendLogin(pubkeyHex, password string, roomSyncSince *uint32, t
 		rm.loginMu.Unlock()
 	}()
 
-	routeType, pathLen := routeForPeer(peer)
+	outPath, hashSize := rm.learnedRoute(peerIdentity.PublicKey(), peer)
+	routeType, pathLen := routeForPeer(outPath, hashSize)
 
 	pkt := &meshcore.Packet{
 		Header:     meshcore.MakeHeader(routeType, meshcore.PayloadTypeAnonReq, 0),
 		PathLength: pathLen,
-		Path:       peer.OutPath,
+		Path:       outPath,
 		Payload:    payload,
 	}
 
@@ -120,7 +121,8 @@ func (rm *Client) sendLogin(pubkeyHex, password string, roomSyncSince *uint32, t
 		return nil, fmt.Errorf("sending login: %w", err)
 	}
 
-	rm.log.Debug("login sent", "peer", pubkeyHex[:12])
+	wait := rm.replyTimeout(len(payload), outPath, hashSize, timeout)
+	rm.log.Debug("login sent", "peer", pubkeyHex[:12], "wait", wait)
 
 	select {
 	case data := <-resultCh:
@@ -155,7 +157,7 @@ func (rm *Client) sendLogin(pubkeyHex, password string, roomSyncSince *uint32, t
 		}
 		rm.mu.Unlock()
 		return &LoginResult{Success: true, IsAdmin: isAdmin, Permissions: perms, Role: role}, nil
-	case <-time.After(timeout):
-		return nil, fmt.Errorf("login timed out")
+	case <-time.After(wait):
+		return nil, fmt.Errorf("login timed out after %s", wait)
 	}
 }
