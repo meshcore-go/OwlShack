@@ -335,9 +335,21 @@ template.
 
 | Function | Does |
 |---|---|
-| `formatPathBytes` | Renders raw path hashes readably (`Direct` when there is no path) |
+| `formatPathBytes` | Renders raw path hashes readably, joined by an optional separator (`Direct` when there is no path) |
 | `now` | The current time, as a value you can format or take parts of |
 | `date` | Formats a time in a layout, optionally in a named zone |
+
+`formatPathBytes` takes the path hashes and an optional separator, defaulting
+to `", "`:
+
+```
+{{formatPathBytes .PathHashes}}          A1, B2, C3
+{{formatPathBytes .PathHashes " > "}}    A1 > B2 > C3
+{{formatPathBytes .PathHashes ""}}       A1B2C3
+```
+
+A node heard direct renders as `Direct` whatever the separator, since there is
+nothing to join.
 
 `date` takes a time, a layout, and an optional [IANA zone](https://en.wikipedia.org/wiki/List_of_tz_database_time_zones);
 without a zone it uses the host's. Layouts are Go's, where the layout is itself
