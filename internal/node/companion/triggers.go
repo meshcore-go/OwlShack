@@ -97,6 +97,8 @@ func (c *Companion) buildTrigger(cfg config.TriggerConfig, channels []*meshcore.
 	switch cfg.Type {
 	case "channel", "group":
 		t, err = trigger.NewChannelTrigger(c.cfg.Name, cfg, c.node, channels, c.log)
+	case "dm":
+		t, err = trigger.NewDMTrigger(c.cfg.Name, cfg, c.log)
 	case "cron":
 		t, err = trigger.NewCronTrigger(c.cfg.Name, cfg, c.log)
 	default:
@@ -133,6 +135,13 @@ func (c *Companion) makeCallback(ctx context.Context, entry triggerEntry) trigge
 			ch, _ := evt.Data["ChannelEntry"].(*meshcore.ChannelEntry)
 			c.log.Debug("sending group txt", "channel", ch.Name, "pathHashSize", hashSize)
 			if err := c.sendGroupReply(ch, rendered, hashSize, retryTimeout, *entry.config.MaxRetries); err != nil {
+				c.log.Error("send error", "error", err)
+			}
+
+		case "dm":
+			pubkey, _ := evt.Data["SenderPubKey"].(string)
+			c.log.Debug("sending dm reply", "peer", pubkey, "pathHashSize", hashSize)
+			if err := c.sendDMReply(pubkey, rendered, hashSize, retryTimeout); err != nil {
 				c.log.Error("send error", "error", err)
 			}
 

@@ -170,6 +170,18 @@ func (c *Config) Validate() error {
 		if v := comp.PathHashSize; v != nil && (*v < MinPathHashSize || *v > MaxPathHashSize) {
 			return fmt.Errorf("companion %q: pathHashSize must be %d-%d bytes", comp.Name, MinPathHashSize, MaxPathHashSize)
 		}
+		switch comp.DMPolicyOrDefault() {
+		case DMPolicyContacts, DMPolicyAllowlist, DMPolicyAnyone:
+		default:
+			return fmt.Errorf("companion %q: dmPolicy must be %q, %q or %q", comp.Name, DMPolicyContacts, DMPolicyAllowlist, DMPolicyAnyone)
+		}
+		if comp.DMAllow != nil {
+			for _, k := range *comp.DMAllow {
+				if err := validateDMAllowKey(k); err != nil {
+					return fmt.Errorf("companion %q dmAllow: %w", comp.Name, err)
+				}
+			}
+		}
 		if comp.Triggers != nil {
 			for j, trig := range *comp.Triggers {
 				if err := trig.Validate(); err != nil {

@@ -32,6 +32,11 @@ type groupTextHandler interface {
 	HandleGroupText(*meshcore.Packet)
 }
 
+// dmTextHandler is implemented by triggers that react to accepted plain DMs.
+type dmTextHandler interface {
+	HandleDirectMessage(trigger.DirectMessage, *meshcore.Packet)
+}
+
 type Companion struct {
 	cfg config.CompanionConfig
 

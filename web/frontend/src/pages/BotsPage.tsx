@@ -8,7 +8,6 @@ import {
   Pencil,
   Plus,
   Save,
-  Trash2,
 } from "lucide-react";
 import { toast } from "sonner";
 import { PageHeader } from "@/components/PageHeader";
@@ -17,9 +16,9 @@ import { SectionTitle } from "@/components/SectionTitle";
 import { InlineConfirm } from "@/components/InlineConfirm";
 import { ChannelMultiSelect } from "@/components/ChannelMultiSelect";
 import { Field, SelectField, TextField } from "@/components/ConfigFields";
+import { StringListField } from "@/components/StringListField";
+import { PeerListField, type PickablePeer } from "@/components/PeerPicker";
 import { Button } from "@/components/ui/button";
-import { Input } from "@/components/ui/input";
-import { Label } from "@/components/ui/label";
 import {
   Popover,
   PopoverContent,
@@ -43,6 +42,7 @@ import {
 
 const TYPE_OPTS = [
   { value: "group", label: "Group message (match & reply)" },
+  { value: "dm", label: "Direct message (match & reply)" },
   { value: "cron", label: "Cron (scheduled broadcast)" },
 ];
 
@@ -128,6 +128,10 @@ export function BotsPage() {
   const { items: channels } = useApiList<ConfigChannel>(
     "/api/config/channels",
     "Failed to load channels",
+  );
+  const { items: peers } = useApiList<PickablePeer>(
+    "/api/peers",
+    "Failed to load peers",
   );
 
   const [editing, setEditing] = useState<Trigger | "new" | null>(null);
@@ -270,6 +274,7 @@ export function BotsPage() {
           trigger={editing === "new" ? null : editing}
           companions={companions}
           channels={channels}
+          peers={peers ?? []}
           onClose={() => setEditing(null)}
           onSaved={() => {
             setEditing(null);
@@ -285,12 +290,14 @@ function BotEditor({
   trigger,
   companions,
   channels,
+  peers,
   onClose,
   onSaved,
 }: {
   trigger: Trigger | null;
   companions: ConfigCompanion[];
   channels: ConfigChannel[];
+  peers: PickablePeer[];
   onClose: () => void;
   onSaved: () => void;
 }) {
@@ -314,6 +321,7 @@ function BotEditor({
       .filter((n): n is string => !!n),
   );
   const [match, setMatch] = useState<string[]>(trigger?.match ?? []);
+  const [contacts, setContacts] = useState<string[]>(trigger?.contacts ?? []);
   const [schedule, setSchedule] = useState(trigger?.schedule ?? "");
   const [maxRetries, setMaxRetries] = useState(
     trigger?.maxRetries != null ? String(trigger.maxRetries) : "3",
@@ -349,6 +357,7 @@ function BotEditor({
       .map((n) => nameToId.get(n))
       .filter((x): x is number => x != null);
     const patterns = match.map((s) => s.trim()).filter(Boolean);
+    const senders = contacts.map((s) => s.trim()).filter(Boolean);
 
     setSaving(true);
     try {
@@ -358,7 +367,8 @@ function BotEditor({
           type,
           template,
           channelIds,
-          match: type === "group" && patterns.length > 0 ? patterns : null,
+          match: type !== "cron" && patterns.length > 0 ? patterns : null,
+          contacts: type === "dm" && senders.length > 0 ? senders : null,
           schedule: type === "cron" ? schedule : null,
           maxRetries: parseInt(maxRetries, 10) || 3,
           retryTimeout: parseInt(retryTimeout, 10) || 5,
@@ -378,7 +388,7 @@ function BotEditor({
 
   const valid =
     template.trim() !== "" &&
-    selectedChannels.length > 0 &&
+    (type === "dm" || selectedChannels.length > 0) &&
     (type !== "cron" || schedule.trim() !== "");
 
   return (
@@ -419,87 +429,68 @@ function BotEditor({
             />
           )}
 
-          <ChannelMultiSelect
-            label="Channels"
-            selected={selectedChannels}
-            options={channelOptions}
-            onChange={setSelectedChannels}
-            hint={
-              type === "cron"
-                ? "broadcast targets — pick from the companion's channels"
-                : "channels to listen on — pick from the companion's channels"
-            }
-          />
+          {type !== "dm" && (
+            <ChannelMultiSelect
+              label="Channels"
+              selected={selectedChannels}
+              options={channelOptions}
+              onChange={setSelectedChannels}
+              hint={
+                type === "cron"
+                  ? "broadcast targets — pick from the companion's channels"
+                  : "channels to listen on — pick from the companion's channels"
+              }
+            />
+          )}
 
-          {type === "group" && (
-            <div className="space-y-1">
-              <div className="flex items-center justify-between gap-2">
-                <Label className="font-mono text-[10px] uppercase tracking-[0.12em] text-muted-foreground">
-                  Match patterns
-                </Label>
-                <RegexHelp />
-              </div>
-              <div className="space-y-2">
-                {match.length === 0 && (
-                  <p className="font-mono text-xs text-muted-foreground/50">
-                    no patterns — add one so this bot can fire
-                  </p>
-                )}
-                {match.map((pat, i) => (
-                  <div key={i} className="flex items-center gap-2">
-                    <Input
-                      value={pat}
-                      onChange={(e) =>
-                        setMatch((m) =>
-                          m.map((p, j) => (j === i ? e.target.value : p)),
-                        )
-                      }
-                      placeholder="(?i)^!bot"
-                      className="h-9 flex-1 rounded-none border-border bg-background font-mono text-sm"
-                    />
-                    <Button
-                      type="button"
-                      variant="ghost"
-                      size="icon-sm"
-                      onClick={() =>
-                        setMatch((m) => m.filter((_, j) => j !== i))
-                      }
-                      aria-label="Remove pattern"
-                      className="shrink-0 rounded-none text-muted-foreground/60 hover:text-destructive"
-                    >
-                      <Trash2 className="size-3.5" />
-                    </Button>
-                  </div>
-                ))}
-                <Button
-                  type="button"
-                  variant="outline"
-                  size="sm"
-                  onClick={() => setMatch((m) => [...m, ""])}
-                  className="rounded-none font-mono text-[11px] uppercase tracking-[0.12em]"
-                >
-                  <Plus className="size-3.5" />
-                  add pattern
-                </Button>
-              </div>
-              <p className="font-mono text-[10px] text-muted-foreground/60">
-                regular expressions — the bot fires when a message matches any
-                pattern.{" "}
-                <a
-                  href="https://regex101.com/?flavor=golang"
-                  target="_blank"
-                  rel="noopener noreferrer"
-                  className="text-primary underline-offset-2 hover:underline"
-                >
-                  test on regex101
-                </a>
-              </p>
-            </div>
+          {type === "dm" && (
+            <PeerListField
+              label="Restrict to contacts (optional)"
+              values={contacts}
+              onChange={setContacts}
+              peers={peers}
+              addLabel="add contact"
+              emptyHint="no contacts added: replies to DMs from anyone"
+              hint="the companion's DM policy decides who reaches this bot at all; this narrows it further"
+              dialogTitle="Add contact"
+              dialogDescription="Pick who this bot answers. Only companions are listed: a repeater, room server or sensor never sends a plain DM."
+              idPrefix="dm-sender"
+            />
+          )}
+
+          {type !== "cron" && (
+            <StringListField
+              label="Match patterns"
+              values={match}
+              onChange={setMatch}
+              placeholder="(?i)^!bot"
+              addLabel="add pattern"
+              emptyHint={
+                type === "dm"
+                  ? "no patterns: every message from a listed sender fires this bot"
+                  : "no patterns — add one so this bot can fire"
+              }
+              action={<RegexHelp />}
+              hint={
+                <>
+                  regular expressions — the bot fires when a message matches any
+                  pattern.{" "}
+                  <a
+                    href="https://regex101.com/?flavor=golang"
+                    target="_blank"
+                    rel="noopener noreferrer"
+                    className="text-primary underline-offset-2 hover:underline"
+                  >
+                    test on regex101
+                  </a>
+                </>
+              }
+            />
           )}
 
           <Field
             label="Reply template"
-            hint="Go template — group: {{.Sender}} {{.Message}} {{.Match}} {{.SNR}} {{.Hops}}; cron: {{.Time}}"
+            hint="Go template — group/dm: {{.Sender}} {{.Message}} {{.Match}} {{.SNR}} {{.Hops}}; dm also has {{.SenderPubKey}}; cron: {{.Time}}"
           >
             <Textarea
               value={template}

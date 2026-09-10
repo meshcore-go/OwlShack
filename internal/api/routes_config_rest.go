@@ -69,6 +69,8 @@ type companionDTO struct {
 	Longitude      *float64 `json:"longitude"`
 	AdvertInterval *int     `json:"advertInterval"`
 	PathHashSize   *int     `json:"pathHashSize"`
+	DMPolicy       string   `json:"dmPolicy"`
+	DMAllow        []string `json:"dmAllow"`
 }
 
 type channelDTO struct {
@@ -108,6 +110,7 @@ func companionToDTO(c store.Companion) companionDTO {
 		ID: c.ID, Name: c.Name, PubKey: c.PubKey, PrivateKeySet: c.PrivateKey != "",
 		Latitude: c.Latitude, Longitude: c.Longitude, AdvertInterval: c.AdvertInterval,
 		PathHashSize: c.PathHashSize,
+		DMPolicy:     c.DMPolicy, DMAllow: c.DMAllow,
 	}
 }
 

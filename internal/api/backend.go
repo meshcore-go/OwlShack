@@ -253,6 +253,8 @@ type CompanionInput struct {
 	ID             int64    `json:"id"`
 	Name           string   `json:"name"`
 	PrivateKey     *string  `json:"privateKey"` // nil = keep (update) / generate (create)
+	DMPolicy       string   `json:"dmPolicy"`   // "" = contacts
+	DMAllow        []string `json:"dmAllow"`
 	Latitude       *float64 `json:"latitude"`
 	Longitude      *float64 `json:"longitude"`
 	AdvertInterval *int     `json:"advertInterval"`

@@ -203,6 +203,7 @@ var migrations = []func(context.Context, dbExecer) error{
 	migrateV7,   // 9 — settings.duty_cycle_pct (TX airtime budget)
 	migrateV8,   // 10 — settings.spi_board (SPI radio hat wiring)
 	migrateV9,   // 11 — repeater.admin_password backfilled off blank (blank granted admin)
+	migrateV10,  // 12 — companions.dm_policy + dm_allow (who may DM this companion)
 }
 
 // dbExecer is the subset of *sql.DB / *sql.Tx a migration needs.
@@ -615,6 +616,19 @@ func migrateV9(ctx context.Context, db dbExecer) error {
 	_, err := db.ExecContext(ctx,
 		`UPDATE repeater SET admin_password = 'password' WHERE admin_password = ''`)
 	return err
+}
+
+// migrateV10 adds the DM acceptance policy; 'contacts' is what every install did before it, when a DM only decrypted against companion_contacts.
+func migrateV10(ctx context.Context, db dbExecer) error {
+	for _, q := range []string{
+		`ALTER TABLE companions ADD COLUMN dm_policy TEXT NOT NULL DEFAULT 'contacts'`,
+		`ALTER TABLE companions ADD COLUMN dm_allow TEXT NOT NULL DEFAULT ''`,
+	} {
+		if _, err := db.ExecContext(ctx, q); err != nil {
+			return err
+		}
+	}
+	return nil
 }
 
 // migrateV8 adds settings.spi_board; NULL for a KISS modem, which is every pre-existing install.
