@@ -15,14 +15,32 @@ export function hexToHopHashes(pathHex: string, hashSize: number): string[] {
   return out;
 }
 
+// buildPeerCandidatesByHash keeps every peer sharing a hop hash. A hash is a pubkey prefix, so it
+// is not unique: on a 338-peer mesh, 92 one-byte hashes match more than one node and the worst
+// matches five. A caller that renders one name is asserting a node the packet never identified.
+export function buildPeerCandidatesByHash(
+  peers: NamedPeer[],
+  hashSize: number,
+): Map<string, NamedPeer[]> {
+  const map = new Map<string, NamedPeer[]>();
+  for (const p of peers) {
+    const k = p.pubkey.slice(0, hashSize * 2).toLowerCase();
+    const at = map.get(k);
+    if (at) at.push(p);
+    else map.set(k, [p]);
+  }
+  return map;
+}
+
+// buildPeerByHash keeps the first peer per hash, discarding the rest. Prefer
+// buildPeerCandidatesByHash where the display can show that a hash was ambiguous.
 export function buildPeerByHash(
   peers: NamedPeer[],
   hashSize: number,
 ): Map<string, NamedPeer> {
   const map = new Map<string, NamedPeer>();
-  for (const p of peers) {
-    const k = p.pubkey.slice(0, hashSize * 2).toLowerCase();
-    if (!map.has(k)) map.set(k, p);
+  for (const [k, v] of buildPeerCandidatesByHash(peers, hashSize)) {
+    map.set(k, v[0]);
   }
   return map;
 }
