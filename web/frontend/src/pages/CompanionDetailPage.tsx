@@ -848,24 +848,40 @@ export function CompanionDetailPage() {
     }
   }, [activeChannel, initialLoadMessages, backfillMessages]);
 
+  // The highest id reported read per conversation, so watching a thread keeps marking it read
+  // without re-posting the same id on every render.
+  const reportedReadRef = useRef<Map<string, number>>(new Map());
+
   useEffect(() => {
     if (!activeChannel || !activeConversation) return;
-    if (activeConversation.unreadCount === 0) return;
-    const last = messages[messages.length - 1];
-    if (!last?.id) return;
+    // Deliberately not gated on unreadCount. That is zeroed locally as soon as the thread opens, so
+    // gating on it stopped every message that arrived while the thread was on screen from ever
+    // advancing last_read_id — they were read, the server never heard, and they came back unread on
+    // the next visit. Track the high-water mark instead.
+    const highest = messages.reduce((max, m) => (m.id && m.id > max ? m.id : max), 0);
+    if (highest === 0) return;
+    if ((reportedReadRef.current.get(activeConversation.id) ?? 0) >= highest) return;
+    reportedReadRef.current.set(activeConversation.id, highest);
+
     fetch(
       `/api/companions/${encodeURIComponent(decodedName)}/conversations/${encodeURIComponent(activeConversation.id)}/read`,
       {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ lastReadId: last.id }),
+        body: JSON.stringify({ lastReadId: highest }),
       },
-    ).catch(() => {});
-    setConversations((prev) =>
-      prev.map((c) =>
-        c.id === activeConversation.id ? { ...c, unreadCount: 0 } : c,
-      ),
-    );
+    ).catch(() => {
+      // Let a later render retry rather than stranding the high-water mark on a failed request.
+      reportedReadRef.current.delete(activeConversation.id);
+    });
+
+    if (activeConversation.unreadCount !== 0) {
+      setConversations((prev) =>
+        prev.map((c) =>
+          c.id === activeConversation.id ? { ...c, unreadCount: 0 } : c,
+        ),
+      );
+    }
   }, [activeChannel, activeConversation, messages, decodedName]);
 
   const handleWsMessage = useCallback(
