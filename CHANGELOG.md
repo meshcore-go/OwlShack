@@ -5,6 +5,13 @@ top until tagged.
 
 ## Unreleased
 
+## v1.4.0-rc.1 — 2026-09-11
+
+A release candidate, not a release: the mesh-facing work below was tested against real repeaters
+and rooms on one bench, and wants a second node before it is called stable. Two of its defects
+were found by ordinary use rather than by tests or review, and both are the kind only real traffic
+reaches.
+
 Corrects two fields on the MQTT status schema that carried a different measurement from the one
 their name promises. The schema is shared: `meshcoretomqtt` forwards real firmware nodes to the
 same brokers under the same topic, and it is the client LetsMesh recommends, so the names were
@@ -111,8 +118,82 @@ Baseline `v1.3.1` · schema `user_version` 12
   payload keeps publishing both keys on both transports, because omitting a key there is a
   coordinated change and dropping to 0 is not.
 
+### Fixed — direct messages
+
+- **A retry past attempt 3 could never be acked.** The attempt number is hidden after the text's
+  NUL terminator (`BaseChatMesh.cpp:434-436`), so trimming trailing NULs left the suffix in the
+  body and hashed the ack over the wrong bytes. The text now ends at the first NUL, as the
+  firmware's `strlen` does.
+- **Retransmissions no longer show as duplicate messages.** Collapsed on sender, timestamp and
+  text. The text has to be in the key: a plain DM's timestamp is the sending app's clock at second
+  resolution (`MyMesh.cpp:1088`), not `getCurrentTimeUnique`, so two different messages can share a
+  second and keying without it acked the second and dropped it.
+- **A DM's path and hop count are recorded**, as group messages already were, so View Paths no
+  longer says Direct for a message that crossed repeaters. A direct-routed DM records its hops as
+  absent rather than 0: direct routing consumes the path hop by hop (`Mesh.cpp:334-342`), so the
+  count is genuinely unrecoverable at the destination.
+- **Ack waits are computed from airtime** instead of a flat 5s, following the firmware
+  (`MyMesh.cpp:851-858`). At the bench preset the firmware waits 7.9s flood and 9.5s for a 2-hop
+  direct, so a 5s cap was reporting delivered messages as failed.
+- A peer that teaches us a route is taught ours back, so it stops flooding its replies at us; a
+  route is dropped after total delivery failure; and text is capped at the 158 bytes `MAX_TEXT_LEN`
+  allows.
+
+### Fixed — repeater and room admin
+
+- **Commands to a distant node no longer time out while the reply is still in flight.** Every
+  request waited a flat 10s regardless of distance or payload; the firmware sizes its own waits
+  from airtime, and a full-size reply over 3 hops needs about 17s. Telemetry, the largest reply of
+  any command, was the one that never arrived.
+- **Admin traffic no longer floods after every restart.** The route was being read from the
+  in-memory peer table, which starts empty, while the learned route sat unread in the database.
+  Since firmware answers a flood request with a flood reply unconditionally, one unread route cost
+  both directions.
+- **A stale route no longer makes a node unreachable for good.** With routes now surviving a
+  restart, a route gone stale failed every login identically and nothing ever cleared it. A login
+  that times out on a learned route drops it so the next attempt rediscovers by flooding. Login
+  only: a mid-session timeout is more likely ordinary loss, and dropping a good route over that
+  would put a lossy link into a flood loop.
+- **A room keep-alive was malformed on air.** It took its path-length byte from one route and its
+  path bytes from another, so after a restart it declared a 3-hop path and sent none — and the
+  receiver read three bytes of payload as path. The room ignored it, the push stream stalled, and
+  the log recorded a well-formed send. All four send paths now build through one constructor that
+  cannot mix the two.
+- **"Remove all Neighbours" from the phone app returned `Unknown command`.** The firmware matches
+  `neighbor.remove ` with its trailing space and treats an empty pubkey as a prefix matching every
+  entry; the dispatcher trimmed the space away, and underneath that an empty pubkey was rejected
+  outright. Both fixed — the second was invisible until the first was.
+- A login rejected for a bad password or a replay-guard trip now says which. Both were bare
+  returns, so an operator saw a login simply not happen.
+
+### Added — packets and paths
+
+- **Hop hashes resolve to node names** on the Packets, Trace and Monitoring pages. A hash is a
+  pubkey prefix, not an identity: on a 338-peer mesh 92 of 211 one-byte hashes match more than one
+  peer. The hashes stay on screen as the fact, a name that could be several peers carries the
+  count and opens the candidate list, and a hash matching no repeater stays hex — only a repeater
+  forwards, so a hash matching only a phone has not been identified at all.
+- **A packet's row no longer changes when a relay echoes it.** It was rendered from whichever
+  observation arrived last, so a packet you sent flipped to RX, taking its route and hop count with
+  it. Rows render from the first observation seen and repeats join the observation list, which
+  carries each one's own route, hops and path.
+- The route label carries its hop count, since `DIRECT` is a routing mode rather than a claim of
+  zero hops. The count means opposite things by route and now says which: a flood accumulates a
+  hash at each relay, so it is distance travelled; a direct route consumes one, so it is distance
+  remaining.
+
 ### Known limitations
 
+- **The airtime-based reply timeout is unproven.** No reply has yet been observed arriving in the
+  window it opens; every one that arrived came back in under 4s. It is justified on firmware
+  fidelity — a 5-hop link would legitimately need ~27s and a 10s cap would cut it off — not on a
+  measured win. Its visible cost is that a failure now takes longer to report.
+- **Packet loss on long paths is not addressed.** On a 3-hop link here, requests are lost outright
+  rather than arriving late, and no timeout recovers that. Retrying lost requests is a design
+  change, not a tweak.
+- **The frontend has no automated tests**, this repository has no runner for them, and a large part
+  of this release is frontend. Those paths are verified by inspection and by driving the running
+  app, not by anything that would fail in CI.
 - The rename is invisible to a consumer that does not parse `client_version`: the key stays
   present, nothing errors, and a delta computed over `recv_errors` steps once per node at upgrade.
   Nothing on the wire distinguishes the two meanings, and no transport field is published either,
