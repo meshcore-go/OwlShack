@@ -220,7 +220,7 @@ func (c *Companion) registerPacketHandlers() {
 
 	radio.SetRawDataHandler(func(data []byte, snr float32, rssi int8, hasSignalInfo bool) {
 		if c.echoTracker != nil {
-			c.echoTracker.OnRawPacket(data, snr, rssi, hasSignalInfo)
+			c.echoTracker.OnRawPacket(c.cfg.Name, data, snr, rssi, hasSignalInfo)
 		}
 	})
 
