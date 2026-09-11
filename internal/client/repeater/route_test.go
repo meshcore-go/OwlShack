@@ -171,3 +171,33 @@ func TestRoutedPacket_LengthAlwaysDescribesTheBytesItCarries(t *testing.T) {
 		})
 	}
 }
+
+// A learned route that has gone stale used to fail every login identically and forever: the row
+// held a path, so every attempt went direct down it, and nothing in this package ever cleared it.
+// Before the contact-row fallback existed a restart floods and masked it; now the route survives
+// the restart, so a failed login has to be able to abandon it or the peer is unreachable for good.
+func TestLoginTimeout_ClearsTheRouteItFailedOn(t *testing.T) {
+	t.Parallel()
+
+	rm, companionID, pubkey := routeTestClient(t)
+	key := pubkeyArray(pubkey)
+
+	if err := rm.store.Contacts.UpdateOutPath(t.Context(), companionID, pubkey, []byte{0xbc, 0x8d}, 1); err != nil {
+		t.Fatalf("UpdateOutPath: %v", err)
+	}
+	if path, _ := rm.learnedRoute(key, nil); path == nil {
+		t.Fatal("precondition: the stale route should be resolvable before the failure")
+	}
+
+	// What the timeout branch does once it has established the send went out on a learned route.
+	rm.persistOutPath(pubkey, nil, 0)
+	rm.store.WriteSync(func() {}) // drain the async writer
+
+	path, _ := rm.learnedRoute(key, nil)
+	if path != nil {
+		t.Errorf("route still resolves to %x after a failed login; the retry would repeat it", path)
+	}
+	if rt, _ := routeForPeer(path, 0); rt != meshcore.RouteTypeFlood {
+		t.Errorf("next attempt routes as 0x%02x, want flood so it can rediscover", rt)
+	}
+}
