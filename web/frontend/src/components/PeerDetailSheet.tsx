@@ -127,6 +127,9 @@ export function PeerDetailSheet({
   const [addOpen, setAddOpen] = useState(false);
   const [qrOpen, setQrOpen] = useState(false);
   const [shareMsgOpen, setShareMsgOpen] = useState(false);
+  // Adding a contact changes neither the peer nor the companion list, so nothing the membership
+  // fetch depends on moves and it would keep showing the peer as unattached until a reload.
+  const [membershipVersion, setMembershipVersion] = useState(0);
 
   return (
     <>
@@ -144,6 +147,7 @@ export function PeerDetailSheet({
             <PeerDetailBody
               peer={peer}
               companions={companions}
+              membershipVersion={membershipVersion}
               onClose={() => onOpenChange(false)}
               onAdd={() => setAddOpen(true)}
               onShareInMessage={() => setShareMsgOpen(true)}
@@ -160,6 +164,7 @@ export function PeerDetailSheet({
             companions={companions}
             open={addOpen}
             onOpenChange={setAddOpen}
+            onAdded={() => setMembershipVersion((v) => v + 1)}
           />
           <QrDialog peer={peer} open={qrOpen} onOpenChange={setQrOpen} />
           <ShareInMessageDialog
@@ -177,6 +182,7 @@ export function PeerDetailSheet({
 function PeerDetailBody({
   peer,
   companions,
+  membershipVersion,
   onClose,
   onAdd,
   onShareInMessage,
@@ -184,6 +190,7 @@ function PeerDetailBody({
 }: {
   peer: PeerLike;
   companions: CompanionRef[];
+  membershipVersion: number;
   onClose: () => void;
   onAdd: () => void;
   onShareInMessage: () => void;
@@ -202,7 +209,7 @@ function PeerDetailBody({
       ),
     [companions, peer.pubkey],
   );
-  const membership = usePeerMembership(peer, companions);
+  const membership = usePeerMembership(peer, companions, membershipVersion);
   const lat = peer.lat / 1e6;
   const lon = peer.lon / 1e6;
   const hasLocation = peer.lat !== 0 || peer.lon !== 0;
@@ -462,6 +469,7 @@ interface MembershipHit {
 function usePeerMembership(
   peer: PeerLike,
   companions: CompanionRef[],
+  version: number,
 ): MembershipHit[] {
   const [hits, setHits] = useState<MembershipHit[]>([]);
   const key = peer.pubkey.toLowerCase();
@@ -495,7 +503,7 @@ function usePeerMembership(
     return () => {
       cancelled = true;
     };
-  }, [key, names]);
+  }, [key, names, version]);
 
   return hits;
 }
@@ -594,11 +602,13 @@ function AddPeerContactDialog({
   companions,
   open,
   onOpenChange,
+  onAdded,
 }: {
   peer: PeerLike;
   companions: CompanionRef[];
   open: boolean;
   onOpenChange: (open: boolean) => void;
+  onAdded: () => void;
 }) {
   const [companion, setCompanion] = useState("");
   const [submitting, setSubmitting] = useState(false);
@@ -635,6 +645,7 @@ function AddPeerContactDialog({
         throw new Error(e.error || `HTTP ${res.status}`);
       }
       toast.success(`Added to ${companion}'s contacts`);
+      onAdded();
       onOpenChange(false);
     } catch (e) {
       toast.error(
