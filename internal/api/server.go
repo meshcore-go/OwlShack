@@ -119,6 +119,11 @@ func (s *Server) routes() {
 	s.mux.HandleFunc("GET /api/radio/status", s.handleRadioStatus)
 	s.mux.HandleFunc("GET /api/health", s.handleHealth)
 	s.mux.HandleFunc("POST /api/radio/reset", s.handleRadioReset)
+	s.mux.HandleFunc("GET /api/sensors", s.handleSensors)
+	s.mux.HandleFunc("GET /api/sensors/providers", s.handleSensorProviders)
+	s.mux.HandleFunc("POST /api/sensors/discover", s.handleSensorDiscover)
+	s.mux.HandleFunc("POST /api/sensors", s.handleCreateSensor)
+	s.mux.HandleFunc("DELETE /api/sensors/{id}", s.handleDeleteSensor)
 
 	s.mux.HandleFunc("POST /api/backup", s.handleBackupExport)
 	s.mux.HandleFunc("POST /api/backup/estimate", s.handleBackupEstimate)

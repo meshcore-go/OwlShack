@@ -13,6 +13,7 @@ import (
 	"github.com/meshcore-go/OwlShack/internal/modem"
 	"github.com/meshcore-go/OwlShack/internal/node/companion"
 	"github.com/meshcore-go/OwlShack/internal/node/repeater"
+	"github.com/meshcore-go/OwlShack/internal/sensor"
 	"github.com/meshcore-go/OwlShack/internal/store"
 	meshcore "github.com/meshcore-go/meshcore-go"
 	"github.com/meshcore-go/meshcore-go/node"
@@ -33,12 +34,15 @@ type backend struct {
 	resetModem func()
 	// discover is nil when no node is running to carry a request.
 	discover *discover.Service
+	// sensors outlives every radio generation: local sensors are not on the mesh.
+	sensors *sensor.Hub
 }
 
-func newBackend(companions []*companion.Companion, rep *repeater.Repeater, db *store.Store, stats modem.StatsProvider, mux *node.RadioMux, reload func() error, resetModem func(), disc *discover.Service) *backend {
+func newBackend(companions []*companion.Companion, rep *repeater.Repeater, db *store.Store, stats modem.StatsProvider, mux *node.RadioMux, reload func() error, resetModem func(), disc *discover.Service, sensors *sensor.Hub) *backend {
 	return &backend{
 		companions: companions, repeater: rep, db: db,
 		stats: stats, mux: mux, reload: reload, resetModem: resetModem, discover: disc,
+		sensors: sensors,
 	}
 }
 

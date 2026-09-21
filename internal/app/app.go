@@ -146,6 +146,15 @@ func Run(ctx context.Context, importPath string, verbosity int) error {
 		}
 	}()
 
+	// Sensors are local hardware, not mesh traffic, so the hub is started here and never touched by
+	// a radio reconnect. A failure to read the configured set is fatal: carrying on would serve an
+	// empty sensor page that looks like nothing was ever configured.
+	sensorHub, err := startSensors(ctx, db, srv.Hub(), slog.Default())
+	if err != nil {
+		return err
+	}
+	defer sensorHub.Close()
+
 	echoTracker := echo.NewTracker(db, srv.Hub(), slog.Default())
 	go echoTracker.PruneLoop(ctx)
 
@@ -244,7 +253,7 @@ func Run(ctx context.Context, importPath string, verbosity int) error {
 			"error", err, "addr", listenAddr)
 		radioUp(err)
 	}
-	srv.SetBackend(newBackend(companions, rep, db, statsOf(ms), mux, reload, resetModem, disc))
+	srv.SetBackend(newBackend(companions, rep, db, statsOf(ms), mux, reload, resetModem, disc, sensorHub))
 
 	for {
 		select {
@@ -302,7 +311,7 @@ func Run(ctx context.Context, importPath string, verbosity int) error {
 			cfg = newCfg
 			compReg.set(companions)
 			disc = newDiscovery()
-			srv.SetBackend(newBackend(companions, rep, db, statsOf(ms), mux, reload, resetModem, disc))
+			srv.SetBackend(newBackend(companions, rep, db, statsOf(ms), mux, reload, resetModem, disc, sensorHub))
 			slog.Info("config reloaded", "started", stats.started, "stopped", stats.stopped, "kept", stats.kept, "reloaded", stats.reloaded)
 
 		// One arm for both: the dead-radio watcher (and the UI's reset button) signal reconnectCh, and
@@ -319,14 +328,14 @@ func Run(ctx context.Context, importPath string, verbosity int) error {
 			} else {
 				radioUp(err)
 			}
-			srv.SetBackend(newBackend(companions, rep, db, statsOf(ms), mux, reload, resetModem, disc))
+			srv.SetBackend(newBackend(companions, rep, db, statsOf(ms), mux, reload, resetModem, disc, sensorHub))
 
 		case <-retryTimer:
 			retryTimer = nil
 			if err := startRadio(cfg); err == nil {
 				slog.Info("modem connected")
 				radioUp(nil)
-				srv.SetBackend(newBackend(companions, rep, db, statsOf(ms), mux, reload, resetModem, disc))
+				srv.SetBackend(newBackend(companions, rep, db, statsOf(ms), mux, reload, resetModem, disc, sensorHub))
 			} else {
 				radioUp(err)
 			}

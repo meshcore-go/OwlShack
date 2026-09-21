@@ -27,6 +27,7 @@ type Store struct {
 	Metrics        *MetricsRepo
 	AppConfig      *AppConfigRepo
 	Settings       *SettingsRepo
+	Sensors        *SensorRepo
 	Mqtt           *MqttRepo
 	Brokers        *BrokerRepo
 	Companions     *CompanionRepo
@@ -71,6 +72,7 @@ func Open(ctx context.Context, path string) (*Store, error) {
 		Metrics:        &MetricsRepo{db: db},
 		AppConfig:      &AppConfigRepo{db: db},
 		Settings:       &SettingsRepo{db: db},
+		Sensors:        &SensorRepo{db: db},
 		Mqtt:           &MqttRepo{db: db},
 		Brokers:        &BrokerRepo{db: db},
 		Companions:     &CompanionRepo{db: db},
@@ -220,6 +222,7 @@ var migrations = []func(context.Context, dbExecer) error{
 	migrateV12,  // 14 — clamp triggers.path_hash_size to the 3-byte maximum the rest of the app uses
 	migrateV13,  // 15 — settings.modem_token (the openHop modem's access token)
 	migrateV14,  // 16 — optional group bot failover
+	migrateV15,  // 17 — sensors (local sensors, independent of any node)
 }
 
 // dbExecer is the subset of *sql.DB / *sql.Tx a migration needs.
@@ -665,6 +668,20 @@ func migrateV13(ctx context.Context, db dbExecer) error {
 // migrateV11 adds the feed URL an rss or cap trigger polls; empty for every trigger type that has none.
 func migrateV11(ctx context.Context, db dbExecer) error {
 	_, err := db.ExecContext(ctx, `ALTER TABLE triggers ADD COLUMN url TEXT NOT NULL DEFAULT ''`)
+	return err
+}
+
+// migrateV15 adds the local sensors table. options is provider-specific JSON, defaulted to '{}' so
+// a read never has to decide what NULL meant.
+func migrateV15(ctx context.Context, db dbExecer) error {
+	_, err := db.ExecContext(ctx, `
+		CREATE TABLE IF NOT EXISTS sensors (
+			id       INTEGER PRIMARY KEY AUTOINCREMENT,
+			provider TEXT NOT NULL,
+			kind     TEXT NOT NULL,
+			name     TEXT NOT NULL,
+			options  TEXT NOT NULL DEFAULT '{}'
+		)`)
 	return err
 }
 

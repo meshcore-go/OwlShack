@@ -16,6 +16,7 @@ import {
   Rss,
   Settings,
   Sun,
+  Thermometer,
   Users,
   Waves,
 } from "lucide-react";
@@ -106,6 +107,12 @@ const TELEMETRY: NavItem[] = [
     label: "Discover",
     icon: Radar,
     match: (p) => p === "/discover",
+  },
+  {
+    to: "/sensors",
+    label: "Sensors",
+    icon: Thermometer,
+    match: (p) => p === "/sensors",
   },
 ];
 

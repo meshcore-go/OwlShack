@@ -25,6 +25,21 @@ type Backend interface {
 	// DiscoveryState reports the current scan without starting one.
 	DiscoveryState() (DiscoveryState, bool)
 
+	// Sensors reports every configured local sensor with its current state.
+	Sensors() []SensorStatus
+
+	// SensorProviders lists the sensor origins this build knows about, with whether each can run here.
+	SensorProviders(ctx context.Context) []SensorProviderInfo
+
+	// DiscoverSensors asks one provider what it can see. Read-only: nothing is configured from it.
+	DiscoverSensors(ctx context.Context, provider string) ([]SensorCandidate, error)
+
+	// CreateSensor stores a sensor and starts reading it.
+	CreateSensor(ctx context.Context, in SensorInput) (int64, error)
+
+	// DeleteSensor stops and forgets one sensor.
+	DeleteSensor(ctx context.Context, id int64) error
+
 	// ChannelByHash resolves a channel hash byte across every companion; nil when unknown.
 	ChannelByHash(hash byte) *ChannelInfo
 
@@ -266,6 +281,59 @@ type RadioStatsInfo struct {
 	NoiseFloor *int16   `json:"noiseFloor,omitempty"`
 	BatteryMV  *uint16  `json:"batteryMv,omitempty"`
 	MCUTempC   *float64 `json:"mcuTempC,omitempty"`
+}
+
+// SensorProviderInfo is one sensor origin in the picker.
+type SensorProviderInfo struct {
+	ID        string `json:"id"`
+	Label     string `json:"label"`
+	Available bool   `json:"available"`
+	// Reason says why an unavailable provider cannot run here, so the operator sees "no I2C bus on
+	// this host" rather than an empty list that looks like nothing is attached.
+	Reason string `json:"reason,omitempty"`
+}
+
+// SensorCandidate is something a provider found. Options carry whatever that provider needs to open
+// it, ready to be posted straight back, which is what keeps the add form free of per-provider fields.
+type SensorCandidate struct {
+	Kind    string            `json:"kind"`
+	Label   string            `json:"label"`
+	Detail  string            `json:"detail,omitempty"`
+	Options map[string]string `json:"options"`
+}
+
+// SensorReading is one measurement. Label separates readings of the same metric, such as the three
+// load-average windows, and is empty when the metric alone identifies it.
+type SensorReading struct {
+	Metric string  `json:"metric"`
+	Label  string  `json:"label,omitempty"`
+	Value  float64 `json:"value"`
+	Unit   string  `json:"unit,omitempty"`
+}
+
+// SensorStatus is one configured sensor and its last result.
+//
+// At is null until the sensor has been read once, which is what separates "configured, not yet
+// polled" from "read fine". Error describes the most recent attempt while Readings and At still
+// describe the last one that worked, so a failing sensor shows its last good value and its age
+// rather than being blanked to zeroes.
+type SensorStatus struct {
+	ID       int64             `json:"id"`
+	Provider string            `json:"provider"`
+	Kind     string            `json:"kind"`
+	Name     string            `json:"name"`
+	Options  map[string]string `json:"options"`
+	Readings []SensorReading   `json:"readings"`
+	At       *string           `json:"at"`
+	Error    string            `json:"error,omitempty"`
+}
+
+// SensorInput is the add form's payload.
+type SensorInput struct {
+	Provider string            `json:"provider"`
+	Kind     string            `json:"kind"`
+	Name     string            `json:"name"`
+	Options  map[string]string `json:"options"`
 }
 
 type SettingsInput struct {
