@@ -356,9 +356,7 @@ export const TelemetryMapEditor = memo(
             >
               {overBudget
                 ? `Too big for one reply by ${bytes - map.maxBytes} bytes.`
-                : `Channel ${map.selfChannel} is this node's own battery and temperature${
-                    node.kind === "companion" ? ", and its position when that is allowed" : ""
-                  }. Put a sensor there to publish that instead; without one the battery is the board's, or 0 V if it has none.`}
+                : `Channel ${map.selfChannel} is this node's own battery and temperature. Put a sensor there to publish that instead; without one the battery is the board's, or 0 V if it has none.`}
             </p>
             {/* ml-auto keeps the buttons right whether or not the text beside them wraps. */}
             <div className="ml-auto flex shrink-0 gap-2">
