@@ -26,15 +26,16 @@ dispute), <https://api.meshcore.nz/api/v1/config> (regenerate
 |---|---|
 | Backend | Go 1.26+, **no CGO**, `modernc.org/sqlite`, `embed.FS` for the SPA |
 | Frontend | **React 19** (not Preact) + Vite 6 + TS 5.7, Tailwind v4, shadcn/ui (new-york), `react-router-dom@7`, `sonner`, Leaflet |
-| Mesh proto | `github.com/meshcore-go/meshcore-go` v1.4.0 (plus `hardware/transport` and `hardware/sx12xx` at the same tag), pinned in `go.mod`. **No `go.work`** — add one only for lockstep library work and delete it before pushing; `GOWORK=off go build ./...` is the check |
-| Real-time | WS `/api/ws`, topics `peers` `packets` `messages` `traces` `repeaterNeighbors` |
+| Mesh proto | `github.com/meshcore-go/meshcore-go` v1.5.0 (plus `hardware/transport` and `hardware/sx12xx` at the same tag), pinned in `go.mod`. **No `go.work`** — add one only for lockstep library work and delete it before pushing; `GOWORK=off go build ./...` is the check |
+| Real-time | WS `/api/ws`, topics `peers` `packets` `messages` `traces` `repeaterNeighbors` `discovered` `sensors` |
+| Local sensors | `periph.io/x/conn` + `periph.io/x/host` for I2C; `github.com/expr-lang/expr` for derived sensors |
 | Config | SQLite relational tables; config files are one-time imports |
 
 ## Build / run / test
 
 ```bash
 ./build.sh           # from the repo root; SPA then version-stamped Go binary, mirrors CI
-go test -race ./...  # what CI runs (12 packages)
+go test -race ./...  # what CI runs (23 packages)
 screen -S meshcore -X quit; sleep 12
 screen -dmS meshcore bash -c 'exec ./OwlShack -vvv 2>&1 | tee /tmp/OwlShack2.log'
 python3 -c "import sqlite3; c=sqlite3.connect('file:meshcore.db?mode=ro', uri=True); print(c.execute('PRAGMA user_version').fetchone())"
@@ -111,6 +112,7 @@ internal/
   echo/ modem/ monitor/ tx echoes; KISS setup + stats; type-agnostic node poller
   mqtt/ trigger/        observer + wire formatting + JWT; triggers
   telemetry/            CayenneLPP series decoding (sensor 0x04 history)
+  sensor/               local sensors: the hub, providers (I2C, PiSugar, derived), drivers, LPP replies
   api/                  HTTP+WS server, routes, hub; the Backend seam
   store/                SQLite persistence + backup/restore
 web/embed.go            go:embed of web/frontend/dist (must stay at root)
@@ -133,6 +135,7 @@ safe future cleanup.
 - `packets` — `{id?, receivedAt, direction, raw, payloadType, route, pathHashSize, hops, packetHash, summary, snr, rssi}`
 - `messages` — **flat, no `.message` wrapper**. Re-adding one silently drops every message (it was a real bug). Action variants: `{action:"repeatCount"...}`, `{action:"status"...}`.
 - `traces` — `{companion, tag, hops, path, hopSNRs, snr}`; `repeaterNeighbors` — `{pubkey, name, snr, secsAgo}`.
+- `discovered` — one discovery answer, `{pubkey, name, type, snr, reportedSnr, heard}`; `sensors` — every sensor's `api.SensorStatus`, pushed whole after each poll pass.
 
 The hub pings every 50 s with a 75 s read deadline. Clients may send
 `{"action":"ping"}` and get `{"topic":"pong"}` — `useWebSocket` uses it to spot
@@ -177,7 +180,7 @@ is the place to look.
 - Status/Neighbors auto-fetch is once per page mount; after a long absence, hit Refresh.
 - Repeater and room sessions are in-memory — a restart drops every login.
 - Settings-section CLI `get`s run sequentially on purpose (half-duplex radio), though the client *could* correlate concurrent commands.
-- Go tests cover 12 packages; radio-facing paths are still manual. No frontend tests.
+- Go tests cover 23 packages; radio-facing paths are still manual. No frontend tests.
 - `MESHCORE_APP_FEATURES.md` is referenced by the docs but does not exist in the repo.
 - MQTT publishes RX packets only, never TX — see [docs/mqtt-and-radio.md](./docs/mqtt-and-radio.md).
 

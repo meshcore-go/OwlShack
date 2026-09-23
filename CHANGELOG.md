@@ -5,6 +5,37 @@ top until tagged.
 
 ## Unreleased
 
+Schema `user_version` 17: adds the sensor tables and who may read each companion's telemetry.
+
+### Added
+
+- **Sensors on the host.** A new Sensors page finds I2C parts on the Pi's buses and reads them
+  every 30 seconds: SHTC3, LPS22HB, BME680, ENS210, and the inputs of an ADS1115 or SGM58031 ADC,
+  plus a PiSugar UPS through pisugar-server. An expression sensor works a value out from others,
+  such as a dew point, or an ADC divider in volts. A part that is found but has no driver is still
+  listed, and a bus that could not be scanned says so, so an empty list means an empty bus.
+- **An air-quality index from the BME680.** Once the sensor has run in (20 minutes, and again after
+  every restart) it reports an index, a static index, CO2 and breath VOC equivalents and how far it
+  has calibrated. It learns your air over days, and keeps what it learned across restarts.
+- **Publishing sensors over the mesh.** The repeater's new Telemetry tab, and each companion's
+  Telemetry page, choose which readings go out on which channel when another node asks, using the
+  same LPP types firmware nodes use. Channel 1 can carry a PiSugar or an ADC divider as the node's
+  own battery.
+- **Who may read a companion's telemetry.** Battery and device, position, and sensor readings each
+  have their own setting, as on a firmware companion: no one, chosen contacts, or every contact.
+  All three start at no one, so a companion answers nothing until you allow it.
+
+### Changed
+
+- **The repeater follows the firmware's telemetry rules.** Its battery and temperature always go
+  out, and a guest login gets those and nothing more.
+
+### Fixed
+
+- **Saving one contact setting could clear another.** Marking a contact as a repeater, or saving
+  its login, could wipe a saved password or its monitoring settings. Each save now changes only
+  what it names.
+
 ## v1.4.2 - 2026-09-21
 
 Baseline `v1.4.1`, schema `user_version` 16, unchanged.

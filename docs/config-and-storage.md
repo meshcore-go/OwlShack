@@ -30,6 +30,20 @@ sessions intact, no re-advert; log-level changes apply with zero restarts. A
 radio/connection change still restarts everything (modem reconnect);
 `listenAddr` needs a process restart.
 
+- **Local sensors are not config.** `sensors` (provider, kind, name, options
+  JSON, bindings JSON), `sensor_state` (one row per sensor: what a part like the
+  BME680 has learned, replaced in place) and `telemetry_map` (per node:
+  `node_kind`, `node_id`, channel, LPP type, sensor and metric; unique on node,
+  channel and type) live outside `config.Config` and bypass `configMutate`.
+  Sensor and map writes go through `internal/app/sensors.go` and
+  `telemetry_map.go`, which hold `sensorWrites` from their checks to the hub
+  reload so racing requests cannot each pass the checks the other breaks.
+  `companions.telem_base/loc/env` hold who may read each telemetry class
+  (`deny`, `selected`, `contacts`), written only by
+  `PUT /api/config/companions/{id}/telemetry`, so every other companion edit
+  carries them through. The map keys on node kind and id with no foreign key
+  (a row may be the repeater's), so deleting a companion or the repeater deletes
+  its rows, and a pruned backup drops rows whose node is gone.
 - **Config is stored relationally** (the config tables: `settings`,
   `mqtt_settings`, `mqtt_brokers`, `companions`, `companion_channels`,
   `triggers`, `trigger_channels` — all with surrogate INTEGER ids so name /
@@ -302,6 +316,8 @@ A type-agnostic poller (`internal/monitor`) polls monitored contacts on a stagge
 
 ## REST endpoints (summary — see `internal/api/server.go` for the canonical list)
 
+Every JSON body is capped at 1 MiB (`readJSON`); backup uploads have their own, larger limit.
+
 ```
 GET  /api/peers
 DELETE /api/peers/{pubkey}
@@ -312,7 +328,7 @@ GET  /api/companions/{name}/contacts
 GET  /api/companions/{name}/contacts/{pubkey}                (single contact; 404 if absent)
 POST /api/companions/{name}/contacts                         { pubkey }   (also registers the peer with the running nodes)
 DELETE /api/companions/{name}/contacts/{pubkey}
-PATCH /api/companions/{name}/contacts/{pubkey}               { isRepeater?, repeaterPassword?, ... }
+PATCH /api/companions/{name}/contacts/{pubkey}               { isRepeater?, repeaterPassword?, telemPerms?, ... }   (merges: only named fields change; 404 if absent)
 
 GET|POST|DELETE /api/companions/{name}/channels[/{channel}]
 
@@ -360,6 +376,7 @@ GET  /api/config/mqtt/brokers
 POST /api/config/mqtt/brokers          PUT|DELETE /api/config/mqtt/brokers/{id}
 GET  /api/config/companions                                  (id, name, pubkey, privateKeySet, …)
 POST /api/config/companions            PUT|DELETE /api/config/companions/{id}
+PUT  /api/config/companions/{id}/telemetry                   { base, location, environment }   (each deny | selected | contacts)
 GET  /api/config/companions/{id}/channels
 GET  /api/health                                             (monitoring snapshot; see below)
 GET  /api/config/channels                                    (all channels; for trigger name resolution)
@@ -372,6 +389,14 @@ GET  /api/radio/status                                       (link counters; pac
 POST /api/radio/reset                                        (202; drops the modem and reconnects in the background)
 GET  /api/spi/boards                                         (the board registry; [] when the backend is not up yet)
 GET  /api/serial/ports                                       (host serial devices; `path` is the /dev/serial/by-id name where Linux has one, `device` the tty it resolves to, `stable` false when only the tty exists)
+
+GET  /api/sensors                                            (every sensor with its last readings; also the `sensors` WS topic)
+GET  /api/sensors/providers
+POST /api/sensors/discover                                   { provider? }   (candidates beside problems, such as a bus that would not open)
+GET  /api/sensors/kinds                                      (the parts catalogue)
+POST /api/sensors                      PUT|DELETE /api/sensors/{id}   (refused when it would strand a published channel or a derived sensor)
+GET  /api/sensors/telemetry-map                              (every node's map, the LPP catalogue and defaults, the 134-byte budget)
+PUT  /api/sensors/telemetry-map                              { node, entries }   (entries required; [] clears the node's map)
 
 POST /api/backup                                             (options JSON -> .db file download)
 POST /api/backup/estimate                                    (same body; row counts, no file built)
