@@ -3,6 +3,7 @@ package sensor
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"strings"
 	"time"
@@ -29,11 +30,6 @@ type Provider interface {
 // Sensor is one opened source of readings.
 type Sensor interface {
 	Read(ctx context.Context) ([]Reading, error)
-}
-
-// Closer is implemented by sensors holding a file handle or bus lock.
-type Closer interface {
-	Close() error
 }
 
 // Validator adds rules a field declaration cannot express; it must not touch hardware.
@@ -89,7 +85,7 @@ type KindInfo struct {
 	Provider string
 	// Description says what the part measures, in the operator's words.
 	Description string
-	// Category groups the catalogue, such as "Environment" or "System".
+	// Category groups the catalogue, such as "Environment" or "Power".
 	Category string
 	// Metrics is what the part reports, so the catalogue can be searched by need rather than part number.
 	Metrics []Metric
@@ -218,19 +214,19 @@ type ProviderInfo struct {
 // Validate rejects a spec that names nothing openable; a sensor with no provider would be stored and never read.
 func (s Spec) Validate() error {
 	if s.Provider == "" {
-		return fmt.Errorf("provider is required")
+		return errors.New("provider is required")
 	}
 	if s.Kind == "" {
-		return fmt.Errorf("kind is required")
+		return errors.New("kind is required")
 	}
 	if s.Name == "" {
-		return fmt.Errorf("name is required")
+		return errors.New("name is required")
 	}
 	if n := utf8.RuneCountInString(s.Name); n > maxNameLen {
 		return fmt.Errorf("name is %d characters, and %d is the most", n, maxNameLen)
 	}
 	if hasControl(s.Name, false) {
-		return fmt.Errorf("name has a control character in it")
+		return errors.New("name has a control character in it")
 	}
 	return nil
 }

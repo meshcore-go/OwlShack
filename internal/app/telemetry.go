@@ -44,7 +44,7 @@ func (p *telemetryPublisher) Load(ctx context.Context, db *store.Store) error {
 func (p *telemetryPublisher) Entries(node store.TelemetryNode) []sensor.ChannelEntry {
 	p.mu.RLock()
 	defer p.mu.RUnlock()
-	return append([]sensor.ChannelEntry(nil), p.byNode[node]...)
+	return slices.Clone(p.byNode[node])
 }
 
 func (p *telemetryPublisher) All() map[store.TelemetryNode][]sensor.ChannelEntry {
@@ -52,7 +52,7 @@ func (p *telemetryPublisher) All() map[store.TelemetryNode][]sensor.ChannelEntry
 	defer p.mu.RUnlock()
 	out := make(map[store.TelemetryNode][]sensor.ChannelEntry, len(p.byNode))
 	for node, entries := range p.byNode {
-		out[node] = append([]sensor.ChannelEntry(nil), entries...)
+		out[node] = slices.Clone(entries)
 	}
 	return out
 }

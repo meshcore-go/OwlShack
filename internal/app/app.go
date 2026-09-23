@@ -227,6 +227,14 @@ func Run(ctx context.Context, importPath string, verbosity int) error {
 		return nil
 	}
 
+	// installBackend hands the server a backend over whatever radio generation is running now.
+	installBackend := func() {
+		srv.SetBackend(&backend{
+			companions: companions, repeater: rep, db: db, stats: statsOf(ms), mux: mux,
+			reload: reload, resetModem: resetModem, discover: disc, sensors: sensorHub, telemetry: telemetry,
+		})
+	}
+
 	// stopRadio tears the stack down and leaves the vars nil, which is the state startRadio recovers from.
 	stopRadio := func() {
 		stopCompanions(companions)
@@ -257,7 +265,7 @@ func Run(ctx context.Context, importPath string, verbosity int) error {
 			"error", err, "addr", listenAddr)
 		radioUp(err)
 	}
-	srv.SetBackend(newBackend(companions, rep, db, statsOf(ms), mux, reload, resetModem, disc, sensorHub, telemetry))
+	installBackend()
 
 	for {
 		select {
@@ -320,7 +328,7 @@ func Run(ctx context.Context, importPath string, verbosity int) error {
 			cfg = newCfg
 			compReg.set(companions)
 			disc = newDiscovery()
-			srv.SetBackend(newBackend(companions, rep, db, statsOf(ms), mux, reload, resetModem, disc, sensorHub, telemetry))
+			installBackend()
 			slog.Info("config reloaded", "started", stats.started, "stopped", stats.stopped, "kept", stats.kept, "reloaded", stats.reloaded)
 
 		// One arm for both: the dead-radio watcher (and the UI's reset button) signal reconnectCh, and
@@ -337,14 +345,14 @@ func Run(ctx context.Context, importPath string, verbosity int) error {
 			} else {
 				radioUp(err)
 			}
-			srv.SetBackend(newBackend(companions, rep, db, statsOf(ms), mux, reload, resetModem, disc, sensorHub, telemetry))
+			installBackend()
 
 		case <-retryTimer:
 			retryTimer = nil
 			if err := startRadio(cfg); err == nil {
 				slog.Info("modem connected")
 				radioUp(nil)
-				srv.SetBackend(newBackend(companions, rep, db, statsOf(ms), mux, reload, resetModem, disc, sensorHub, telemetry))
+				installBackend()
 			} else {
 				radioUp(err)
 			}

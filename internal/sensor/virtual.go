@@ -2,6 +2,7 @@ package sensor
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"math"
 	"regexp"
@@ -74,7 +75,7 @@ func (p *VirtualProvider) Validate(spec Spec) error {
 		return fmt.Errorf("unknown derived sensor kind %q", spec.Kind)
 	}
 	if len(spec.Bindings) == 0 {
-		return fmt.Errorf("a derived sensor has to read at least one other sensor")
+		return errors.New("a derived sensor has to read at least one other sensor")
 	}
 	seen := map[string]bool{}
 	for _, b := range spec.Bindings {
@@ -93,10 +94,10 @@ func (p *VirtualProvider) Validate(spec Spec) error {
 		}
 	}
 	if strings.TrimSpace(spec.Options[optMetric]) == "" {
-		return fmt.Errorf("say what the result measures")
+		return errors.New("say what the result measures")
 	}
 	if strings.TrimSpace(spec.Options[optUnit]) == "" {
-		return fmt.Errorf("say what unit the result is in")
+		return errors.New("say what unit the result is in")
 	}
 	_, err := compileExpression(spec)
 	return err
@@ -128,7 +129,7 @@ func compileExpression(spec Spec) (*vm.Program, error) {
 	}
 	src := strings.TrimSpace(spec.Options[optExpression])
 	if src == "" {
-		return nil, fmt.Errorf("the expression is empty")
+		return nil, errors.New("the expression is empty")
 	}
 	opts := append(mathFuncs(), expr.Env(env), expr.AsFloat64())
 	prog, err := expr.Compile(src, opts...)
@@ -140,7 +141,7 @@ func compileExpression(spec Spec) (*vm.Program, error) {
 
 func (p *VirtualProvider) Open(spec Spec) (Sensor, error) {
 	if p.snapshot == nil {
-		return nil, fmt.Errorf("the derived provider is not connected to the sensor hub")
+		return nil, errors.New("the derived provider is not connected to the sensor hub")
 	}
 	prog, err := compileExpression(spec)
 	if err != nil {

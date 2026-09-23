@@ -1,13 +1,14 @@
 package sensor
 
 import (
+	"cmp"
 	"context"
 	"fmt"
+	"io"
 	"log/slog"
 	"maps"
 	"math"
 	"slices"
-	"sort"
 	"strings"
 	"sync"
 	"time"
@@ -361,10 +362,10 @@ func (h *Hub) snapshotLocked() []Status {
 	out := make([]Status, 0, len(h.entries))
 	for _, e := range h.entries {
 		out = append(out, Status{
-			Spec: e.spec, Readings: append([]Reading(nil), e.readings...), At: e.at, Err: e.err,
+			Spec: e.spec, Readings: slices.Clone(e.readings), At: e.at, Err: e.err,
 		})
 	}
-	sort.Slice(out, func(i, j int) bool { return out[i].Spec.ID < out[j].Spec.ID })
+	slices.SortFunc(out, func(a, b Status) int { return cmp.Compare(a.Spec.ID, b.Spec.ID) })
 	return out
 }
 
@@ -485,8 +486,7 @@ func (h *Hub) fail(e *entry, msg string) {
 func (h *Hub) notify() {
 	h.mu.RLock()
 	snap := h.snapshotLocked()
-	listeners := make([]func([]Status), len(h.listeners))
-	copy(listeners, h.listeners)
+	listeners := slices.Clone(h.listeners)
 	h.mu.RUnlock()
 	for _, fn := range listeners {
 		fn(snap)
@@ -556,7 +556,7 @@ func orderByDependency(specs map[int64]Spec) ([]int64, error) {
 }
 
 func closeSensor(s Sensor) {
-	if c, ok := s.(Closer); ok {
+	if c, ok := s.(io.Closer); ok {
 		_ = c.Close()
 	}
 }
