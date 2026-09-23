@@ -88,48 +88,48 @@ func NewI2C(bus i2c.Bus, opts *Opts) (*ENS210, error) {
 }
 
 func (d *ENS210) init() error {
-	// Soft reset, then wait the boot time (tbooting, ~1.2ms typ).
-	if err := d.dev.Tx([]byte{regSysCtrl, 0x80}, nil); err != nil {
-		return fmt.Errorf("ens210: reset: %w", err)
-	}
-	time.Sleep(2 * time.Millisecond)
-
-	// Readable only when active, and contiguous at 0x00..0x0B, so one read returns all three.
-	if err := d.enterActive(); err != nil {
-		return err
-	}
+	// PART_ID, DIE_REV and UID are contiguous at 0x00..0x0B, so one read returns all three.
 	var id [12]byte
-	rerr := d.dev.Tx([]byte{regPartID}, id[:])
-	// Restore low power regardless of the read outcome.
-	if err := d.dev.Tx([]byte{regSysCtrl, 0x01}, nil); err != nil && rerr == nil {
-		rerr = fmt.Errorf("ens210: restoring low power: %w", err)
+	if err := d.identify(id[:]); err != nil {
+		return fmt.Errorf("ens210: reading identity: %w", err)
 	}
-	if rerr != nil {
-		return fmt.Errorf("ens210: reading identity: %w", rerr)
-	}
-
 	d.partID = binary.LittleEndian.Uint16(id[0:2])
 	d.dieRev = binary.LittleEndian.Uint16(id[2:4])
 	d.uid = binary.LittleEndian.Uint64(id[4:12])
 	if d.partID != partIDValue {
 		return fmt.Errorf("ens210: unexpected PART_ID %#04x (want %#04x); wrong device or bus?", d.partID, partIDValue)
 	}
+
+	// Soft reset, then wait the boot time (tbooting, ~1.2ms typ); it leaves low power on.
+	if err := d.dev.Tx([]byte{regSysCtrl, 0x80}, nil); err != nil {
+		return fmt.Errorf("ens210: reset: %w", err)
+	}
+	time.Sleep(2 * time.Millisecond)
 	return nil
+}
+
+// identify reads the identity block, readable only when active, and puts SYS_CTRL back as it found it, so a part that is not an ENS210 is left as it was.
+func (d *ENS210) identify(id []byte) error {
+	var ctrl [1]byte
+	if err := d.dev.Tx([]byte{regSysCtrl}, ctrl[:]); err != nil {
+		return fmt.Errorf("reading SYS_CTRL: %w", err)
+	}
+	err := d.enterActive()
+	if err == nil {
+		err = d.dev.Tx([]byte{regPartID}, id)
+	}
+	if rerr := d.dev.Tx([]byte{regSysCtrl, ctrl[0]}, nil); rerr != nil && err == nil {
+		err = fmt.Errorf("restoring SYS_CTRL: %w", rerr)
+	}
+	return err
 }
 
 // Probe is the one probe that writes: PART_ID reads only while active, so it activates, reads, and restores low power.
 func Probe(bus i2c.Bus, addr uint16) error {
 	d := &ENS210{dev: i2c.Dev{Bus: bus, Addr: addr}}
-	if err := d.enterActive(); err != nil {
-		return err
-	}
 	var id [2]byte
-	rerr := d.dev.Tx([]byte{regPartID}, id[:])
-	if err := d.dev.Tx([]byte{regSysCtrl, 0x01}, nil); err != nil && rerr == nil {
-		rerr = fmt.Errorf("ens210: restoring low power: %w", err)
-	}
-	if rerr != nil {
-		return fmt.Errorf("ens210: reading identity at %#02x: %w", addr, rerr)
+	if err := d.identify(id[:]); err != nil {
+		return fmt.Errorf("ens210: reading identity at %#02x: %w", addr, err)
 	}
 	if got := binary.LittleEndian.Uint16(id[:]); got != partIDValue {
 		return fmt.Errorf("ens210: PART_ID %#04x at %#02x is not an ENS210", got, addr)
@@ -137,27 +137,22 @@ func Probe(bus i2c.Bus, addr uint16) error {
 	return nil
 }
 
-// enterActive restores low power on its own failure, or the part is left drawing active current for nothing.
-func (d *ENS210) enterActive() (err error) {
+// enterActive clears LOW_POWER and waits for the part to say it is active; identify puts SYS_CTRL back.
+func (d *ENS210) enterActive() error {
 	if err := d.dev.Tx([]byte{regSysCtrl, 0x00}, nil); err != nil { // LOW_POWER = 0
-		return fmt.Errorf("ens210: disabling low power: %w", err)
+		return fmt.Errorf("disabling low power: %w", err)
 	}
-	defer func() {
-		if err != nil {
-			_ = d.dev.Tx([]byte{regSysCtrl, 0x01}, nil)
-		}
-	}()
 	for i := 0; i < 20; i++ {
 		var st [1]byte
 		if err := d.dev.Tx([]byte{regSysStat}, st[:]); err != nil {
-			return fmt.Errorf("ens210: reading status: %w", err)
+			return fmt.Errorf("reading status: %w", err)
 		}
 		if st[0]&0x01 != 0 {
 			return nil
 		}
 		time.Sleep(time.Millisecond)
 	}
-	return errors.New("ens210: device did not reach active state")
+	return errors.New("the part did not reach active state")
 }
 
 // PartID returns the part identifier (0x0210 for an ENS210).

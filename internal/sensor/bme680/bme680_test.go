@@ -27,11 +27,11 @@ var (
 	}
 )
 
-// openOps is the traffic a successful open expects (reset, identify, three trim blocks, profile); a zero heat means the heater is off.
+// openOps is the traffic a successful open expects (identify, reset, three trim blocks, profile); a zero heat means the heater is off.
 func openOps(addr uint16, id, variant byte, heat time.Duration) []i2ctest.IO {
 	ops := []i2ctest.IO{
-		{Addr: addr, W: []byte{regSoftReset, softResetCmd}},
 		{Addr: addr, W: []byte{regChipID}, R: []byte{id}},
+		{Addr: addr, W: []byte{regSoftReset, softResetCmd}},
 		{Addr: addr, W: []byte{regVariantID}, R: []byte{variant}},
 		{Addr: addr, W: []byte{regCoeff1}, R: realCoeff1},
 		{Addr: addr, W: []byte{regCoeff2}, R: realCoeff2},
@@ -97,11 +97,11 @@ func gasOpts() *Opts {
 	return &o
 }
 
+// The whole sequence is offered, so a driver skipping the check sails through, and one resetting first fails on the reset instead.
 func TestNewI2C_RejectsAPartThatIsNotABME680(t *testing.T) {
-	// The whole sequence is offered, so a driver skipping the check sails through rather than failing elsewhere.
 	bus := &i2ctest.Playback{Ops: openOps(DefaultAddress, 0x60, variantGasLow, 0), DontPanic: true}
-	if _, err := NewI2C(bus, noGasOpts()); err == nil {
-		t.Fatal("NewI2C accepted chip id 0x60; a BMP280 at the same address would be driven as a BME680")
+	if _, err := NewI2C(bus, noGasOpts()); err == nil || !strings.Contains(err.Error(), "chip id 0x60") {
+		t.Fatalf("NewI2C gave %v; want chip id 0x60 refused before anything is written to it", err)
 	}
 }
 

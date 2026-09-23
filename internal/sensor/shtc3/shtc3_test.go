@@ -20,15 +20,15 @@ func TestCRC8_DatasheetVector(t *testing.T) {
 	}
 }
 
-// openOps is the wire traffic a successful open expects: wake, reset, wake, read ID, sleep.
+// openOps is the wire traffic a successful open expects: wake and read the ID, then reset, wake and sleep the identified part.
 func openOps(id uint16) []i2ctest.IO {
 	idHi, idLo := byte(id>>8), byte(id)
 	return []i2ctest.IO{
 		{Addr: DefaultAddress, W: []byte{0x35, 0x17}},
-		{Addr: DefaultAddress, W: []byte{0x80, 0x5D}},
-		{Addr: DefaultAddress, W: []byte{0x35, 0x17}},
 		{Addr: DefaultAddress, W: []byte{0xEF, 0xC8}},
 		{Addr: DefaultAddress, R: []byte{idHi, idLo, crc8([]byte{idHi, idLo})}},
+		{Addr: DefaultAddress, W: []byte{0x80, 0x5D}},
+		{Addr: DefaultAddress, W: []byte{0x35, 0x17}},
 		{Addr: DefaultAddress, W: []byte{0xB0, 0x98}},
 	}
 }
@@ -48,17 +48,21 @@ func TestNewI2C_OpensAndReadsIdentity(t *testing.T) {
 	}
 }
 
-// 0x70 is also the PCA9548A multiplexer's default, so a wrong part here is a real possibility.
+// 0x70 is also the PCA9548A multiplexer's default, so a wrong part here is a real possibility, and it is sent nothing past the ID read.
 func TestNewI2C_RejectsWrongDevice(t *testing.T) {
 	bus := &i2ctest.Playback{Ops: openOps(0x1234), DontPanic: true}
-	if _, err := NewI2C(bus, nil); err == nil {
-		t.Fatal("NewI2C accepted a device whose ID register is not an SHTC3's")
+	if _, err := NewI2C(bus, nil); err == nil || !strings.Contains(err.Error(), "unexpected ID") {
+		t.Fatalf("NewI2C gave %v, want the ID refused", err)
+	}
+	// The whole open is offered, so a reset or sleep sent to the wrong part would take the next step.
+	if bus.Count != 3 {
+		t.Errorf("%d transactions reached the wrong part, want the wake and the ID read alone", bus.Count)
 	}
 }
 
 func TestNewI2C_RejectsCorruptIdentity(t *testing.T) {
 	ops := openOps(0x0807)
-	ops[4].R[2] ^= 0xFF // break the CRC over the ID word
+	ops[2].R[2] ^= 0xFF // break the CRC over the ID word
 	bus := &i2ctest.Playback{Ops: ops, DontPanic: true}
 	if _, err := NewI2C(bus, nil); err == nil {
 		t.Fatal("NewI2C accepted an ID word whose CRC does not match")

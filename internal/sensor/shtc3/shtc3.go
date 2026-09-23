@@ -95,48 +95,43 @@ func NewI2C(bus i2c.Bus, opts *Opts) (*SHTC3, error) {
 }
 
 func (d *SHTC3) init() (err error) {
-	// The part powers up asleep and answers nothing until woken, the reset included.
-	if werr := d.wake(); werr != nil {
-		return werr
+	id, err := d.identify()
+	if err != nil {
+		return err
 	}
+	d.id = id
 	defer d.sleepAfter(&err)
 
 	if cerr := d.command(cmdSoftReset); cerr != nil {
 		return fmt.Errorf("shtc3: reset: %w", cerr)
 	}
 	time.Sleep(resetDelay)
+	// A reset leaves the device asleep again, and the deferred sleep wants it awake.
+	return d.wake()
+}
 
-	// A reset leaves the device asleep again.
-	if werr := d.wake(); werr != nil {
-		return werr
+// identify wakes the part, which answers nothing asleep, and reads its ID; a part that is not an SHTC3 is sent nothing more.
+func (d *SHTC3) identify() (uint16, error) {
+	if err := d.wake(); err != nil {
+		return 0, err
 	}
-	id, rerr := d.readWord(cmdReadIDRegister)
-	if rerr != nil {
-		return fmt.Errorf("shtc3: reading identity: %w", rerr)
+	id, err := d.readWord(cmdReadIDRegister)
+	if err != nil {
+		return 0, fmt.Errorf("shtc3: reading identity: %w", err)
 	}
-
-	d.id = id
 	if id&idMask != idValue {
-		return fmt.Errorf("shtc3: unexpected ID %#04x (want %#04x in bits %#04x); wrong device or bus?", id, idValue, idMask)
+		return id, fmt.Errorf("shtc3: unexpected ID %#04x (want %#04x in bits %#04x); wrong device or bus?", id, idValue, idMask)
 	}
-	return nil
+	return id, nil
 }
 
 // Probe finds an SHTC3 at addr, waking it and sleeping it again so a scan leaves it as it found it.
 func Probe(bus i2c.Bus, addr uint16) (err error) {
 	d := &SHTC3{dev: i2c.Dev{Bus: bus, Addr: addr}}
-	if werr := d.wake(); werr != nil {
-		return werr
+	if _, err := d.identify(); err != nil {
+		return fmt.Errorf("at %#02x: %w", addr, err)
 	}
-	defer d.sleepAfter(&err)
-	id, rerr := d.readWord(cmdReadIDRegister)
-	if rerr != nil {
-		err = fmt.Errorf("shtc3: reading identity at %#02x: %w", addr, rerr)
-		return err
-	}
-	if id&idMask != idValue {
-		err = fmt.Errorf("shtc3: id %#04x at %#02x is not an SHTC3", id, addr)
-	}
+	d.sleepAfter(&err)
 	return err
 }
 

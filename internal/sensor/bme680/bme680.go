@@ -348,11 +348,7 @@ func NewI2C(bus i2c.Bus, opts *Opts) (*BME680, error) {
 }
 
 func (d *BME680) init() error {
-	if err := d.write(regSoftReset, softResetCmd); err != nil {
-		return fmt.Errorf("bme680: soft reset: %w", err)
-	}
-	time.Sleep(resetDelay)
-
+	// The chip id first: resetting whatever else answers here would be a write to someone else's part.
 	var b [1]byte
 	if err := d.read(regChipID, b[:]); err != nil {
 		return fmt.Errorf("bme680: reading the chip id: %w", err)
@@ -360,6 +356,11 @@ func (d *BME680) init() error {
 	if b[0] != chipID {
 		return fmt.Errorf("bme680: chip id %#02x is not a BME680 or BME688, want %#02x", b[0], chipID)
 	}
+	if err := d.write(regSoftReset, softResetCmd); err != nil {
+		return fmt.Errorf("bme680: soft reset: %w", err)
+	}
+	time.Sleep(resetDelay)
+
 	if err := d.read(regVariantID, b[:]); err != nil {
 		return fmt.Errorf("bme680: reading the variant id: %w", err)
 	}

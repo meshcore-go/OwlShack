@@ -67,17 +67,22 @@ func TestDecode_CatchesASingleFlippedBit(t *testing.T) {
 	}
 }
 
-// openOps is what NewI2C says to a part answering partID: reset, wake, read the identity block, sleep.
-func openOps(partID uint16) []i2ctest.IO {
+// identifyOps is what an open says before it knows the part: read SYS_CTRL, wake, read the identity block, put SYS_CTRL back.
+func identifyOps(partID uint16, ctrl byte) []i2ctest.IO {
 	id := make([]byte, 12)
 	id[0], id[1] = byte(partID), byte(partID>>8)
 	return []i2ctest.IO{
-		{Addr: DefaultAddress, W: []byte{0x10, 0x80}},
+		{Addr: DefaultAddress, W: []byte{0x10}, R: []byte{ctrl}},
 		{Addr: DefaultAddress, W: []byte{0x10, 0x00}},
 		{Addr: DefaultAddress, W: []byte{0x11}, R: []byte{0x01}},
 		{Addr: DefaultAddress, W: []byte{0x00}, R: id},
-		{Addr: DefaultAddress, W: []byte{0x10, 0x01}},
+		{Addr: DefaultAddress, W: []byte{0x10, ctrl}},
 	}
+}
+
+// openOps is what NewI2C says to a part answering partID: identify it, then reset it.
+func openOps(partID uint16) []i2ctest.IO {
+	return append(identifyOps(partID, 0x01), i2ctest.IO{Addr: DefaultAddress, W: []byte{0x10, 0x80}})
 }
 
 // senseOps is a single-shot measurement that answers with these value fields.
@@ -94,9 +99,14 @@ func senseOps(fields ...[]byte) []i2ctest.IO {
 
 // Anything else at 0x43 would be driven as an ENS210 and read garbage that looks like weather.
 func TestNewI2C_RefusesAPartThatIsNotAnENS210(t *testing.T) {
-	bus := &i2ctest.Playback{Ops: openOps(0x0211), DontPanic: true}
+	// 0x5a is no ENS210's SYS_CTRL, so the write putting it back proves the part was left as found.
+	ops := append(identifyOps(0x0211, 0x5A), i2ctest.IO{Addr: DefaultAddress, W: []byte{0x10, 0x80}})
+	bus := &i2ctest.Playback{Ops: ops, DontPanic: true}
 	if _, err := NewI2C(bus, nil); err == nil || !strings.Contains(err.Error(), "PART_ID") {
 		t.Fatalf("NewI2C gave %v, want the wrong part refused", err)
+	}
+	if bus.Count != len(ops)-1 {
+		t.Errorf("%d of %d transactions reached the wrong part, want SYS_CTRL put back and no reset", bus.Count, len(ops))
 	}
 	// Provokes the negative: the real ID opens.
 	if _, err := NewI2C(&i2ctest.Playback{Ops: openOps(0x0210), DontPanic: true}, nil); err != nil {
