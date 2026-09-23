@@ -21,10 +21,7 @@ export function CompanionTelemetryPage() {
           to={`/companions/${encodeURIComponent(companion)}`}
           label={name || "companion"}
         />
-        <PageHeader
-          eyebrow="Sent over the mesh"
-          title="Telemetry"
-        />
+        <PageHeader eyebrow="Sent over the mesh" title="Telemetry" className="mb-0" />
       </div>
 
       {id == null ? (

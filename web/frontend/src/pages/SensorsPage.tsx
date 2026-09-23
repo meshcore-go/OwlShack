@@ -21,7 +21,7 @@ export function SensorsPage() {
     error,
     reload,
     refresh,
-    setItems,
+    replace,
   } = useApiList<Sensor>("/api/sensors", "Failed to load sensors");
   // The catalogue is fixed for the process, so it is loaded once here and the dialog reads it.
   const {
@@ -42,9 +42,9 @@ export function SensorsPage() {
     ["sensors"],
     useCallback(
       (topic: string, data: unknown) => {
-        if (topic === "sensors") setItems((data as Sensor[]) || []);
+        if (topic === "sensors") replace((data as Sensor[]) || []);
       },
-      [setItems],
+      [replace],
     ),
   );
 
@@ -199,7 +199,7 @@ function SensorPanel({
   }, [sensor.bindings, sensor.options, all, kind]);
 
   return (
-    <article className="panel">
+    <article className="panel overflow-hidden">
       <div className="flex items-center gap-3 px-4 py-3">
         <div className="min-w-0 flex-1">
           <h3 title={sensor.name} className="font-mono text-sm font-medium tracking-[0.06em] truncate">
@@ -247,14 +247,14 @@ function SensorPanel({
       ) : null}
 
       {sensor.readings.length > 0 ? (
-        // A tile is never narrower than its value, so a long one wraps the row instead of running under the next.
-        <div className="flex flex-wrap gap-px border-t border-border bg-border">
+        // A tile is never narrower than its value; the outer edges' rules tuck under the card's border.
+        <div className="-mr-px -mb-px flex flex-wrap border-t border-border">
           {sensor.readings.map((r, i) => {
             const shown = displayReading(r);
             return (
               <div
                 key={`${r.metric}-${r.label ?? i}`}
-                className="bg-card grow basis-36 max-w-full px-4 py-4"
+                className="grow basis-36 max-w-full border-r border-b border-border px-4 py-4"
               >
                 <span className="label-overline block">{r.label || r.metric}</span>
                 <div className="mt-2 flex items-baseline gap-1.5">
@@ -275,6 +275,7 @@ function SensorPanel({
               </div>
             );
           })}
+          {FILLERS}
         </div>
       ) : null}
 
@@ -294,6 +295,9 @@ function SensorPanel({
     </article>
   );
 }
+
+// Blank tiles for the last row to share, so it keeps the widths above it; ponytail: 11 cover twelve columns (1920px), count columns if wider screens matter.
+const FILLERS = Array.from({ length: 11 }, (_, i) => <div key={i} className="grow basis-36" />);
 
 // The poll is 30 s (app.sensorPollInterval); a reading three polls old is one the mesh has stopped sending.
 const STALE_SECS = 90;
