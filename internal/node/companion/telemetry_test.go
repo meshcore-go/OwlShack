@@ -348,6 +348,99 @@ func TestHandleReq_AnswersAContactAndNotAStranger(t *testing.T) {
 	}
 }
 
+// hashSizeCompanion is a companion on a recording radio with one contact, friend, and a two-byte path hash size.
+func hashSizeCompanion(t *testing.T) (*Companion, *recordingRadio, meshcore.LocalIdentity, meshcore.LocalIdentity) {
+	t.Helper()
+	ctx := t.Context()
+	st, err := store.Open(ctx, filepath.Join(t.TempDir(), "companion.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { st.Close() })
+	self := meshcore.NewLocalIdentityFromSeed([32]byte{1})
+	friend := meshcore.NewLocalIdentityFromSeed([32]byte{2})
+	comp := store.Companion{Name: "home"}
+	st.WriteSync(func() {
+		if err = st.Companions.Create(ctx, &comp); err == nil {
+			err = st.Contacts.Add(ctx, comp.ID, friend.PublicKeyBytes(), "friend", "CHAT")
+		}
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	radio := &recordingRadio{}
+	n := node.New(self, radio)
+	t.Cleanup(n.Stop)
+	two := 2
+	c := telemetryCompanion(t, config.CompanionConfig{
+		ID: comp.ID, PathHashSize: &two,
+		TelemetryBase: mode(config.TelemetryContacts),
+	}, nil)
+	c.node, c.store, c.runCtx = n, st, ctx
+	return c, radio, self, friend
+}
+
+// floodHashSize is the hash size of the one flood the radio sent, failing if it sent anything else.
+func floodHashSize(t *testing.T, radio *recordingRadio) int {
+	t.Helper()
+	sent := radio.take()
+	if len(sent) != 1 {
+		t.Fatalf("%d packets sent, want one", len(sent))
+	}
+	pkt, err := meshcore.PacketFromBytes(sent[0])
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !pkt.IsRouteFlood() {
+		t.Fatal("the packet went direct, so this proves nothing about a flood")
+	}
+	return int(pkt.PathHashSize())
+}
+
+// Both of a reply's floods take the companion's own hash size, as the firmware's sendFloodScoped does, or relays past a one-byte hop leave it short.
+func TestHandleReq_FloodsAtTheCompanionsHashSize(t *testing.T) {
+	c, radio, self, friend := hashSizeCompanion(t)
+	secret, _ := friend.SharedSecret(self.Identity)
+	enc, err := meshcore.EncryptThenMAC(secret, []byte{7, 0, 0, 0, reqTypeGetTelemetryData, 0})
+	if err != nil {
+		t.Fatal(err)
+	}
+	payload, _ := (&meshcore.Request{
+		Destination: self.PublicKey()[0], Source: friend.PublicKey()[0], MAC: [2]byte{enc[0], enc[1]}, EncryptedPayload: enc[2:],
+	}).ToBytes()
+
+	for name, req := range map[string]*meshcore.Packet{
+		// No route to the contact yet, so the datagram floods.
+		"direct": {Header: meshcore.MakeHeader(meshcore.RouteTypeDirect, meshcore.PayloadTypeReq, 0), Payload: payload},
+		// Answered with a path return, which floods too.
+		"flooded": {Header: meshcore.MakeHeader(meshcore.RouteTypeFlood, meshcore.PayloadTypeReq, 0), PathLength: 1<<6 | 1, Path: []byte{0xAA, 0xBB}, Payload: payload},
+	} {
+		c.handleReq(req)
+		if hs := floodHashSize(t, radio); hs != 2 {
+			t.Errorf("%s request: the reply flooded with %d-byte hashes, want the companion's 2", name, hs)
+		}
+	}
+}
+
+// A DM's ACK floods the same way when there is no route back, and rides a path return when the DM was flooded.
+func TestSendDMAck_FloodsAtTheCompanionsHashSize(t *testing.T) {
+	c, radio, self, friend := hashSizeCompanion(t)
+	secret, _ := friend.SharedSecret(self.Identity)
+	ack := []byte{1, 2, 3, 4, 0, 9}
+	for name, dm := range map[string]*meshcore.Packet{
+		"direct":  {Header: meshcore.MakeHeader(meshcore.RouteTypeDirect, meshcore.PayloadTypeTxtMsg, 0)},
+		"flooded": {Header: meshcore.MakeHeader(meshcore.RouteTypeFlood, meshcore.PayloadTypeTxtMsg, 0), PathLength: 1},
+	} {
+		if dm.PathLength == 1 {
+			dm.Path = []byte{0xAA}
+		}
+		c.sendDMAck(dm, friend.PublicKeyBytes(), secret, ack)
+		if hs := floodHashSize(t, radio); hs != 2 {
+			t.Errorf("%s DM: the ACK flooded with %d-byte hashes, want the companion's 2", name, hs)
+		}
+	}
+}
+
 // A grant opens only the classes set to "selected", or granting both lets a contact read a class the operator denied.
 func TestTelemetry_AGrantCannotOpenADeniedClass(t *testing.T) {
 	lat, lon := -41.2865, 174.7762

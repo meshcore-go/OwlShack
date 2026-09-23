@@ -34,6 +34,9 @@ Schema `user_version` 17: adds the sensor tables and who may read each companion
 
 ### Fixed
 
+- **A companion's ACKs now flood with its own path hash size.** One set to two- or three-byte
+  hashes flooded its DM ACKs, and its replies to a node with no route back, with one-byte hashes;
+  they now go out with the companion's setting, as a firmware companion's do.
 - **Saving one contact setting could clear another.** Marking a contact as a repeater, or saving
   its login, could wipe a saved password or its monitoring settings. Each save now changes only
   what it names.

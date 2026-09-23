@@ -165,8 +165,9 @@ func (c *Companion) sendReqReply(reqPkt *meshcore.Packet, peerPubKey, secret, pl
 	}
 
 	reply := &meshcore.Packet{
-		Header:  meshcore.MakeHeader(meshcore.RouteTypeFlood, meshcore.PayloadTypeResponse, 0),
-		Payload: payload,
+		Header:     meshcore.MakeHeader(meshcore.RouteTypeFlood, meshcore.PayloadTypeResponse, 0),
+		PathLength: (c.pathHashSize() - 1) << 6,
+		Payload:    payload,
 	}
 	if outPath, hs, ok := c.learnedRoute(peerPubKey); ok {
 		reply.Header = meshcore.MakeHeader(meshcore.RouteTypeDirect, meshcore.PayloadTypeResponse, 0)

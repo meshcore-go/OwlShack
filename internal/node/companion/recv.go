@@ -46,8 +46,9 @@ func (c *Companion) sendDMAck(pkt *meshcore.Packet, senderPubKey []byte, sharedS
 	} else {
 		// An empty but non-nil out_path is a direct neighbour: route it direct at 0 hops; only a nil path floods.
 		ackPkt := &meshcore.Packet{
-			Header:  meshcore.MakeHeader(meshcore.RouteTypeFlood, meshcore.PayloadTypeAck, 0),
-			Payload: ackPayload,
+			Header:     meshcore.MakeHeader(meshcore.RouteTypeFlood, meshcore.PayloadTypeAck, 0),
+			PathLength: (c.pathHashSize() - 1) << 6,
+			Payload:    ackPayload,
 		}
 
 		// The contact row is where a learned route is persisted; hydratePeerTables leaves the peer
@@ -66,7 +67,13 @@ func (c *Companion) sendDMAck(pkt *meshcore.Packet, senderPubKey []byte, sharedS
 
 // buildPathReturn is the shared builder bound to this companion's identity.
 func (c *Companion) buildPathReturn(destPubKey []byte, sharedSecret []byte, inPath []byte, pathLenByte byte, extraType byte, extraData []byte) (*meshcore.Packet, error) {
-	return meshpath.BuildReturn(c.node.Identity().PublicKey(), destPubKey, sharedSecret, inPath, pathLenByte, extraType, extraData)
+	pkt, err := meshpath.BuildReturn(c.node.Identity().PublicKey(), destPubKey, sharedSecret, inPath, pathLenByte, extraType, extraData)
+	if err != nil {
+		return nil, err
+	}
+	// Flooded at this companion's hash size, as the firmware's sendFloodScoped does.
+	pkt.PathLength = (c.pathHashSize() - 1) << 6
+	return pkt, nil
 }
 
 func (c *Companion) handleRoomPush(pkt *meshcore.Packet, roomPubKey []byte, roomPubKeyHex string, sharedSecret []byte, plaintext []byte) {
