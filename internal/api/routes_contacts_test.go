@@ -60,15 +60,44 @@ func TestContactMetadataPatch_KeepsWhatItDoesNotName(t *testing.T) {
 	}
 
 	// Naming a field with its empty value is how a caller clears it.
-	if code := patch(pub, `{"repeaterPassword":"","monitorProbes":null}`); code != http.StatusNoContent {
+	if code := patch(pub, `{"repeaterPassword":"","monitorProbes":[]}`); code != http.StatusNoContent {
 		t.Fatalf("PATCH = %d", code)
 	}
 	if got, want := stored(), (store.ContactMetadata{IsRepeater: true, TelemPerms: 5}); !reflect.DeepEqual(got, want) {
 		t.Fatalf("stored %+v, want %+v", got, want)
 	}
 
-	if code := patch(pub, `{"telemPerms":300}`); code != http.StatusBadRequest {
-		t.Errorf("an out-of-range grant got %d, want 400", code)
+	// Each of these would change nothing or store what nothing can use, so each is refused and the row left alone.
+	for _, body := range []string{
+		`["isRepeater"]`,
+		`{"monitorProbe":["status"]}`,
+		`{"repeaterPassword":null}`,
+		`{"monitorProbes":null}`,
+		`{"monitor":"yes"}`,
+		`{"telemPerms":300}`,
+		`{"telemPerms":8}`,
+		`{"monitorIntervalSecs":60}`,
+		`{"monitorIntervalSecs":-900}`,
+		`{"monitorRetrySecs":5000}`,
+		`{"monitorMaxRetries":11}`,
+		`{"monitorMaxRetries":-2}`,
+		`{"monitorProbes":["status","bogus"]}`,
+		`{"monitorProbes":["status","status"]}`,
+		`{"repeaterPassword":"0123456789abcdef"}`,
+		`{"roomPassword":"a\u0000b"}`,
+	} {
+		if code := patch(pub, body); code != http.StatusBadRequest {
+			t.Errorf("%s got %d, want 400", body, code)
+		}
+	}
+	if got, want := stored(), (store.ContactMetadata{IsRepeater: true, TelemPerms: 5}); !reflect.DeepEqual(got, want) {
+		t.Fatalf("a refused PATCH changed the row: stored %+v, want %+v", got, want)
+	}
+	// The edges of what the form offers still save, so the refusals above are about the values.
+	for _, body := range []string{`{}`, `{"monitorIntervalSecs":900}`, `{"monitorMaxRetries":-1}`, `{"repeaterPassword":"123456789012345"}`} {
+		if code := patch(pub, body); code != http.StatusNoContent {
+			t.Errorf("%s got %d, want 204", body, code)
+		}
 	}
 	if code := patch(bytes.Repeat([]byte{0xCD}, 32), `{"isRepeater":true}`); code != http.StatusNotFound {
 		t.Errorf("a contact that does not exist got %d, want 404", code)

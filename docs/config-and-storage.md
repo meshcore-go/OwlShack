@@ -328,7 +328,7 @@ GET  /api/companions/{name}/contacts
 GET  /api/companions/{name}/contacts/{pubkey}                (single contact; 404 if absent)
 POST /api/companions/{name}/contacts                         { pubkey }   (also registers the peer with the running nodes)
 DELETE /api/companions/{name}/contacts/{pubkey}
-PATCH /api/companions/{name}/contacts/{pubkey}               { isRepeater?, repeaterPassword?, telemPerms?, ... }   (merges: only named fields change; 404 if absent)
+PATCH /api/companions/{name}/contacts/{pubkey}               { isRepeater?, repeaterPassword?, telemPerms?, ... }   (merges: only named fields change; an unknown or null field, or a value the form does not offer, is a 400; 404 if absent)
 
 GET|POST|DELETE /api/companions/{name}/channels[/{channel}]
 

@@ -136,15 +136,15 @@ export function MonitoringSettings({
       monitorIntervalSecs: Number(intervalSecs),
       monitorRetrySecs: Number(retrySecs),
       monitorMaxRetries: Number(maxRetries),
-      monitorProbes: null,
+      monitorProbes: [],
     };
     // Never write isRepeater for a companion: a stray flag routes the node to the login-based repeater collector.
     if (kind === "repeater") {
       const enabledProbes = (Object.keys(probes) as ProbeKey[]).filter((k) => probes[k]);
       patch.isRepeater = base.isRepeater ?? true;
       patch.repeaterPassword = password;
-      // Null when all are on, so it stays the implicit "all" rather than a list.
-      patch.monitorProbes = enabledProbes.length === PROBES.length ? null : enabledProbes;
+      // Empty when all are on, so it stays the implicit "all" rather than a list.
+      patch.monitorProbes = enabledProbes.length === PROBES.length ? [] : enabledProbes;
     }
     try {
       const r = await fetch(
