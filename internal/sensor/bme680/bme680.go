@@ -2,7 +2,9 @@
 package bme680
 
 import (
+	"crypto/sha256"
 	"encoding/binary"
+	"encoding/hex"
 	"errors"
 	"fmt"
 	"math"
@@ -262,6 +264,8 @@ type BME680 struct {
 	opts    Opts
 	variant byte
 	calib   calib
+	// chip fingerprints the factory trim, which differs per part, so a learned state is only restored onto the part that learned it.
+	chip string
 
 	mu      sync.Mutex
 	gas     physic.ElectricResistance
@@ -427,6 +431,8 @@ func (d *BME680) readCalibration() error {
 	if d.calib.t1 == 0 && d.calib.t2 == 0 && d.calib.p1 == 0 {
 		return errors.New("bme680: calibration read back blank, so every reading would be wrong")
 	}
+	sum := sha256.Sum256(fmt.Appendf(nil, "%+v", d.calib))
+	d.chip = hex.EncodeToString(sum[:8])
 	return nil
 }
 
@@ -636,7 +642,7 @@ func (d *BME680) AirQualityState() ([]byte, error) {
 	if d.air == nil {
 		return nil, nil
 	}
-	return d.air.marshalState()
+	return d.air.marshalState(d.chip)
 }
 
 // RestoreAirQuality hands back an earlier run's calibration; a part with no fusion says so rather than succeed at nothing.
@@ -646,7 +652,7 @@ func (d *BME680) RestoreAirQuality(state []byte) error {
 	if d.air == nil {
 		return errors.New("bme680: no air-quality fusion is running, so there is nothing to restore into")
 	}
-	if err := d.air.restoreState(state); err != nil {
+	if err := d.air.restoreState(state, d.chip); err != nil {
 		return err
 	}
 	// Reopened, the part was reset and its plate reads off for minutes; BSEC's hosts run in again because their clock restarts.

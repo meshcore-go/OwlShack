@@ -2,6 +2,7 @@ package bme680
 
 import (
 	"math"
+	"strings"
 	"testing"
 	"time"
 )
@@ -444,25 +445,22 @@ func TestGap_DiscardsRunInAndNothingElse(t *testing.T) {
 	}
 }
 
-// An RTC-less Pi steps its wall clock when NTP syncs, and within a run that is no gap: the plate was heated on time throughout.
-func TestRunIn_SurvivesAWallClockStep(t *testing.T) {
+// An RTC-less Pi steps its wall clock when NTP syncs, which within a run is no gap, so samples are timed on the monotonic clock.
+func TestRunIn_TimesSamplesOnTheMonotonicClock(t *testing.T) {
 	t.Parallel()
-	for _, step := range []time.Duration{2 * time.Hour, -2 * time.Hour} {
-		tr := newTracker(pollPeriod)
-		// time.Now carries a monotonic reading, as the driver's stamp does.
-		out, at := run(tr, 50_000, runInSamples, time.Now())
-		if !out.RunIn {
-			t.Fatal("run-in did not complete, so this proves nothing")
-		}
-		// The stored stamp is wall time, so moving it back is the wall clock moving forward between two samples.
-		tr.st.LastGasUnixNano -= step.Nanoseconds()
-		if out := tr.observe(50_000, 25, 40, at); !out.RunIn {
-			t.Errorf("a %s wall-clock step restarted the run-in", step)
-		}
-		// Provokes the positive: a real gap on the monotonic clock still restarts it.
-		if out := tr.observe(50_000, 25, 40, at.Add(3*pollPeriod)); out.RunIn {
-			t.Errorf("a %s gap did not restart the run-in, so the step check proves nothing", 3*pollPeriod)
-		}
+	tr := newTracker(pollPeriod)
+	// time.Now carries a monotonic reading, as the driver's stamp does.
+	out, at := run(tr, 50_000, runInSamples, time.Now())
+	if !out.RunIn {
+		t.Fatal("run-in did not complete, so this proves nothing")
+	}
+	// Sub between two stamps that both hold one ignores the wall clock; String shows the reading as m=.
+	if !strings.Contains(tr.last.String(), " m=") {
+		t.Errorf("the last sample's stamp %v lost its monotonic reading, so a wall-clock step reads as a gap", tr.last)
+	}
+	// Provokes the positive: a real gap still restarts the run-in.
+	if out := tr.observe(50_000, 25, 40, at.Add(3*pollPeriod)); out.RunIn {
+		t.Errorf("a %s gap did not restart the run-in", 3*pollPeriod)
 	}
 }
 
@@ -483,14 +481,17 @@ func TestTrackerState_SurvivesARoundTrip(t *testing.T) {
 	_, at = run(tr, 30_000, 5, at)
 	_, at = run(tr, 41_000, 5, at)
 
-	blob, err := tr.marshalState()
+	blob, err := tr.marshalState("a part")
 	if err != nil {
 		t.Fatalf("State: %v", err)
 	}
 	restored := newTracker(pollPeriod)
-	if err := restored.restoreState(blob); err != nil {
+	if err := restored.restoreState(blob, "a part"); err != nil {
 		t.Fatalf("SetState: %v", err)
 	}
+	// A restore always runs in again, as the driver's does, and the stamp of the last sample stays with the run it was taken in.
+	tr.restartRunIn()
+	restored.restartRunIn()
 
 	want := tr.observe(42_000, 25, 40, at)
 	got := restored.observe(42_000, 25, 40, at)
@@ -505,22 +506,28 @@ func TestTrackerState_SurvivesARoundTrip(t *testing.T) {
 
 func TestRestoreState_RefusesWhatItCannotVouchFor(t *testing.T) {
 	t.Parallel()
+	// Each is this build's version and this part's unless it is the fault itself, so each is refused for its own reason.
 	for _, tc := range []struct{ name, blob string }{
 		{"not json", "{"},
-		{"another version", `{"version":99,"workingHorizon":[1800,1800]}`},
-		{"a blob missing its fields", `{"version":1}`},
-		{"a zero working horizon", `{"version":1,"workingHorizon":[1800,0]}`},
+		{"another version", `{"version":99,"workingHorizon":[1800,1800],"chip":"this"}`},
+		{"a blob missing its fields", `{"version":2,"chip":"this"}`},
+		{"a zero working horizon", `{"version":2,"workingHorizon":[1800,0],"chip":"this"}`},
+		{"another part's", `{"version":2,"workingHorizon":[1800,1800],"chip":"that"}`},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			tr := newTracker(pollPeriod)
 			before := tr.st
-			if err := tr.restoreState([]byte(tc.blob)); err == nil {
+			if err := tr.restoreState([]byte(tc.blob), "this"); err == nil {
 				t.Errorf("restoreState accepted %s", tc.name)
 			}
 			if tr.st != before {
 				t.Error("a refused state still reached the tracker")
 			}
 		})
+	}
+	// Provokes the positive: the same blob with nothing wrong is taken.
+	if err := newTracker(pollPeriod).restoreState([]byte(`{"version":2,"workingHorizon":[1800,1800],"chip":"this"}`), "this"); err != nil {
+		t.Errorf("a sound blob was refused: %v", err)
 	}
 }
 

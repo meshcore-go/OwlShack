@@ -1,6 +1,7 @@
 package bme680
 
 import (
+	"bytes"
 	"errors"
 	"math"
 	"reflect"
@@ -762,6 +763,23 @@ func TestAirQualityState_RoundTripsThroughTheDriver(t *testing.T) {
 		t.Error("a state from another build was accepted")
 	}
 
+	// Another part, told apart by its factory trim, starts over rather than take extremes it never saw.
+	ops := openOps(DefaultAddress, chipID, variantGasLow, fixedHeat)
+	for i, op := range ops {
+		if len(op.W) == 1 && op.W[0] == regCoeff1 {
+			trim := bytes.Clone(op.R)
+			trim[0]++
+			ops[i].R = trim
+		}
+	}
+	swapped, err := NewI2C(&i2ctest.Playback{Ops: ops, DontPanic: true}, airOpts())
+	if err != nil {
+		t.Fatalf("NewI2C: %v", err)
+	}
+	if err := swapped.RestoreAirQuality(saved); err == nil || !strings.Contains(err.Error(), "another part") {
+		t.Errorf("a part with another trim took the state with %v", err)
+	}
+
 	// A part with the heater off has nothing to restore into, and must not report success.
 	cold := open(t, noGasOpts(), 0)
 	if b, err := cold.AirQualityState(); b != nil || err != nil {
@@ -779,20 +797,20 @@ func TestRestoreAirQuality_RunsInAgainButKeepsWhatItLearned(t *testing.T) {
 	if !learned.st.RunIn {
 		t.Fatal("run-in never completed, so this proves nothing")
 	}
-	saved, err := learned.marshalState()
-	if err != nil {
-		t.Fatalf("marshalState: %v", err)
-	}
 	bus := &i2ctest.Playback{Ops: openOps(DefaultAddress, chipID, variantGasLow, fixedHeat), DontPanic: true}
 	d, err := NewI2C(bus, airOpts())
 	if err != nil {
 		t.Fatalf("NewI2C: %v", err)
 	}
+	saved, err := learned.marshalState(d.chip)
+	if err != nil {
+		t.Fatalf("marshalState: %v", err)
+	}
 	if err := d.RestoreAirQuality(saved); err != nil {
 		t.Fatalf("RestoreAirQuality: %v", err)
 	}
-	if st := d.air.st; st.RunIn || st.RunInAccumSec != 0 || st.LastGasUnixNano != 0 {
-		t.Errorf("restored with run-in %v, %v s accrued and a last sample at %d, want it starting over", st.RunIn, st.RunInAccumSec, st.LastGasUnixNano)
+	if st := d.air.st; st.RunIn || st.RunInAccumSec != 0 || !d.air.last.IsZero() {
+		t.Errorf("restored with run-in %v, %v s accrued and a last sample at %v, want it starting over", st.RunIn, st.RunInAccumSec, d.air.last)
 	}
 	if st := d.air.st; st.BandMax != learned.st.BandMax || st.MatureAccumSec != learned.st.MatureAccumSec {
 		t.Error("the restore dropped what the part had learned")
@@ -816,7 +834,7 @@ func TestSenseAirQuality_StampsTheSampleWhenTheMeasurementStarted(t *testing.T) 
 	}
 	after := time.Now()
 	// Sense is almost all heater wait, so a stamp taken at the trigger falls in its first half and one taken after the wait in its last.
-	stamp := time.Unix(0, d.air.st.LastGasUnixNano)
+	stamp := d.air.last
 	if stamp.Sub(before) >= after.Sub(stamp) {
 		t.Errorf("the sample is stamped %s into a %s Sense, want at the trigger", stamp.Sub(before), after.Sub(before))
 	}

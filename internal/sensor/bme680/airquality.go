@@ -182,13 +182,9 @@ func coefficient(cutoffHz, periodSec float64) float64 {
 // monitorRunIn is S5 (§11.3): three accumulators latching a flag each, and the soft-start ramp; dt is what this sample carries, zero across a gap.
 func (t *tracker) monitorRunIn(at time.Time) (stabilised, runIn, matured bool, softStart, dt float64) {
 	st := &t.st
-	last := t.last
-	if last.IsZero() && st.LastGasUnixNano != 0 {
-		last = time.Unix(0, st.LastGasUnixNano) // a restored state has only its wall stamp
-	}
-	elapsed := at.Sub(last).Seconds()
+	elapsed := at.Sub(t.last).Seconds()
 	switch {
-	case last.IsZero():
+	case t.last.IsZero():
 		elapsed = 0
 	case elapsed > t.maxGapSec || elapsed < 0:
 		st.RunInAccumSec, st.RunIn = 0, false
@@ -213,7 +209,7 @@ func (t *tracker) monitorRunIn(at time.Time) (stabilised, runIn, matured bool, s
 			st.RunIn = true
 		}
 	}
-	t.last, st.LastGasUnixNano = at, at.UnixNano()
+	t.last = at
 
 	softStart = 1.0
 	if !st.RunIn && t.runInSec > 0 {
@@ -224,7 +220,7 @@ func (t *tracker) monitorRunIn(at time.Time) (stabilised, runIn, matured bool, s
 
 // restartRunIn is §11.3's reset for a timestamp that went backwards: run-in starts over and the next sample accrues nothing.
 func (t *tracker) restartRunIn() {
-	t.st.RunIn, t.st.RunInAccumSec, t.st.LastGasUnixNano, t.last = false, 0, 0, time.Time{}
+	t.st.RunIn, t.st.RunInAccumSec, t.last = false, 0, time.Time{}
 }
 
 // condition is S3 (§11.2): the gas goes to log10 and all three signals are low-passed.
@@ -465,14 +461,13 @@ func (t *tracker) mapIndex(compensated float64, bd bands, softStart float64, run
 func clamp(v, lo, hi float64) float64 { return math.Min(hi, math.Max(lo, v)) }
 
 // stateVersion guards the stored shape: another version's blob is refused, not half-read, since a partly filled band pins the index without looking wrong.
-const stateVersion = 1
+const stateVersion = 2
 
 // trackerState is what a restart carries (§10.8): extremes, accuracy and its counters, warm-up accumulators, smoothed signals; rate constants are rebuilt.
 type trackerState struct {
 	Version  int        `json:"version"`
 	Smoothed [3]float64 `json:"smoothed"`
 
-	LastGasUnixNano   int64   `json:"lastGas"`
 	StabiliseAccumSec float64 `json:"stabiliseAccum"`
 	RunInAccumSec     float64 `json:"runInAccum"`
 	MatureAccumSec    float64 `json:"matureAccum"`
@@ -503,9 +498,15 @@ func newTrackerState() trackerState {
 	}
 }
 
+// savedState is a tracker's state with the part it was learned on, kept outside trackerState so a reset cannot clear it.
+type savedState struct {
+	trackerState
+	Chip string `json:"chip"`
+}
+
 // marshalState is the learned calibration for the host to keep; without it a restart relearns the clean and polluted extremes, which takes hours.
-func (t *tracker) marshalState() ([]byte, error) {
-	b, err := json.Marshal(t.st)
+func (t *tracker) marshalState(chip string) ([]byte, error) {
+	b, err := json.Marshal(savedState{t.st, chip})
 	if err != nil {
 		return nil, fmt.Errorf("bme680: encoding air-quality state: %w", err)
 	}
@@ -513,8 +514,8 @@ func (t *tracker) marshalState() ([]byte, error) {
 }
 
 // restoreState refuses a blob it cannot vouch for, leaving the pipeline relearning rather than trusting a number that would never look wrong again.
-func (t *tracker) restoreState(b []byte) error {
-	var s trackerState
+func (t *tracker) restoreState(b []byte, chip string) error {
+	var s savedState
 	if err := json.Unmarshal(b, &s); err != nil {
 		return fmt.Errorf("bme680: decoding air-quality state: %w", err)
 	}
@@ -527,6 +528,10 @@ func (t *tracker) restoreState(b []byte) error {
 			return fmt.Errorf("bme680: air-quality state holds a working horizon of %v seconds", h)
 		}
 	}
-	t.st = s
+	// Another part's extremes are not this one's, and applied here they read as air that never changes.
+	if s.Chip != chip {
+		return fmt.Errorf("bme680: the stored air-quality state was learned on another part (%s, this one is %s)", s.Chip, chip)
+	}
+	t.st = s.trackerState
 	return nil
 }
