@@ -14,11 +14,14 @@ import (
 )
 
 // sensorPollInterval is how often every sensor is read; one added from the UI reads at once, so this sets how fast a value goes stale, not how long an add feels.
-const sensorPollInterval = 30 * time.Second
+const sensorPollInterval = 5 * time.Second
+
+// airQualityPeriod is the firmware's BSEC_SAMPLE_RATE_LP; a BME680 with its heater on samples at it on its own clock, whatever the poll.
+const airQualityPeriod = 3 * time.Second
 
 // startSensors runs the hub for the life of the process, outside the radio lifecycle.
 func startSensors(ctx context.Context, db *store.Store, hub *api.Hub, log *slog.Logger) (*sensor.Hub, error) {
-	i2c := sensor.I2CProvider{Period: sensorPollInterval, State: sensorState{db: db}}
+	i2c := sensor.I2CProvider{Period: airQualityPeriod, State: sensorState{db: db}}
 	sh := sensor.NewHub(log, i2c, sensor.PiSugarProvider{}, &sensor.VirtualProvider{})
 	if err := loadSensors(ctx, db, sh); err != nil {
 		return nil, err

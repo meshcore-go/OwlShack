@@ -44,7 +44,7 @@ type chip struct {
 	fields []Field
 	// silent marks a part that answers nothing until woken, so no scan can see it.
 	silent bool
-	// open returns a periph resource, since an ADC reports volts and has no Env, and takes the poll period a part deriving readings from its rate must be built for.
+	// open returns a periph resource, since an ADC reports volts and has no Env, and takes the sample period a part deriving readings from its rate must be built for.
 	open func(bus i2c.Bus, addr uint16, opts map[string]string, period time.Duration) (conn.Resource, error)
 }
 
@@ -100,7 +100,7 @@ var chips = []chip{
 			},
 			{
 				Key: "temperature_offset", Label: "Temperature offset",
-				Help:    "Degrees C to subtract for self-heating; at a poll of tens of seconds that is under 0.01, so leave it at 0 unless the enclosure runs warm",
+				Help:    "Degrees C to subtract for self-heating; with the heater on it samples every 3 s, which warms it about 0.1, so leave it at 0 unless the enclosure runs warm",
 				Default: "0",
 			},
 		},
@@ -145,7 +145,7 @@ var chips = []chip{
 	},
 }
 
-// bmeOpts turns the stored options and the poll period into driver settings; a part told the wrong rate sizes its air-quality filters for one it never sees, and one told none reports no index.
+// bmeOpts turns the stored options and the sample period into driver settings; a part told the wrong rate sizes its air-quality filters for one it never sees, and one told none reports no index.
 func bmeOpts(addr uint16, o map[string]string, period time.Duration) (bme680.Opts, error) {
 	opts := bme680.DefaultOpts
 	opts.Address = addr
@@ -161,6 +161,10 @@ func bmeOpts(addr uint16, o map[string]string, period time.Duration) (bme680.Opt
 		opts.Heater = bme680.HeaterOff
 	}
 	opts.AirQuality = opts.Heater != bme680.HeaterOff
+	if opts.AirQuality {
+		// BSEC's scheduled 3 s measurement; the warm-up model is its on-demand one, for a part read at odd times.
+		opts.Heater, opts.HeaterDuration = bme680.HeaterFixed, 197*time.Millisecond
+	}
 	if v := o["temperature_offset"]; v != "" {
 		off, err := strconv.ParseFloat(v, 64)
 		// Self-heating is a degree or two, so tens of degrees is a typo; negated so NaN fails too.
@@ -243,7 +247,7 @@ type StateStore interface {
 
 // I2CProvider finds and opens the sensors wired to this host's I2C buses.
 type I2CProvider struct {
-	// Period is how often the hub polls, which sizes the air-quality filters, run-in and promotion count, so a wrong value is wrong readings, not just timing.
+	// Period is how often a part with an air-quality fusion samples itself, which sizes its filters, run-in and promotion count, so a wrong value is wrong readings, not just timing.
 	Period time.Duration
 	// State persists what a sensor has learned, so an index does not restart at "calibrating" on every reboot.
 	State StateStore
@@ -425,7 +429,11 @@ func (p I2CProvider) Open(spec Spec) (Sensor, error) {
 func newSensor(dev conn.Resource, bus i2c.BusCloser, metrics []Metric, air *airQualityState) (Sensor, error) {
 	switch v := dev.(type) {
 	case physic.SenseEnv:
-		return &envSensor{dev: v, bus: bus, metrics: metrics, air: air}, nil
+		env := &envSensor{dev: v, bus: bus, metrics: metrics, air: air}
+		if aq, ok := v.(airQualitySenser); ok && aq.SamplePeriod() > 0 {
+			return sample(env, aq.SamplePeriod()), nil
+		}
+		return env, nil
 	case analog.PinADC:
 		return &adcSensor{pin: v, bus: bus}, nil
 	}
@@ -558,6 +566,7 @@ const stateSaveInterval = 30 * time.Minute
 
 // airQualitySenser is a part that derives an air-quality index from its own gas readings and hands its calibration back for the host to keep.
 type airQualitySenser interface {
+	SamplePeriod() time.Duration
 	SenseAirQuality() (bme680.AirQuality, bool)
 	AirQualityState() ([]byte, error)
 	RestoreAirQuality(state []byte) error
@@ -664,4 +673,69 @@ func closeDevice(dev conn.Resource) {
 	if err := dev.Halt(); err != nil {
 		slog.Warn("halting sensor", "component", "sensor", "error", err)
 	}
+}
+
+// sampledSensor reads its part on its own clock, as the firmware runs BSEC every 3 s whatever asks, so a slow pass never becomes a gap in the fusion; Read hands back the latest sample.
+type sampledSensor struct {
+	inner  *envSensor
+	period time.Duration
+	stop   chan struct{}
+	done   chan struct{}
+
+	mu       sync.Mutex
+	readings []Reading
+	err      error
+	at       time.Time
+}
+
+// sample takes the first reading before it returns, so the pass that opened the part has one to show.
+func sample(inner *envSensor, period time.Duration) *sampledSensor {
+	s := &sampledSensor{inner: inner, period: period, stop: make(chan struct{}), done: make(chan struct{})}
+	s.take()
+	go s.run()
+	return s
+}
+
+func (s *sampledSensor) run() {
+	defer close(s.done)
+	t := time.NewTicker(s.period)
+	defer t.Stop()
+	for {
+		select {
+		case <-s.stop:
+			return
+		case <-t.C:
+			s.take()
+		}
+	}
+}
+
+func (s *sampledSensor) take() {
+	readings, err := s.inner.Read(context.Background())
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.err = err
+	if err == nil {
+		s.readings, s.at = readings, time.Now()
+	}
+}
+
+func (s *sampledSensor) Read(context.Context) ([]Reading, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if s.err != nil {
+		return nil, s.err
+	}
+	// A read wedged in the driver would otherwise have the hub restamp one sample as new forever.
+	if age := time.Since(s.at); age > 2*s.period {
+		return nil, fmt.Errorf("no sample for %s", age.Round(time.Second))
+	}
+	return slices.Clone(s.readings), nil
+}
+
+// Close stops the clock before the part closes, so the save at close sees the last sample and nothing reads a closed bus.
+func (s *sampledSensor) Close() error {
+	close(s.stop)
+	<-s.done
+	return s.inner.Close()
 }

@@ -203,7 +203,7 @@ type Opts struct {
 	Heater HeaterProfile
 	// HeaterDuration is the plate time under HeaterFixed, and must be zero under the other profiles.
 	HeaterDuration time.Duration
-	// TemperatureOffset is subtracted from every reading; self-heating is about 4 °C at a sample a second and under 0.01 °C at one every thirty.
+	// TemperatureOffset is subtracted from every reading; self-heating is about 4 °C at a sample a second, 0.1 °C at one every 3 s and under 0.01 °C at one every thirty.
 	TemperatureOffset physic.Temperature
 	// Ambient is what the heater resistance is calculated against; nothing on the bus can tell us it.
 	Ambient physic.Temperature
@@ -222,7 +222,7 @@ var DefaultOpts = Opts{
 	Temperature: Oversampling8x,
 	Pressure:    Oversampling4x,
 	Humidity:    Oversampling2x,
-	// Off as Bosch does in forced mode: at a poll of tens of seconds it averages towards minutes-old air.
+	// Off as Bosch does in forced mode, where it would average in air several samples old.
 	Filter:                 FilterOff,
 	HeaterTarget:           physic.ZeroCelsius + 320*physic.Kelvin,
 	Heater:                 HeaterWarmUp,
@@ -643,6 +643,14 @@ func (d *BME680) AirQualityState() ([]byte, error) {
 		return nil, nil
 	}
 	return d.air.marshalState(d.chip)
+}
+
+// SamplePeriod is how often the fusion needs Sense called, and zero without one, when any rate will do.
+func (d *BME680) SamplePeriod() time.Duration {
+	if d.air == nil {
+		return 0
+	}
+	return d.opts.SamplePeriod
 }
 
 // RestoreAirQuality hands back an earlier run's calibration; a part with no fusion says so rather than succeed at nothing.

@@ -299,8 +299,8 @@ function SensorPanel({
 // Blank tiles for the last row to share, so it keeps the widths above it; ponytail: 11 cover twelve columns (1920px), count columns if wider screens matter.
 const FILLERS = Array.from({ length: 11 }, (_, i) => <div key={i} className="grow basis-36" />);
 
-// The poll is 30 s (app.sensorPollInterval); a reading three polls old is one the mesh has stopped sending.
-const STALE_SECS = 90;
+// The poll is 5 s (app.sensorPollInterval); a reading three polls old is one the mesh has stopped sending.
+const STALE_SECS = 15;
 
 // ReadAge is the one thing on the row that says the numbers can be trusted; ponytail: browser clock against the server's stamp, so skew reads as age.
 function ReadAge({ at, failing }: { at: string | null; failing: boolean }) {

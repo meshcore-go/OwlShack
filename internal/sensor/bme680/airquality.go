@@ -461,7 +461,7 @@ func (t *tracker) mapIndex(compensated float64, bd bands, softStart float64, run
 func clamp(v, lo, hi float64) float64 { return math.Min(hi, math.Max(lo, v)) }
 
 // stateVersion guards the stored shape: another version's blob is refused, not half-read, since a partly filled band pins the index without looking wrong.
-const stateVersion = 2
+const stateVersion = 3
 
 // trackerState is what a restart carries (§10.8): extremes, accuracy and its counters, warm-up accumulators, smoothed signals; rate constants are rebuilt.
 type trackerState struct {
@@ -501,12 +501,13 @@ func newTrackerState() trackerState {
 // savedState is a tracker's state with the part it was learned on, kept outside trackerState so a reset cannot clear it.
 type savedState struct {
 	trackerState
-	Chip string `json:"chip"`
+	Chip   string        `json:"chip"`
+	Period time.Duration `json:"period"`
 }
 
 // marshalState is the learned calibration for the host to keep; without it a restart relearns the clean and polluted extremes, which takes hours.
 func (t *tracker) marshalState(chip string) ([]byte, error) {
-	b, err := json.Marshal(savedState{t.st, chip})
+	b, err := json.Marshal(savedState{t.st, chip, t.period})
 	if err != nil {
 		return nil, fmt.Errorf("bme680: encoding air-quality state: %w", err)
 	}
@@ -531,6 +532,10 @@ func (t *tracker) restoreState(b []byte, chip string) error {
 	// Another part's extremes are not this one's, and applied here they read as air that never changes.
 	if s.Chip != chip {
 		return fmt.Errorf("bme680: the stored air-quality state was learned on another part (%s, this one is %s)", s.Chip, chip)
+	}
+	// The bands are in the compensation of the rate they were learned at, and another mode's constants misread them.
+	if s.Period != t.period {
+		return fmt.Errorf("bme680: the stored air-quality state was learned sampling every %s, this part samples every %s", s.Period, t.period)
 	}
 	t.st = s.trackerState
 	return nil

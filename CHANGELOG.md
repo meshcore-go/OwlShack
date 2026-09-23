@@ -9,16 +9,17 @@ Schema `user_version` 17: adds the sensor tables and who may read each companion
 
 ### Added
 
-- **Sensors on the host.** A new Sensors page reads I2C parts on the Pi's buses every 30 seconds:
+- **Sensors on the host.** A new Sensors page reads I2C parts on the Pi's buses every 5 seconds:
   SHTC3, LPS22HB, BME680, ENS210, and the inputs of an ADS1115 or SGM58031 ADC, plus a PiSugar UPS
   through pisugar-server. An expression sensor works a value out from others, such as a dew point,
   or an ADC divider in volts. A scan only reads, so it never disturbs what is on the bus: it offers
   the parts that could sit at each address that answers, and checks the part when you add it. An
   SHTC3 answers nothing until woken, so it is added from the list. A device with no driver is still
   listed, and a bus that could not be scanned says so, so an empty list means an empty bus.
-- **An air-quality index from the BME680.** Once the sensor has run in (20 minutes, and again after
-  every restart) it reports an index, a static index, CO2 and breath VOC equivalents and how far it
-  has calibrated. It learns your air over days, and keeps what it learned across restarts.
+- **An air-quality index from the BME680.** With its heater on it is sampled every 3 seconds, as
+  MeshCore firmware runs Bosch's BSEC. Once it has run in (5 minutes, and again after every restart)
+  it reports an index, a static index, CO2 and breath VOC equivalents and how far it has calibrated.
+  It learns your air over days, and keeps what it learned across restarts.
 - **Publishing sensors over the mesh.** The repeater's new Telemetry tab, and each companion's
   Telemetry page, choose which readings go out on which channel when another node asks, using the
   same LPP types firmware nodes use. Channel 1 can carry a PiSugar or an ADC divider as the node's

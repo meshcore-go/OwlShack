@@ -509,10 +509,11 @@ func TestRestoreState_RefusesWhatItCannotVouchFor(t *testing.T) {
 	// Each is this build's version and this part's unless it is the fault itself, so each is refused for its own reason.
 	for _, tc := range []struct{ name, blob string }{
 		{"not json", "{"},
-		{"another version", `{"version":99,"workingHorizon":[1800,1800],"chip":"this"}`},
-		{"a blob missing its fields", `{"version":2,"chip":"this"}`},
-		{"a zero working horizon", `{"version":2,"workingHorizon":[1800,0],"chip":"this"}`},
-		{"another part's", `{"version":2,"workingHorizon":[1800,1800],"chip":"that"}`},
+		{"another version", `{"version":99,"workingHorizon":[1800,1800],"chip":"this","period":30000000000}`},
+		{"a blob missing its fields", `{"version":3,"chip":"this","period":30000000000}`},
+		{"a zero working horizon", `{"version":3,"workingHorizon":[1800,0],"chip":"this","period":30000000000}`},
+		{"another part's", `{"version":3,"workingHorizon":[1800,1800],"chip":"that","period":30000000000}`},
+		{"another rate's", `{"version":3,"workingHorizon":[1800,1800],"chip":"this","period":3000000000}`},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			tr := newTracker(pollPeriod)
@@ -526,7 +527,7 @@ func TestRestoreState_RefusesWhatItCannotVouchFor(t *testing.T) {
 		})
 	}
 	// Provokes the positive: the same blob with nothing wrong is taken.
-	if err := newTracker(pollPeriod).restoreState([]byte(`{"version":2,"workingHorizon":[1800,1800],"chip":"this"}`), "this"); err != nil {
+	if err := newTracker(pollPeriod).restoreState([]byte(`{"version":3,"workingHorizon":[1800,1800],"chip":"this","period":30000000000}`), "this"); err != nil {
 		t.Errorf("a sound blob was refused: %v", err)
 	}
 }

@@ -8,6 +8,7 @@ import (
 	"log/slog"
 	"slices"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
@@ -397,7 +398,11 @@ type gasEnv struct {
 	restored []byte
 	refuse   bool
 	state    []byte
+	// period is the rate its fusion asks to be sampled at; zero leaves it on the hub's poll.
+	period time.Duration
 }
+
+func (g *gasEnv) SamplePeriod() time.Duration { return g.period }
 
 func (g *gasEnv) SenseGas() (physic.ElectricResistance, bool)            { return g.ohms, g.gasValid }
 func (g *gasEnv) SenseGasCompensated() (physic.ElectricResistance, bool) { return g.ohms, g.gasValid }
@@ -655,8 +660,9 @@ func TestBMEOpts_CarriesThePollPeriodAndTheForm(t *testing.T) {
 	if got.Temperature != bme680.Oversampling4x || got.Humidity != bme680.Oversampling4x {
 		t.Errorf("oversampling = %s/%s, want 4x on every channel", got.Temperature, got.Humidity)
 	}
-	if got.Heater != bme680.HeaterWarmUp {
-		t.Errorf("heater = %v, want the warm-up profile", got.Heater)
+	// BSEC's own 3 s profile, which the fusion's constants were fitted to.
+	if got.Heater != bme680.HeaterFixed || got.HeaterDuration != 197*time.Millisecond {
+		t.Errorf("heater = %v for %s, want fixed at 197ms", got.Heater, got.HeaterDuration)
 	}
 	// The offset is a difference, not a temperature, so it is read in kelvin rather than through Celsius.
 	if k := float64(got.TemperatureOffset) / float64(physic.Kelvin); !(k > 1.49 && k < 1.51) {
@@ -760,5 +766,73 @@ func TestReports_ABME680WithItsHeaterOffReportsNoGas(t *testing.T) {
 	}
 	if on := h.Reports(spec("on")); !on[IAQ] || !on[Resistance] {
 		t.Errorf("heater on reports %v, want the gas and the index, so this proves nothing", on)
+	}
+}
+
+// countingGas counts the samples a fusing part is asked for.
+type countingGas struct {
+	gasEnv
+	mu     sync.Mutex
+	senses int
+}
+
+func (c *countingGas) Sense(e *physic.Env) error {
+	c.mu.Lock()
+	c.senses++
+	c.mu.Unlock()
+	return c.gasEnv.Sense(e)
+}
+
+func (c *countingGas) count() int {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	return c.senses
+}
+
+// The fusion's filters assume its rate, so a part with one is read on its own clock and a slow pass cannot open a gap in it.
+func TestNewSensor_AFusingPartSamplesOnItsOwnClock(t *testing.T) {
+	dev := &countingGas{gasEnv: gasEnv{gasValid: true, airValid: true, period: 10 * time.Millisecond}}
+	s, err := newSensor(dev, &readBus{}, bmeChip(t).metrics, nil)
+	if err != nil {
+		t.Fatalf("newSensor: %v", err)
+	}
+	for deadline := time.Now().Add(2 * time.Second); dev.count() < 3; time.Sleep(time.Millisecond) {
+		if time.Now().After(deadline) {
+			t.Fatalf("%d samples in 2s at a 10ms period, with nothing calling Read", dev.count())
+		}
+	}
+	if got, err := s.Read(t.Context()); err != nil || len(got) == 0 {
+		t.Fatalf("Read gave %d values, %v; want the latest sample", len(got), err)
+	}
+	if err := s.(io.Closer).Close(); err != nil {
+		t.Fatalf("Close: %v", err)
+	}
+	n := dev.count()
+	time.Sleep(50 * time.Millisecond)
+	if dev.count() != n {
+		t.Errorf("%d samples after Close, want none", dev.count()-n)
+	}
+
+	// A part with no fusion takes any rate, so it stays on the hub's poll.
+	plain := &countingGas{gasEnv: gasEnv{gasValid: true}}
+	if _, err := newSensor(plain, &readBus{}, bmeChip(t).metrics, nil); err != nil {
+		t.Fatalf("newSensor: %v", err)
+	}
+	time.Sleep(50 * time.Millisecond)
+	if plain.count() != 0 {
+		t.Errorf("a part with no fusion was sampled %d times on its own", plain.count())
+	}
+}
+
+// A read wedged in the driver stops the samples, and the hub would stamp the last one as new on every pass.
+func TestSampledSensor_RefusesASampleOlderThanTwoPeriods(t *testing.T) {
+	s := &sampledSensor{period: 3 * time.Second, readings: []Reading{{Metric: Temperature, Value: 20}}}
+	s.at = time.Now().Add(-5 * time.Second)
+	if _, err := s.Read(t.Context()); err != nil {
+		t.Fatalf("a sample under two periods old was refused: %v", err)
+	}
+	s.at = time.Now().Add(-7 * time.Second)
+	if _, err := s.Read(t.Context()); err == nil {
+		t.Error("a sample over two periods old was handed back as current")
 	}
 }
