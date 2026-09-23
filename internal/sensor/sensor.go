@@ -186,6 +186,21 @@ func FormatOf(m Metric) string {
 	return "number"
 }
 
+// roles marks the readings that are not a card's headline; every other metric, an operator's own included, is one.
+var roles = map[Metric]string{
+	Resistance: "detail", GasCompensated: "detail", StaticIAQ: "detail",
+	CO2Equivalent: "detail", BreathVOC: "detail", GasPercentage: "detail",
+	IAQAccuracy: "calibration", GasPercentageAccuracy: "calibration", AirQualityRunIn: "calibration",
+}
+
+// RoleOf says where a reading belongs on a card: "headline" shown large, "detail" in a list, "calibration" read as how far a fusion has learned.
+func RoleOf(m Metric) string {
+	if r, ok := roles[m]; ok {
+		return r
+	}
+	return "headline"
+}
+
 // Reading is one measurement; Label separates readings a sensor reports more than one of, and is empty otherwise.
 type Reading struct {
 	Metric Metric

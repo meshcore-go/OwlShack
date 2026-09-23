@@ -334,6 +334,8 @@ type SensorReading struct {
 	Unit   string  `json:"unit,omitempty"`
 	// Format is "number", "flag" (a yes or no as 1 or 0) or "count", so the page never shows charging as 1.000.
 	Format string `json:"format"`
+	// Role is "headline", "detail" or "calibration", so the page never keeps its own list of which is which.
+	Role string `json:"role"`
 }
 
 // SensorStatus is one sensor; Error describes the latest attempt, Readings and At the last one that worked.
@@ -348,7 +350,11 @@ type SensorStatus struct {
 	Reports  []string        `json:"reports"`
 	Readings []SensorReading `json:"readings"`
 	At       *string         `json:"at"`
-	Error    string          `json:"error"`
+	// AgeSecs is how old Readings were when this was sent, by the host's clock alone, so a phone with another time never reads it as stale or fresh; null until first read.
+	AgeSecs *float64 `json:"ageSecs"`
+	// Category is the kind's catalogue group, such as "Environment", so the page can group without the catalogue.
+	Category string `json:"category"`
+	Error    string `json:"error"`
 }
 
 // SensorField is one option a kind needs, so the UI can build a form for a provider it knows nothing about.

@@ -8,6 +8,8 @@ export interface SensorReading {
   unit?: string;
   // flag is a yes or no carried as 1 or 0; count is a whole number.
   format: "number" | "flag" | "count";
+  // headline is shown large, detail in a list, calibration as how far a fusion has learned.
+  role: "headline" | "detail" | "calibration";
 }
 
 // A Binding names one reading as an expression calls it, so renaming a sensor cannot break it.
@@ -29,6 +31,10 @@ export interface Sensor {
   readings: SensorReading[];
   // null until read once, separating a first read pending from one that reported nothing.
   at: string | null;
+  // how old the readings were when sent, by the host's clock alone, so skew between clocks never reads as age; null until read once.
+  ageSecs: number | null;
+  // the kind's catalogue group, such as Environment.
+  category: string;
   // empty while the latest attempt worked.
   error: string;
 }

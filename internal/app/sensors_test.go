@@ -374,3 +374,36 @@ func TestCompanionTelemetryModes_SurviveAnEditAndAReload(t *testing.T) {
 	}
 	check("after an edit")
 }
+
+// The page reads age and grouping off the status, so a Pi whose clock disagrees with the phone's still shows a fresh reading as fresh.
+func TestSensorStatusDTOs_CarryAgeCategoryAndRoles(t *testing.T) {
+	hub := sensor.NewHub(slog.New(slog.NewTextHandler(io.Discard, nil)), &sensor.VirtualProvider{})
+	read := sensor.Status{
+		Spec: sensor.Spec{ID: 1, Provider: "virtual", Kind: sensor.KindExpression, Name: "a"},
+		Readings: []sensor.Reading{
+			{Metric: sensor.Temperature, Value: 20},
+			{Metric: sensor.StaticIAQ, Value: 40},
+			{Metric: sensor.IAQAccuracy, Value: 1},
+		},
+		At: time.Now().Add(-3 * time.Second),
+	}
+	never := sensor.Status{Spec: sensor.Spec{ID: 2, Provider: "virtual", Kind: sensor.KindExpression, Name: "b"}}
+
+	got := sensorStatusDTOs(hub, []sensor.Status{read, never})
+	if a := got[0].AgeSecs; a == nil || *a < 2.9 || *a > 4 {
+		t.Errorf("a read 3s ago has age %v, want about 3", a)
+	}
+	if got[1].AgeSecs != nil {
+		t.Errorf("a sensor never read has age %v, want null", *got[1].AgeSecs)
+	}
+	if got[0].Category != "Derived" {
+		t.Errorf("category = %q, want the kind's Derived", got[0].Category)
+	}
+	var roles []string
+	for _, r := range got[0].Readings {
+		roles = append(roles, r.Role)
+	}
+	if strings.Join(roles, ",") != "headline,detail,calibration" {
+		t.Errorf("roles = %v, want headline, detail, calibration", roles)
+	}
+}

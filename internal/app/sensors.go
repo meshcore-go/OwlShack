@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"log/slog"
+	"math"
 	"slices"
 	"sync"
 	"time"
@@ -273,6 +274,12 @@ func (b *backend) DeleteSensor(ctx context.Context, id int64) error {
 }
 
 func sensorStatusDTOs(sh *sensor.Hub, in []sensor.Status) []api.SensorStatus {
+	kinds, _ := sh.Kinds("")
+	category := make(map[[2]string]string, len(kinds))
+	for _, k := range kinds {
+		category[[2]string{k.Provider, k.Kind}] = k.Category
+	}
+	now := time.Now()
 	out := make([]api.SensorStatus, 0, len(in))
 	for _, s := range in {
 		row := api.SensorStatus{
@@ -284,6 +291,7 @@ func sensorStatusDTOs(sh *sensor.Hub, in []sensor.Status) []api.SensorStatus {
 			Bindings: apiBindings(s.Spec.Bindings),
 			Reports:  []string{},
 			Readings: make([]api.SensorReading, 0, len(s.Readings)),
+			Category: category[[2]string{s.Spec.Provider, s.Spec.Kind}],
 			Error:    s.Err,
 		}
 		for m := range sh.Reports(s.Spec) {
@@ -296,13 +304,15 @@ func sensorStatusDTOs(sh *sensor.Hub, in []sensor.Status) []api.SensorStatus {
 		for _, r := range s.Readings {
 			row.Readings = append(row.Readings, api.SensorReading{
 				Metric: string(r.Metric), Label: r.Label, Value: r.Value, Unit: r.Unit,
-				Format: sensor.FormatOf(r.Metric),
+				Format: sensor.FormatOf(r.Metric), Role: sensor.RoleOf(r.Metric),
 			})
 		}
 		// Null until the sensor is first read, which tells the page that apart from a read that reported nothing.
 		if !s.At.IsZero() {
 			at := s.At.UTC().Format(time.RFC3339)
 			row.At = &at
+			age := math.Round(max(0, now.Sub(s.At).Seconds())*10) / 10
+			row.AgeSecs = &age
 		}
 		out = append(out, row)
 	}
