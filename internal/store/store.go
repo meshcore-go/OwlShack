@@ -195,6 +195,14 @@ func (s *Store) migrate(ctx context.Context) error {
 		return fmt.Errorf("reading schema version: %w", err)
 	}
 
+	// A database from a newer build skips nothing now and every slot appended later, drifting while it looks healthy; InspectBackup refuses a restore for the same reason.
+	if version > LatestSchemaVersion() {
+		return fmt.Errorf("database is at schema version %d but this build understands %d: "+
+			"it was written by a newer OwlShack. Run that build, or if the schema is known to match, "+
+			"stamp it back with PRAGMA user_version = %d",
+			version, LatestSchemaVersion(), LatestSchemaVersion())
+	}
+
 	// A shipped slot is frozen — a released DB has stamped its version and will skip it — so append, never merge, renumber or edit.
 	for i := version; i < len(migrations); i++ {
 		if err := s.runMigration(ctx, i+1, migrations[i]); err != nil {

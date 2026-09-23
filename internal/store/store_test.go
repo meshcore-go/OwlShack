@@ -991,3 +991,34 @@ func TestMigrateV12_ClampsTriggerPathHashSize(t *testing.T) {
 		t.Errorf("path_hash_size = %v, want %v (4 clamped, the rest untouched)", got, want)
 	}
 }
+
+// A database from a newer build must be refused: accepting it skips every slot appended later while looking healthy.
+func TestStore_RefusesADatabaseFromANewerBuild(t *testing.T) {
+	t.Parallel()
+	path := filepath.Join(t.TempDir(), "newer.db")
+
+	st, err := Open(t.Context(), path)
+	if err != nil {
+		t.Fatalf("Open: %v", err)
+	}
+	st.Close()
+
+	db, err := openWritableDB(path)
+	if err != nil {
+		t.Fatalf("openWritableDB: %v", err)
+	}
+	ahead := len(migrations) + 1
+	if _, err := db.ExecContext(t.Context(), fmt.Sprintf("PRAGMA user_version = %d", ahead)); err != nil {
+		t.Fatalf("stamping ahead: %v", err)
+	}
+	db.Close()
+
+	st2, err := Open(t.Context(), path)
+	if err == nil {
+		st2.Close()
+		t.Fatal("a database stamped past the last slot opened, so a later migration would be skipped in silence")
+	}
+	if !strings.Contains(err.Error(), "newer OwlShack") {
+		t.Errorf("error %q does not say the database came from a newer build", err)
+	}
+}
