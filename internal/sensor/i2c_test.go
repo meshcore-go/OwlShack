@@ -3,6 +3,7 @@ package sensor
 import (
 	"context"
 	"errors"
+	"fmt"
 	"slices"
 	"strings"
 	"testing"
@@ -138,87 +139,65 @@ type failingEnv struct{ fixedEnv }
 
 func (failingEnv) Sense(*physic.Env) error { return errors.New("bus fault") }
 
-// fakeBus answers as an SHTC3 at one address and NACKs everywhere else.
-type fakeBus struct {
-	shtc3Addr uint16
-	// extra is an address that ACKs a read but is no part this build knows.
-	extra   uint16
-	lastCmd uint16
+// readBus answers a one-byte read at the addresses it lists and keeps every write, so a test sees whether a scan wrote at all.
+type readBus struct {
+	answers map[uint16]bool
+	writes  []string
 }
 
-func (b *fakeBus) String() string                  { return "fakeBus" }
-func (b *fakeBus) Close() error                    { return nil }
-func (b *fakeBus) SetSpeed(physic.Frequency) error { return nil }
-
-func (b *fakeBus) Tx(addr uint16, w, r []byte) error {
-	if addr == b.extra && len(w) == 0 {
-		copy(r, make([]byte, len(r)))
-		return nil
+func (b *readBus) Tx(addr uint16, w, r []byte) error {
+	if len(w) > 0 {
+		b.writes = append(b.writes, fmt.Sprintf("% x to %#02x", w, addr))
 	}
-	if addr != b.shtc3Addr {
-		return errors.New("no ack")
+	if !b.answers[addr] {
+		return errors.New("nack")
 	}
-	if len(w) == 2 {
-		b.lastCmd = uint16(w[0])<<8 | uint16(w[1])
-		return nil
-	}
-	if len(r) == 3 && b.lastCmd == 0xEFC8 {
-		r[0], r[1] = 0x08, 0x07
-		r[2] = sensirionCRC(r[0:2])
-		return nil
-	}
-	return errors.New("unexpected transaction")
+	clear(r)
+	return nil
 }
+func (b *readBus) SetSpeed(physic.Frequency) error { return nil }
+func (b *readBus) String() string                  { return "readBus" }
+func (b *readBus) Close() error                    { return nil }
 
-func sensirionCRC(b []byte) byte {
-	crc := byte(0xFF)
-	for _, v := range b {
-		crc ^= v
-		for range 8 {
-			if crc&0x80 != 0 {
-				crc = crc<<1 ^ 0x31
-			} else {
-				crc <<= 1
-			}
-		}
+// A write is a command to some parts, even a register address: a multiplexer at 0x70 takes it as its channel mask.
+func TestScanBus_OnlyReads(t *testing.T) {
+	bus := &readBus{answers: map[uint16]bool{0x21: true, 0x48: true, 0x70: true, 0x76: true}}
+	got := scanBus(t.Context(), "/dev/i2c-1", bus)
+	if len(bus.writes) != 0 {
+		t.Fatalf("the scan wrote %v", bus.writes)
 	}
-	return crc
-}
 
-// An address that merely ACKs is never claimed as a known chip.
-func TestScanBus_IdentifiesAPartAndListsWhatItCannotDrive(t *testing.T) {
-	bus := &fakeBus{shtc3Addr: 0x70, extra: 0x76}
-	got := scanBus(t.Context(), "fake", bus)
-
-	var addable, unknown []Candidate
+	fits := map[string][]string{}
+	var unknown []string
 	for _, c := range got {
-		if c.Addable {
-			addable = append(addable, c)
-		} else {
-			unknown = append(unknown, c)
+		if !c.Addable {
+			unknown = append(unknown, c.Label)
+			continue
 		}
+		if c.Options["bus"] != "/dev/i2c-1" {
+			t.Errorf("%s carries bus %q, want the one scanned", c.Kind, c.Options["bus"])
+		}
+		fits[c.Options["address"]] = append(fits[c.Options["address"]], c.Kind)
 	}
-
-	if len(addable) != 1 || addable[0].Kind != "shtc3" {
-		t.Fatalf("addable = %+v, want exactly one shtc3", addable)
+	if !slices.Equal(fits["0x76"], []string{"bme680"}) {
+		t.Errorf("0x76 offered %v, want the bme680", fits["0x76"])
 	}
-	if addable[0].Options["bus"] != "fake" || addable[0].Options["address"] != "0x70" {
-		t.Errorf("options = %v, want the bus and address the scan found it at", addable[0].Options)
+	// Nothing is identified, so every part that could sit at an address is offered.
+	if !slices.Equal(fits["0x48"], []string{"sgm58031", "ads1115"}) {
+		t.Errorf("0x48 offered %v, want both ADCs", fits["0x48"])
 	}
-
-	// The undrivable part is still listed, so a populated bus never reads as empty.
-	if len(unknown) != 1 {
-		t.Fatalf("unknown = %+v, want the one address that acked but is not a known part", unknown)
+	// An SHTC3 answers no plain read, so whatever did at 0x70 is something else, as likely a multiplexer as anything.
+	if len(fits["0x70"]) != 0 {
+		t.Errorf("0x70 offered %v for a device that answered a read", fits["0x70"])
 	}
-	if unknown[0].Kind != "" {
-		t.Errorf("unknown candidate claims kind %q", unknown[0].Kind)
+	if !slices.Equal(unknown, []string{"Unknown device at 0x21", "Unknown device at 0x70"}) {
+		t.Errorf("unknown = %v, want 0x21 and 0x70 listed, or the bus looks empty there", unknown)
 	}
 }
 
 // An empty bus and an unreadable one must not give the same answer.
 func TestScanBus_EmptyBusYieldsNothing(t *testing.T) {
-	bus := &fakeBus{shtc3Addr: 0xFFFF, extra: 0xFFFF}
-	if got := scanBus(t.Context(), "fake", bus); len(got) != 0 {
+	if got := scanBus(t.Context(), "fake", &readBus{}); len(got) != 0 {
 		t.Fatalf("scanBus on an empty bus = %+v, want nothing", got)
 	}
 }
@@ -226,7 +205,7 @@ func TestScanBus_EmptyBusYieldsNothing(t *testing.T) {
 func TestScanBus_HonoursACancelledContext(t *testing.T) {
 	ctx, cancel := context.WithCancel(t.Context())
 	cancel()
-	if got := scanBus(ctx, "fake", &fakeBus{shtc3Addr: 0x70, extra: 0x76}); len(got) != 0 {
+	if got := scanBus(ctx, "fake", &readBus{answers: map[uint16]bool{0x76: true}}); len(got) != 0 {
 		t.Fatalf("scanBus with a cancelled context = %+v, want nothing", got)
 	}
 }
@@ -345,75 +324,22 @@ func TestI2CProvider_KindsCarryTheirOwnFields(t *testing.T) {
 	}
 }
 
-// adsBus answers as a genuine ADS1115 does: a two-bit pointer, so Chip_ID reads back the config register.
-type adsBus struct{ addr uint16 }
-
-func (b *adsBus) Tx(addr uint16, w, r []byte) error {
-	if addr != b.addr {
-		return errors.New("nack")
-	}
-	if len(w) == 0 && len(r) > 0 {
-		// The bare probe a scan uses to notice something is there at all.
-		r[0] = 0
-		return nil
-	}
-	if len(r) != 2 {
-		return nil
-	}
-	var v uint16
-	switch w[0] & 0x03 { // a two-bit pointer is the whole point
-	case 0x01:
-		v = 0x8583
-	case 0x02:
-		v = 0x8000
-	case 0x03:
-		v = 0x7FFF
-	}
-	r[0], r[1] = byte(v>>8), byte(v)
-	return nil
-}
-func (b *adsBus) SetSpeed(physic.Frequency) error { return nil }
-func (b *adsBus) String() string                  { return "adsBus" }
-func (b *adsBus) Close() error                    { return nil }
-
-// 0x48 is also the LM75 and TMP102, so an unidentifiable part is listed as responding, not placed.
-func TestScanBus_WillNotClaimAPartThatCannotProveWhatItIs(t *testing.T) {
-	bus := &adsBus{addr: 0x48}
-	got := scanBus(context.Background(), "/dev/i2c-1", bus)
-
-	for _, c := range got {
-		if c.Kind == "ads1115" {
-			t.Fatalf("the scan claimed an ads1115 at %s, which it cannot tell from an LM75", c.Detail)
+// An ADC is set up by its input and range, so both have to reach the catalogue for either part.
+func TestI2CProvider_ADCsOfferTheirInputAndRange(t *testing.T) {
+	for _, kind := range []string{"sgm58031", "ads1115"} {
+		var adc KindInfo
+		for _, k := range (I2CProvider{}).Kinds() {
+			if k.Kind == kind {
+				adc = k
+			}
 		}
-		if c.Kind == "sgm58031" {
-			t.Fatalf("the scan claimed an sgm58031, but this part has no Chip_ID register")
+		if adc.Kind == "" {
+			t.Fatalf("%s is not in the catalogue", kind)
 		}
-	}
-	var unknown bool
-	for _, c := range got {
-		if !c.Addable && strings.Contains(c.Label, "0x48") {
-			unknown = true
-		}
-	}
-	if !unknown {
-		t.Error("0x48 answered but was not listed as an unknown responder, so the bus looks empty there")
-	}
-}
-
-// Unscannable must not mean unusable: the part is still in the catalogue to add by hand.
-func TestI2CProvider_AnonymousPartsAreStillInTheCatalogue(t *testing.T) {
-	var ads KindInfo
-	for _, k := range (I2CProvider{}).Kinds() {
-		if k.Kind == "ads1115" {
-			ads = k
-		}
-	}
-	if ads.Kind == "" {
-		t.Fatal("ads1115 is not in the catalogue, so a part a scan cannot see could never be added")
-	}
-	for _, want := range []string{"channel", "gain"} {
-		if !slices.ContainsFunc(ads.Fields, func(f Field) bool { return f.Key == want }) {
-			t.Errorf("ads1115 does not offer %q", want)
+		for _, want := range []string{"channel", "gain"} {
+			if !slices.ContainsFunc(adc.Fields, func(f Field) bool { return f.Key == want }) {
+				t.Errorf("%s does not offer %q", kind, want)
+			}
 		}
 	}
 }
@@ -455,139 +381,6 @@ func TestNewSensor_RoutesAnADCToTheAnalogueAdapterAndReportsVolts(t *testing.T) 
 	// 0x4000 of 0x8000 at the 4.096V range.
 	if got := readings[0].Value; got < 2.0479 || got > 2.0481 {
 		t.Errorf("value = %v V, want 2.048", got)
-	}
-}
-
-// recordingBus is a BME680 at 0x76 and an SHTC3 at 0x70, keeping every transaction so a test sees what a scan did.
-type recordingBus struct {
-	sent    [][]byte
-	lastCmd uint16
-}
-
-func (b *recordingBus) Tx(addr uint16, w, r []byte) error {
-	if len(w) > 0 {
-		b.sent = append(b.sent, append([]byte{byte(addr)}, w...))
-	}
-	switch addr {
-	case 0x76:
-		if len(w) == 1 && w[0] == 0xD0 && len(r) == 1 {
-			r[0] = 0x61 // BME68x chip id
-			return nil
-		}
-	case 0x77:
-		// Answers, but its chip id says it is not a BME68x.
-		if len(w) == 1 && w[0] == 0xD0 && len(r) == 1 {
-			r[0] = 0x60
-			return nil
-		}
-		if len(w) == 0 && len(r) == 1 {
-			r[0] = 0
-			return nil
-		}
-	case 0x5D:
-		// Answers, but its WHO_AM_I says it is not an LPS22HB.
-		if len(w) == 1 && w[0] == 0x0F && len(r) == 1 {
-			r[0] = 0xAA
-			return nil
-		}
-		if len(w) == 0 && len(r) == 1 {
-			r[0] = 0
-			return nil
-		}
-	case 0x70:
-		// The SHTC3 sends a command and reads the answer as two separate transactions.
-		if len(w) == 2 && len(r) == 0 {
-			b.lastCmd = uint16(w[0])<<8 | uint16(w[1])
-			return nil
-		}
-		if len(w) == 0 && len(r) == 3 && b.lastCmd == 0xEFC8 {
-			r[0], r[1], r[2] = 0x08, 0x07, 0x21 // id 0x0807 with its CRC
-			return nil
-		}
-	}
-	if len(r) > 0 {
-		return errors.New("nack")
-	}
-	return nil
-}
-func (b *recordingBus) SetSpeed(physic.Frequency) error { return nil }
-func (b *recordingBus) String() string                  { return "recordingBus" }
-func (b *recordingBus) Close() error                    { return nil }
-
-// writesTo returns the register writes a scan sent to one address.
-func (b *recordingBus) writesTo(addr byte) [][]byte {
-	var out [][]byte
-	for _, t := range b.sent {
-		if t[0] == addr && len(t) > 2 {
-			out = append(out, t[1:])
-		}
-	}
-	return out
-}
-
-// Opening a part to identify it resets it, which leaves a configured BME680 with its gas heater off and no error.
-func TestScanBus_IdentifiesWithoutConfiguring(t *testing.T) {
-	bus := &recordingBus{}
-	got := scanBus(context.Background(), "/dev/i2c-1", bus)
-
-	var kinds []string
-	for _, c := range got {
-		if c.Addable {
-			kinds = append(kinds, c.Kind)
-		}
-	}
-	if !slices.Contains(kinds, "bme680") || !slices.Contains(kinds, "shtc3") {
-		t.Fatalf("scan found %v, want both bme680 and shtc3", kinds)
-	}
-
-	// The BME680 is identified by a plain register read, so a scan must not write to it at all.
-	if w := bus.writesTo(0x76); len(w) != 0 {
-		t.Errorf("the scan wrote %#v to the BME680; identifying it needs no writes", w)
-	}
-	// Answering is not identifying, or the catalogue names whatever sits at a known address.
-	for _, c := range got {
-		if c.Addable && strings.Contains(c.Detail, "0x77") {
-			t.Errorf("claimed %q at 0x77, whose chip id reads 0x60", c.Kind)
-		}
-		if c.Addable && strings.Contains(c.Detail, "0x5d") {
-			t.Errorf("claimed %q at 0x5d, whose WHO_AM_I reads 0xaa", c.Kind)
-		}
-	}
-	for _, addr := range []string{"0x77", "0x5d"} {
-		var listed bool
-		for _, c := range got {
-			if !c.Addable && strings.Contains(c.Label, addr) {
-				listed = true
-			}
-		}
-		if !listed {
-			t.Errorf("%s answered but is not listed as an unknown responder, so the bus looks empty there", addr)
-		}
-	}
-
-	// The SHTC3 has to be woken to answer, but must never be reset or told to measure.
-	for _, w := range bus.writesTo(0x70) {
-		cmd := uint16(w[0])<<8 | uint16(w[1])
-		switch cmd {
-		case 0x3517, 0xB098, 0xEFC8: // wake, sleep, read id
-		default:
-			t.Errorf("the scan sent the SHTC3 command %#04x, which is not identification", cmd)
-		}
-	}
-}
-
-// A chip a scan may claim needs something to claim it by, or adding one without a probe drops it from every scan.
-func TestChips_EveryScannablePartCanIdentifyItself(t *testing.T) {
-	for _, c := range chips {
-		if c.anonymous {
-			if c.probe != nil {
-				t.Errorf("%s is marked anonymous but has a probe; one of the two is wrong", c.kind)
-			}
-			continue
-		}
-		if c.probe == nil {
-			t.Errorf("%s has no probe, so a scan can never find it", c.kind)
-		}
 	}
 }
 
@@ -767,7 +560,7 @@ func TestAirQualityState_RestoresAtOpenAndSavesOnItsOwnCadence(t *testing.T) {
 	}
 	// Closing saves whatever the cadence, or a restart loses what was learned since the last save.
 	dev.state = []byte("at close")
-	s.bus = &fakeBus{}
+	s.bus = &readBus{}
 	if err := s.Close(); err != nil {
 		t.Fatalf("Close: %v", err)
 	}
@@ -792,7 +585,7 @@ func TestAirQualityState_AFailedLoadKeepsWhatIsStored(t *testing.T) {
 	p := I2CProvider{Period: 30 * time.Second, State: store}
 	dev := &gasEnv{gasValid: true, airValid: true, state: []byte("fresh")}
 
-	s := &envSensor{dev: dev, metrics: bmeChip(t).metrics, air: p.restoreAirQuality(dev, 7), bus: &fakeBus{}}
+	s := &envSensor{dev: dev, metrics: bmeChip(t).metrics, air: p.restoreAirQuality(dev, 7), bus: &readBus{}}
 	s.air.saved = time.Now().Add(-stateSaveInterval)
 	if _, err := s.Read(t.Context()); err != nil {
 		t.Fatalf("Read: %v", err)
@@ -916,7 +709,7 @@ func TestI2CDiscover_ReportsABusThatWouldNotOpen(t *testing.T) {
 	}
 	for name, open := range map[string]i2creg.Opener{
 		"zz-dead": func() (i2c.BusCloser, error) { return nil, errors.New("permission denied") },
-		"zz-live": func() (i2c.BusCloser, error) { return &recordingBus{}, nil },
+		"zz-live": func() (i2c.BusCloser, error) { return &readBus{answers: map[uint16]bool{0x76: true}}, nil },
 	} {
 		if err := i2creg.Register(name, nil, -1, open); err != nil {
 			t.Fatal(err)
@@ -938,7 +731,7 @@ func TestBusNames_ByNumber(t *testing.T) {
 		t.Skipf("periph host init: %v", err)
 	}
 	for name, n := range map[string]int{"zz-a": 1010, "zz-b": 1002} {
-		if err := i2creg.Register(name, nil, n, func() (i2c.BusCloser, error) { return &recordingBus{}, nil }); err != nil {
+		if err := i2creg.Register(name, nil, n, func() (i2c.BusCloser, error) { return &readBus{}, nil }); err != nil {
 			t.Fatal(err)
 		}
 		t.Cleanup(func() { _ = i2creg.Unregister(name) })

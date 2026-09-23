@@ -198,7 +198,7 @@ export function SensorDialog({
               ? "Change its name or its settings."
               : pick
                 ? "Name it and fill in its settings."
-                : "Pick a part that was detected, or search for one and set it up by hand."}
+                : "Pick a part a scan matched, or search for one and set it up by hand."}
           </DialogDescription>
         </DialogHeader>
 

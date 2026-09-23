@@ -40,10 +40,8 @@ type chip struct {
 	metrics []Metric
 	// fields are the options this part needs beyond the bus and address every part takes.
 	fields []Field
-	// anonymous marks a part with no identity register; 0x48 is an LM75 or TMP102 as readily as an ADS1115, so a scan may not claim it.
-	anonymous bool
-	// probe reads the identity register only, since opening a part resets it; nil means it cannot be scanned for.
-	probe func(bus i2c.Bus, addr uint16) error
+	// silent marks a part that answers nothing until woken, so no scan can see it.
+	silent bool
 	// open returns a periph resource, since an ADC reports volts and has no Env, and takes the poll period a part deriving readings from its rate must be built for.
 	open func(bus i2c.Bus, addr uint16, opts map[string]string, period time.Duration) (conn.Resource, error)
 }
@@ -51,10 +49,10 @@ type chip struct {
 var chips = []chip{
 	{
 		kind: "shtc3", label: "SHTC3",
-		describe: "Temperature and humidity", category: "Environment",
+		describe: "Temperature and humidity (a scan cannot see it)", category: "Environment",
 		addrs:   []uint16{shtc3.DefaultAddress},
 		metrics: []Metric{Temperature, Humidity},
-		probe:   shtc3.Probe,
+		silent:  true,
 		open: func(bus i2c.Bus, addr uint16, _ map[string]string, _ time.Duration) (conn.Resource, error) {
 			opts := shtc3.DefaultOpts
 			opts.Address = addr
@@ -66,7 +64,6 @@ var chips = []chip{
 		describe: "Barometric pressure and temperature", category: "Environment",
 		addrs:   []uint16{lps22hb.DefaultAddress, lps22hb.AltAddress},
 		metrics: []Metric{Pressure, Temperature},
-		probe:   lps22hb.Probe,
 		open: func(bus i2c.Bus, addr uint16, _ map[string]string, _ time.Duration) (conn.Resource, error) {
 			opts := lps22hb.DefaultOpts
 			opts.Address = addr
@@ -99,7 +96,6 @@ var chips = []chip{
 				Default: "0",
 			},
 		},
-		probe: bme680.Probe,
 		open: func(bus i2c.Bus, addr uint16, o map[string]string, period time.Duration) (conn.Resource, error) {
 			opts, err := bmeOpts(addr, o, period)
 			if err != nil {
@@ -114,7 +110,6 @@ var chips = []chip{
 		addrs:   []uint16{0x48, 0x49, 0x4A, 0x4B},
 		metrics: []Metric{Voltage},
 		fields:  adcFields,
-		probe:   ads1x15.Probe,
 		open: func(bus i2c.Bus, addr uint16, o map[string]string, _ time.Duration) (conn.Resource, error) {
 			return openADC(bus, addr, o, ads1x15.SGM58031)
 		},
@@ -124,9 +119,7 @@ var chips = []chip{
 		describe: "Four-channel 16-bit ADC", category: "Analogue",
 		addrs:   []uint16{0x48, 0x49, 0x4A, 0x4B},
 		metrics: []Metric{Voltage},
-		// The ADS1115 has no identity register at all, so it is add-by-hand only.
-		anonymous: true,
-		fields:    adcFields,
+		fields:  adcFields,
 		open: func(bus i2c.Bus, addr uint16, o map[string]string, _ time.Duration) (conn.Resource, error) {
 			return openADC(bus, addr, o, ads1x15.ADS1115)
 		},
@@ -136,7 +129,6 @@ var chips = []chip{
 		describe: "Temperature and humidity", category: "Environment",
 		addrs:   []uint16{ens210.DefaultAddress},
 		metrics: []Metric{Temperature, Humidity},
-		probe:   ens210.Probe,
 		open: func(bus i2c.Bus, addr uint16, _ map[string]string, _ time.Duration) (conn.Resource, error) {
 			opts := ens210.DefaultOpts
 			opts.Address = addr
@@ -333,7 +325,7 @@ func soleBus(buses []string) string {
 	return ""
 }
 
-// Discover reads identity registers only: opening a chip would reset one another handle may be driving.
+// Discover only reads: a write, even of a register address, is a command to some parts, and what answers is unknown until the operator says.
 func (p I2CProvider) Discover(ctx context.Context) ([]Candidate, error) {
 	if err := hostInit(); err != nil {
 		return nil, fmt.Errorf("periph host init failed: %w", err)
@@ -353,21 +345,23 @@ func (p I2CProvider) Discover(ctx context.Context) ([]Candidate, error) {
 	return out, errors.Join(errs...)
 }
 
+// scanBus reads a byte at every address and offers each part that could sit where something answered; nothing is identified until it is added.
 func scanBus(ctx context.Context, name string, bus i2c.Bus) []Candidate {
 	var out []Candidate
-	claimed := map[uint16]bool{}
-	for _, c := range chips {
-		if c.anonymous || c.probe == nil {
+	for addr := uint16(0x08); addr <= 0x77; addr++ {
+		if ctx.Err() != nil {
+			return out
+		}
+		var b [1]byte
+		if bus.Tx(addr, nil, b[:]) != nil {
 			continue
 		}
-		for _, addr := range c.addrs {
-			if ctx.Err() != nil {
-				return out
-			}
-			if err := c.probe(bus, addr); err != nil {
+		fits := false
+		for _, c := range chips {
+			if c.silent || !slices.Contains(c.addrs, addr) {
 				continue
 			}
-			claimed[addr] = true
+			fits = true
 			out = append(out, Candidate{
 				Kind:    c.kind,
 				Label:   c.label,
@@ -376,32 +370,16 @@ func scanBus(ctx context.Context, name string, bus i2c.Bus) []Candidate {
 				Options: map[string]string{"bus": name, "address": fmt.Sprintf("%#02x", addr)},
 			})
 		}
-	}
-	// Listed unaddable, or a bus carrying a part we cannot drive looks like an empty bus.
-	for _, addr := range probeUnclaimed(ctx, bus, claimed) {
-		out = append(out, Candidate{
-			Label:   fmt.Sprintf("Unknown device at %#02x", addr),
-			Detail:  fmt.Sprintf("%s has no driver for this part", name),
-			Addable: false,
-			Options: map[string]string{},
-		})
+		// Listed unaddable, or a bus carrying a part we cannot drive looks like an empty bus.
+		if !fits {
+			out = append(out, Candidate{
+				Label:   fmt.Sprintf("Unknown device at %#02x", addr),
+				Detail:  fmt.Sprintf("%s has no driver for this part", name),
+				Options: map[string]string{},
+			})
+		}
 	}
 	return out
-}
-
-// probeUnclaimed reads one byte from each address no driver answered for; it honours ctx as the slow part of a scan.
-func probeUnclaimed(ctx context.Context, bus i2c.Bus, claimed map[uint16]bool) []uint16 {
-	var found []uint16
-	for addr := uint16(0x08); addr <= 0x77; addr++ {
-		if claimed[addr] || ctx.Err() != nil {
-			continue
-		}
-		var b [1]byte
-		if err := bus.Tx(addr, nil, b[:]); err == nil {
-			found = append(found, addr)
-		}
-	}
-	return found
 }
 
 func (p I2CProvider) Open(spec Spec) (Sensor, error) {

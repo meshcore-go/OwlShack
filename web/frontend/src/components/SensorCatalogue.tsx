@@ -9,7 +9,7 @@ import {
   type SensorScan,
 } from "@/lib/sensorsApi";
 
-// Entry is one row of the picker; a detected and a catalogue part differ only in filled options.
+// Entry is one row of the picker; a matched and a catalogue part differ only in filled options.
 export interface Entry {
   kind: SensorKind;
   label: string;
@@ -46,7 +46,7 @@ function buildEntries(
   catalogue: SensorKind[],
   found: Map<SensorKind, string>,
   query: string,
-): { sections: Section[]; unknown: SensorCandidate[] } {
+): { sections: Section[]; unknown: SensorCandidate[]; matched: number } {
   const byKind = new Map(catalogue.map((k) => [`${k.provider}/${k.kind}`, k]));
   const terms = query.trim().toLowerCase().split(/\s+/).filter(Boolean);
   const matches = (k: SensorKind) => {
@@ -88,12 +88,12 @@ function buildEntries(
   }
 
   const sections: Section[] = detected.length
-    ? [{ label: `Detected (${detected.length})`, rows: detected }]
+    ? [{ label: `Possible matches (${detected.length})`, rows: detected }]
     : [];
   for (const [label, rows] of [...grouped.entries()].sort(([a], [b]) => a.localeCompare(b))) {
     sections.push({ label, rows });
   }
-  return { sections, unknown };
+  return { sections, unknown, matched: detected.length };
 }
 
 export function SensorCatalogue({
@@ -119,7 +119,7 @@ export function SensorCatalogue({
   onPick: (e: Entry) => void;
 }) {
   const found = useMemo(() => haystacks(catalogue ?? []), [catalogue]);
-  const { sections, unknown } = useMemo(
+  const { sections, unknown, matched } = useMemo(
     () => buildEntries(scan, catalogue ?? [], found, query),
     [scan, catalogue, found, query],
   );
@@ -241,12 +241,17 @@ export function SensorCatalogue({
 
       <div className="flex items-start justify-between gap-2">
         <div className="min-w-0 space-y-1">
+          {matched > 0 ? (
+            <p className="font-mono text-[11px] sm:text-[10px] leading-relaxed text-muted-foreground/70">
+              A scan only reads, so these are matched by address; the part is checked when you add it.
+            </p>
+          ) : null}
           {unknown.length > 0 ? (
             <p className="font-mono text-[11px] sm:text-[10px] leading-relaxed text-muted-foreground/70">
               Also responding, with no driver here: {unknown.map((u) => u.label).join(", ")}
             </p>
           ) : null}
-          {/* A provider that could not be scanned says so, or an empty Detected group reads as an empty bus. */}
+          {/* A provider that could not be scanned says so, or no possible matches reads as an empty bus. */}
           {(scan?.problems ?? []).map((p) => (
             <p
               key={p.provider}
