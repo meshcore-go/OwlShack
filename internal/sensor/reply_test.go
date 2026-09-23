@@ -73,21 +73,15 @@ func TestBuildReply_AFailedMappedSensorDoesNotFallBack(t *testing.T) {
 	}
 }
 
-// Position is its own class on the node's own channel, so it goes without the location permission while the battery stays.
-func TestBuildReply_PositionIsGatedSeparately(t *testing.T) {
-	lat, lon := -41.2865, 174.7762
-	self := SelfReadings{BatteryVolts: 4.0, Lat: &lat, Lon: &lon}
+// The firmware sends its sensors between the battery and the board temperature, and a decoder that keeps the last of a key sees the order.
+func TestBuildReply_TheBoardTemperatureGoesLast(t *testing.T) {
+	board := 35.2
+	self := SelfReadings{BatteryVolts: 4.0, TempC: &board}
+	row := []ChannelEntry{{Channel: 2, Type: meshcore.LPPTemperature, SensorID: 1, Metric: Temperature}}
 
-	with := replyHex(t, PermAll, self, nil, nil)
-	if !strings.Contains(with, "0188") {
-		t.Fatalf("reply %s carries no position", with)
-	}
-	without := replyHex(t, PermBase, self, nil, nil)
-	if strings.Contains(without, "0188") {
-		t.Fatalf("reply %s carries a position the location class denies", without)
-	}
-	if !strings.HasPrefix(without, "01740190") {
-		t.Fatalf("reply %s lost the battery along with the position", without)
+	// 4.0 V, the sensor's 21.5 C on channel 2, then the board's 35.2 C.
+	if got := replyHex(t, PermAll, self, row, oneSensor(Temperature, 21.5)); got != "01740190026700D701670160" {
+		t.Fatalf("reply %s, want 01740190026700D701670160", got)
 	}
 }
 
@@ -114,28 +108,33 @@ func request(path int) *meshcore.Packet {
 	return &meshcore.Packet{Header: meshcore.MakeHeader(meshcore.RouteTypeFlood, meshcore.PayloadTypeReq, 0), Path: make([]byte, path)}
 }
 
-// A map the editor accepts has to arrive whole on every common path, beside the node's own voltage, temperature and position.
+// A map the editor accepts has to arrive whole on every common path, beside the node's own voltage and temperature.
 func TestBuildReply_AMapAtTheBudgetFitsEveryCommonReply(t *testing.T) {
 	var entries []ChannelEntry
-	for ch := 2; ch <= 22; ch++ {
+	for ch := 2; ch <= 24; ch++ {
 		entries = append(entries, ChannelEntry{Channel: byte(ch), Type: meshcore.LPPGenericSensor, SensorID: 1, Metric: Temperature})
 	}
-	for ch := 23; ch <= 24; ch++ {
-		entries = append(entries, ChannelEntry{Channel: byte(ch), Type: meshcore.LPPTemperature, SensorID: 1, Metric: Temperature})
-	}
-	if n := TelemetrySize(entries); n != MaxTelemetryPayload {
+	entries = append(entries,
+		ChannelEntry{Channel: 25, Type: meshcore.LPPTemperature, SensorID: 1, Metric: Temperature},
+		ChannelEntry{Channel: 26, Type: meshcore.LPPRelativeHumidity, SensorID: 1, Metric: Humidity})
+	if n := telemetrySize(entries); n != MaxTelemetryPayload {
 		t.Fatalf("the map is %d bytes, not the %d budget this test is about", n, MaxTelemetryPayload)
 	}
 	if err := ValidateChannelMap(entries); err != nil {
 		t.Fatalf("refused a map at the budget: %v", err)
 	}
 
-	temp, lat, lon := 21.5, -41.2865, 174.7762
-	self := SelfReadings{BatteryVolts: 4.1, TempC: &temp, Lat: &lat, Lon: &lon}
+	temp := 21.5
+	self := SelfReadings{BatteryVolts: 4.1, TempC: &temp}
+	sts := []Status{{
+		Spec:     Spec{ID: 1},
+		Readings: []Reading{{Metric: Temperature, Value: 22.5}, {Metric: Humidity, Value: 50}},
+		At:       time.Now(),
+	}}
 	var body []byte
 	for _, path := range []int{-1, 0, 1, 2, 17} {
 		var dropped bool
-		body, dropped = BuildReply(PermAll, self, entries, oneSensor(Temperature, 22.5), MaxReplyBody(request(path)))
+		body, dropped = BuildReply(PermAll, self, entries, sts, MaxReplyBody(request(path)))
 		if dropped {
 			t.Errorf("a %d-byte flood path (-1 is direct) dropped a map the editor accepted", path)
 		}

@@ -6,7 +6,6 @@ import (
 	"encoding/hex"
 	"io"
 	"log/slog"
-	"math"
 	"path/filepath"
 	"strings"
 	"sync"
@@ -176,65 +175,39 @@ func TestTelemetry_OversizedMapFallsBackToTheNodesOwnChannel(t *testing.T) {
 	}
 }
 
-// Position is its own class, and it rides on the self channel like the firmware's.
-func TestTelemetry_LocationClass(t *testing.T) {
+// The firmware sends a position only from a GPS module, never the one typed in for adverts, and no host here has one.
+func TestTelemetry_NeverSendsATypedInPosition(t *testing.T) {
 	lat, lon := -41.2865, 174.7762
-	cfg := config.CompanionConfig{
-		TelemetryBase: mode(config.TelemetryContacts),
-		Latitude:      &lat, Longitude: &lon,
-	}
-	c := telemetryCompanion(t, cfg, nil)
+	c := telemetryCompanion(t, config.CompanionConfig{
+		TelemetryBase:     mode(config.TelemetryContacts),
+		TelemetryLocation: mode(config.TelemetryContacts),
+		Latitude:          &lat, Longitude: &lon,
+	}, nil)
 
-	if got, _ := replyHex(t, c, sensor.PermAll, 0); strings.Contains(got, "0188") {
-		t.Fatalf("reply %s carries a position the location class denies", got)
-	}
-
-	c.cfg.TelemetryLocation = mode(config.TelemetryContacts)
-	body, ok := c.telemetryReply(sensor.PermAll, 0, directRequest)
-	if !ok {
-		t.Fatal("the node refused to answer")
-	}
-	readings, err := meshcore.LPPDecode(body)
-	if err != nil {
-		t.Fatalf("decoding the reply: %v", err)
-	}
-	var gps *meshcore.LPPGPSValue
-	for _, r := range readings {
-		if v, isGPS := r.Value.(meshcore.LPPGPSValue); isGPS {
-			if r.Channel != sensor.ChannelSelf {
-				t.Errorf("position on channel %d, want the self channel", r.Channel)
-			}
-			gps = &v
-		}
-	}
-	if gps == nil {
-		t.Fatal("the reply carries no position")
-	}
-	// 0.0001 degrees is the type's own resolution.
-	if math.Abs(gps.Latitude-lat) > 0.0002 || math.Abs(gps.Longitude-lon) > 0.0002 {
-		t.Errorf("position %v, %v, want %v, %v", gps.Latitude, gps.Longitude, lat, lon)
+	got, ok := replyHex(t, c, sensor.PermAll, 0)
+	if !ok || got != "01740190" {
+		t.Fatalf("reply %s (answered %v), want the battery and no position", got, ok)
 	}
 }
 
-// The editor's budget has to hold on the companion's own reply path, position included, or a saved map goes out as channel 1 alone.
+// The editor's budget has to hold on the companion's own reply path, or a saved map goes out as channel 1 alone.
 func TestTelemetry_AMapAtTheBudgetReachesTheRequester(t *testing.T) {
-	lat, lon := -41.2865, 174.7762
 	c := telemetryCompanion(t, config.CompanionConfig{
 		TelemetryBase:        mode(config.TelemetryContacts),
-		TelemetryLocation:    mode(config.TelemetryContacts),
 		TelemetryEnvironment: mode(config.TelemetryContacts),
-		Latitude:             &lat, Longitude: &lon,
 	}, func() ([]sensor.ChannelEntry, []sensor.Status) {
 		var entries []sensor.ChannelEntry
 		for ch := 2; ch <= 24; ch++ {
-			typ := meshcore.LPPGenericSensor
-			if ch > 22 {
-				typ = meshcore.LPPTemperature
-			}
-			entries = append(entries, sensor.ChannelEntry{Channel: byte(ch), Type: typ, SensorID: 1, Metric: sensor.Temperature})
+			entries = append(entries, sensor.ChannelEntry{Channel: byte(ch), Type: meshcore.LPPGenericSensor, SensorID: 1, Metric: sensor.Temperature})
 		}
-		_, sts := oneRow(2, meshcore.LPPTemperature, sensor.Temperature, 22.5)()
-		return entries, sts
+		entries = append(entries,
+			sensor.ChannelEntry{Channel: 25, Type: meshcore.LPPTemperature, SensorID: 1, Metric: sensor.Temperature},
+			sensor.ChannelEntry{Channel: 26, Type: meshcore.LPPRelativeHumidity, SensorID: 1, Metric: sensor.Humidity})
+		return entries, []sensor.Status{{
+			Spec:     sensor.Spec{ID: 1},
+			Readings: []sensor.Reading{{Metric: sensor.Temperature, Value: 22.5}, {Metric: sensor.Humidity, Value: 50}},
+			At:       time.Now(),
+		}}
 	})
 	c.stats = fakeStats{device: modem.DeviceStats{BatteryMV: 4000, HaveBattery: true, MCUTempC: 21.5, HaveMCUTemp: true}}
 
@@ -242,8 +215,8 @@ func TestTelemetry_AMapAtTheBudgetReachesTheRequester(t *testing.T) {
 	if !ok {
 		t.Fatal("the node refused to answer")
 	}
-	if want := sensor.MaxTelemetryPayload + 19; len(body) != want {
-		t.Fatalf("reply is %d bytes, want %d: the map at the budget beside the node's own 19", len(body), want)
+	if want := sensor.MaxTelemetryPayload + 8; len(body) != want {
+		t.Fatalf("reply is %d bytes, want %d: the map at the budget beside the node's own 8", len(body), want)
 	}
 }
 

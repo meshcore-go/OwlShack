@@ -27,11 +27,18 @@ const MODES: { value: TelemetryMode; label: string }[] = [
   { value: "contacts", label: "Every contact" },
 ];
 
-const CLASSES = [
+// note says when a class has nothing to send; a firmware node sends a position only from its GPS.
+const CLASSES: { key: "base" | "location" | "environment"; bit: number; label: string; short: string; note?: string }[] = [
   { key: "base", bit: PERM_BASE, label: "Battery and device", short: "device" },
-  { key: "location", bit: PERM_LOCATION, label: "Position", short: "position" },
+  {
+    key: "location",
+    bit: PERM_LOCATION,
+    label: "Position",
+    short: "position",
+    note: "Only a GPS fix is sent, and this host has no GPS.",
+  },
   { key: "environment", bit: PERM_ENVIRONMENT, label: "Sensor readings", short: "sensors" },
-] as const;
+];
 
 type Modes = Record<(typeof CLASSES)[number]["key"], TelemetryMode>;
 
@@ -213,6 +220,9 @@ export function TelemetryAccess({
                     ))}
                   </SelectContent>
                 </Select>
+                {c.note ? (
+                  <p className="font-mono text-[11px] sm:text-[10px] leading-relaxed text-muted-foreground/70">{c.note}</p>
+                ) : null}
               </div>
             ))}
           </div>

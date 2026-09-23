@@ -11,8 +11,8 @@ import (
 // ChannelSelf is the channel the firmware keeps for a node's own readings; sensors start above it.
 const ChannelSelf = 1
 
-// MaxTelemetryPayload leaves the node's own 19 bytes (voltage, temperature, position) in 153, the least MaxReplyBody gives a direct route or a flood path of up to 17 bytes.
-const MaxTelemetryPayload = 153 - 19
+// MaxTelemetryPayload leaves the node's own 8 bytes (voltage and temperature) in 153, the least MaxReplyBody gives a direct route or a flood path of up to 17 bytes.
+const MaxTelemetryPayload = 153 - 8
 
 // MaxChannel is the highest channel offered; the firmware stops at 17 (MAX_ACTIVE_SENSORS of 16).
 const MaxChannel = 32
@@ -20,7 +20,7 @@ const MaxChannel = 32
 // Telemetry permission classes (firmware SensorManager.h); a requester masks classes out, not in.
 const (
 	PermBase        byte = 0x01 // the node itself: battery, MCU temperature
-	PermLocation    byte = 0x02 // position
+	PermLocation    byte = 0x02 // position, which the firmware sends only from a GPS module, and no host here has one
 	PermEnvironment byte = 0x04 // everything the operator attached
 	PermAll         byte = 0xFF
 )
@@ -86,7 +86,7 @@ var lppTypes = []LPPType{
 
 func LPPTypes() []LPPType { return slices.Clone(lppTypes) }
 
-func LookupLPPType(code byte) (LPPType, bool) {
+func lookupLPPType(code byte) (LPPType, bool) {
 	i := slices.IndexFunc(lppTypes, func(t LPPType) bool { return t.Code == code })
 	if i < 0 {
 		return LPPType{}, false
@@ -131,11 +131,11 @@ type ChannelEntry struct {
 	Metric   Metric
 }
 
-// TelemetrySize counts every row whether or not its sensor reads, so the budget cannot shrink.
-func TelemetrySize(entries []ChannelEntry) int {
+// telemetrySize counts every row whether or not its sensor reads, so the budget cannot shrink.
+func telemetrySize(entries []ChannelEntry) int {
 	n := 0
 	for _, e := range entries {
-		t, ok := LookupLPPType(e.Type)
+		t, ok := lookupLPPType(e.Type)
 		if !ok {
 			continue
 		}
@@ -148,12 +148,12 @@ func TelemetrySize(entries []ChannelEntry) int {
 func ValidateChannelMap(entries []ChannelEntry) error {
 	seen := map[[2]byte]bool{}
 	for _, e := range entries {
-		t, ok := LookupLPPType(e.Type)
+		t, ok := lookupLPPType(e.Type)
 		if !ok {
 			return fmt.Errorf("%d is not an LPP type this build can publish", e.Type)
 		}
 		// The node's own channel takes only what a consumer reads there as the node itself, and a row there replaces the built-in reading.
-		if e.Channel == ChannelSelf && !IsSelfType(e.Type) {
+		if e.Channel == ChannelSelf && !isSelfType(e.Type) {
 			return fmt.Errorf("channel %d is the node's own: it carries a battery voltage or a board temperature, not a %s", ChannelSelf, t.Name)
 		}
 		if e.Channel == 0 {
@@ -171,17 +171,13 @@ func ValidateChannelMap(entries []ChannelEntry) error {
 		}
 		seen[key] = true
 	}
-	if n := TelemetrySize(entries); n > MaxTelemetryPayload {
+	if n := telemetrySize(entries); n > MaxTelemetryPayload {
 		return fmt.Errorf("this map needs %d bytes and a reply holds %d", n, MaxTelemetryPayload)
 	}
 	return nil
 }
 
-// EncodeTelemetry appends a map's readings; a missing, failing or unread sensor is left out rather than sent stale.
-func EncodeTelemetry(enc *meshcore.LPPEncoder, entries []ChannelEntry, statuses []Status) {
-	encodeEntries(enc, entries, statuses, func(ChannelEntry) bool { return true })
-}
-
+// encodeEntries appends the wanted rows' readings; a missing, failing or unread sensor is left out rather than sent stale.
 func encodeEntries(enc *meshcore.LPPEncoder, entries []ChannelEntry, statuses []Status, want func(ChannelEntry) bool) {
 	byID := make(map[int64]Status, len(statuses))
 	for _, s := range statuses {

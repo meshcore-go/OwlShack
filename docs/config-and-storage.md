@@ -395,7 +395,7 @@ GET  /api/sensors/providers
 POST /api/sensors/discover                                   { provider? }   (candidates beside problems, such as a bus that would not open)
 GET  /api/sensors/kinds                                      (the parts catalogue)
 POST /api/sensors                      PUT|DELETE /api/sensors/{id}   (refused when it would strand a published channel or a derived sensor)
-GET  /api/sensors/telemetry-map                              (every node's map, the LPP catalogue and defaults, the 134-byte budget)
+GET  /api/sensors/telemetry-map                              (every node's map, the LPP catalogue and defaults, the 145-byte budget)
 PUT  /api/sensors/telemetry-map                              { node, entries }   (entries required; [] clears the node's map)
 
 POST /api/backup                                             (options JSON -> .db file download)

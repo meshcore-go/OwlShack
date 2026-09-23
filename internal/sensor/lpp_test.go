@@ -17,7 +17,7 @@ func status(id int64, name string, at time.Time, err string, readings ...Reading
 func encode(t *testing.T, entries []ChannelEntry, statuses []Status) string {
 	t.Helper()
 	enc := meshcore.NewLPPEncoder()
-	EncodeTelemetry(enc, entries, statuses)
+	encodeEntries(enc, entries, statuses, everyRow)
 	return strings.ToUpper(hex.EncodeToString(enc.Bytes()))
 }
 
@@ -109,7 +109,7 @@ func TestEncodeTelemetry_AppendsToTheNodesOwnChannel(t *testing.T) {
 	before := len(enc.Bytes())
 
 	statuses := []Status{status(1, "air", time.Now(), "", Reading{Metric: Temperature, Value: 22.5})}
-	EncodeTelemetry(enc, []ChannelEntry{{Channel: 2, Type: meshcore.LPPTemperature, SensorID: 1, Metric: Temperature}}, statuses)
+	encodeEntries(enc, []ChannelEntry{{Channel: 2, Type: meshcore.LPPTemperature, SensorID: 1, Metric: Temperature}}, statuses, everyRow)
 
 	got := strings.ToUpper(hex.EncodeToString(enc.Bytes()))
 	if !strings.HasPrefix(got, "0174") {
@@ -126,7 +126,7 @@ func TestTelemetrySize_CountsHeaderAndPayload(t *testing.T) {
 		{Channel: 2, Type: meshcore.LPPRelativeHumidity}, // 2 + 1
 		{Channel: 3, Type: meshcore.LPPGenericSensor},    // 2 + 4
 	}
-	if got := TelemetrySize(entries); got != 13 {
+	if got := telemetrySize(entries); got != 13 {
 		t.Fatalf("size %d, want 13", got)
 	}
 }
@@ -204,7 +204,7 @@ func TestValidateChannelMap_RefusesAMapTooBigForOnePacket(t *testing.T) {
 			Channel: byte(ch), Type: meshcore.LPPGenericSensor, SensorID: 1, Metric: Resistance,
 		})
 	}
-	if n := TelemetrySize(entries); n <= MaxTelemetryPayload {
+	if n := telemetrySize(entries); n <= MaxTelemetryPayload {
 		t.Fatalf("the map only needs %d bytes, so this does not test the budget", n)
 	}
 	err := ValidateChannelMap(entries)
@@ -303,10 +303,10 @@ func TestEncodeTelemetry_PegsAValueOutsideTheTypesRange(t *testing.T) {
 		{meshcore.LPPDistance, -1, 0},
 		{meshcore.LPPEnergy, 1e12, 4294967.295},
 	} {
-		typ, _ := LookupLPPType(tc.typ)
+		typ, _ := lookupLPPType(tc.typ)
 		entries := []ChannelEntry{{Channel: 2, Type: tc.typ, SensorID: 1, Metric: Temperature}}
 		enc := meshcore.NewLPPEncoder()
-		EncodeTelemetry(enc, entries, []Status{status(1, "x", time.Now(), "", Reading{Metric: Temperature, Value: tc.v})})
+		encodeEntries(enc, entries, []Status{status(1, "x", time.Now(), "", Reading{Metric: Temperature, Value: tc.v})}, everyRow)
 		got, err := meshcore.LPPDecode(enc.Bytes())
 		if err != nil || len(got) != 1 {
 			t.Fatalf("%s %v: decoded %v, %v", typ.Name, tc.v, got, err)
@@ -316,3 +316,6 @@ func TestEncodeTelemetry_PegsAValueOutsideTheTypesRange(t *testing.T) {
 		}
 	}
 }
+
+// everyRow wants every row, as a reply with every class allowed does.
+func everyRow(ChannelEntry) bool { return true }

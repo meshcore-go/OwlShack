@@ -334,6 +334,15 @@ the mask says, and gives a guest (ACL role 0) base only
 (`simple_repeater/MyMesh.cpp` `handleRequest`); a blank guest password admits
 anyone. `internal/node/repeater/request.go` does the same.
 
+A reply goes in the firmware's order: the battery, then the sensors, then the
+MCU temperature last. There is never a position: the firmware sends GPS only
+from a GPS module (`EnvironmentSensorManager::querySensors` wants `gps_active`,
+and the boards with one built in send its fix), never the position typed in for
+adverts, and no host here has one. The location class is stored for parity and
+gates nothing. A flood a companion answers with (the path return, or the
+datagram when it has no route back) takes the companion's own path hash size,
+as `sendFloodScoped` uses `path_hash_mode + 1`; companions never scope a flood.
+
 Channel 1 carries a voltage unless the operator mapped one there and its sensor
 is failing. `getBattMilliVolts()` returns 0 on a board with no cell, so a
 firmware node always sends one, and so do we when no row replaces it: a
@@ -348,9 +357,9 @@ re-frames what it decrypts, block padding included, behind an 8-byte push header
 `MAX_FRAME_SIZE` 176. So a body holds at most 156 bytes direct, 154 or 153 over a
 zero- or one-byte flood path, and 170 less the path from two bytes up (the path
 return's `[pathLen][path][type]` sits inside the ciphertext).
-`sensor.MaxReplyBody` holds that arithmetic; a map may take 134 bytes, 153 less
-the node's own voltage, temperature and position, and a longer path sends
-channel 1 alone. Channel 0 is refused: the firmware's LPP reader treats it as the
+`sensor.MaxReplyBody` holds that arithmetic; a map may take 145 bytes, 153 less
+the node's own voltage and temperature, and a longer path sends channel 1
+alone. Channel 0 is refused: the firmware's LPP reader treats it as the
 end of the data.
 
 ## Room servers (chat — "talking" is implemented; management UI is not)

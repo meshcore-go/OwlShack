@@ -25,7 +25,8 @@ Schema `user_version` 17: adds the sensor tables and who may read each companion
   own battery.
 - **Who may read a companion's telemetry.** Battery and device, position, and sensor readings each
   have their own setting, as on a firmware companion: no one, chosen contacts, or every contact.
-  All three start at no one, so a companion answers nothing until you allow it.
+  All three start at no one, so a companion answers nothing until you allow it. A position is
+  never sent: a firmware node sends one only from a GPS, and the host has none.
 
 ### Changed
 

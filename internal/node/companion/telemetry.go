@@ -115,7 +115,7 @@ func (c *Companion) telemetryReply(granted, mask byte, req *meshcore.Packet) ([]
 	return body, true
 }
 
-// selfReadings is the modem board's cell and temperature and the configured position; HaveBattery clears when the modem goes quiet, so a stale cell reads 0.
+// selfReadings is the modem board's cell and temperature; HaveBattery clears when the modem goes quiet, so a stale cell reads 0.
 func (c *Companion) selfReadings() sensor.SelfReadings {
 	var out sensor.SelfReadings
 	if c.stats != nil {
@@ -124,12 +124,9 @@ func (c *Companion) selfReadings() sensor.SelfReadings {
 			out.BatteryVolts = float64(ds.BatteryMV) / 1000
 		}
 		if ds.HaveMCUTemp {
-			c := ds.MCUTempC
-			out.TempC = &c
+			t := ds.MCUTempC
+			out.TempC = &t
 		}
-	}
-	if c.cfg.HasLatLon() {
-		out.Lat, out.Lon = c.cfg.Latitude, c.cfg.Longitude
 	}
 	return out
 }
