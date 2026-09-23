@@ -74,7 +74,7 @@ func (h *Hub) Providers(ctx context.Context) []ProviderInfo {
 
 // Discover scans providers, all of them when providerID is empty; one that could not be scanned lands in Problems.
 func (h *Hub) Discover(ctx context.Context, providerID string) (DiscoverResult, error) {
-	// A scan and a live read share the bus, and each identify sequence is several transactions; -race cannot see that interleaving.
+	// A scan's reads share the bus with live ones, and a part mid-measurement answers the first read it sees; -race cannot see that.
 	h.pollMu.Lock()
 	defer h.pollMu.Unlock()
 
@@ -99,6 +99,9 @@ func (h *Hub) Discover(ctx context.Context, providerID string) (DiscoverResult, 
 		}
 		for _, c := range found {
 			c.Provider = id
+			if c.Addable {
+				c.UsedBy, _ = h.claimedBy(Spec{Provider: id, Kind: c.Kind, Options: c.Options})
+			}
 			res.Candidates = append(res.Candidates, c)
 		}
 	}
@@ -188,7 +191,7 @@ func (h *Hub) Prepare(spec Spec) (Spec, error) {
 			return spec, err
 		}
 	}
-	if err := h.checkUnique(spec, p); err != nil {
+	if err := h.checkUnique(spec); err != nil {
 		return spec, err
 	}
 	if err := h.checkBindings(spec); err != nil {
@@ -198,30 +201,42 @@ func (h *Hub) Prepare(spec Spec) (Spec, error) {
 }
 
 // checkUnique refuses a collision: a name, which is how other screens tell sensors apart, or a chip, which two sensors would interleave reads on.
-func (h *Hub) checkUnique(spec Spec, p Provider) error {
-	claimer, _ := p.(Claimer)
-	claim := ""
-	if claimer != nil {
-		claim = claimer.Claim(spec)
+func (h *Hub) checkUnique(spec Spec) error {
+	h.mu.RLock()
+	taken := ""
+	for id, e := range h.entries {
+		// Editing a sensor never collides with itself.
+		if id != spec.ID && strings.EqualFold(e.spec.Name, spec.Name) {
+			taken = e.spec.Name
+		}
 	}
+	h.mu.RUnlock()
+	if taken != "" {
+		return fmt.Errorf("another sensor is already called %q", taken)
+	}
+	if name, claim := h.claimedBy(spec); name != "" {
+		return fmt.Errorf("%s already uses %s", name, claim)
+	}
+	return nil
+}
 
+// claimedBy names the configured sensor, other than the spec's own, already on the part the spec would claim, and that claim.
+func (h *Hub) claimedBy(spec Spec) (name, claim string) {
+	claimer, ok := h.providers[spec.Provider].(Claimer)
+	if !ok {
+		return "", ""
+	}
+	if claim = claimer.Claim(spec); claim == "" {
+		return "", ""
+	}
 	h.mu.RLock()
 	defer h.mu.RUnlock()
 	for id, e := range h.entries {
-		if id == spec.ID {
-			continue // editing a sensor never collides with itself
-		}
-		if strings.EqualFold(e.spec.Name, spec.Name) {
-			return fmt.Errorf("another sensor is already called %q", e.spec.Name)
-		}
-		if claim == "" || e.spec.Provider != spec.Provider {
-			continue
-		}
-		if other, ok := h.providers[e.spec.Provider].(Claimer); ok && other.Claim(e.spec) == claim {
-			return fmt.Errorf("%s already uses %s", e.spec.Name, claim)
+		if id != spec.ID && e.spec.Provider == spec.Provider && claimer.Claim(e.spec) == claim {
+			return e.spec.Name, claim
 		}
 	}
-	return nil
+	return "", claim
 }
 
 // Reports is what a sensor of this spec publishes: its kind's metrics, and the one its operator names where the kind asks for one.

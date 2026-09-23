@@ -40,6 +40,8 @@ export interface SensorCandidate {
   detail?: string;
   // false for a part this build cannot drive; still listed, or an unknown part reads as an empty bus.
   addable: boolean;
+  // usedBy names the sensor already on this part, empty while the part is free.
+  usedBy: string;
   options: Record<string, string>;
 }
 

@@ -46,7 +46,7 @@ function buildEntries(
   catalogue: SensorKind[],
   found: Map<SensorKind, string>,
   query: string,
-): { sections: Section[]; unknown: SensorCandidate[]; matched: number } {
+): { sections: Section[]; unknown: SensorCandidate[]; taken: SensorCandidate[]; matched: number } {
   const byKind = new Map(catalogue.map((k) => [`${k.provider}/${k.kind}`, k]));
   const terms = query.trim().toLowerCase().split(/\s+/).filter(Boolean);
   const matches = (k: SensorKind) => {
@@ -57,9 +57,14 @@ function buildEntries(
 
   const detected: Entry[] = [];
   const unknown: SensorCandidate[] = [];
+  const taken: SensorCandidate[] = [];
   for (const c of scan?.candidates ?? []) {
     if (!c.addable) {
       unknown.push(c);
+      continue;
+    }
+    if (c.usedBy) {
+      taken.push(c);
       continue;
     }
     const k = byKind.get(`${c.provider}/${c.kind}`);
@@ -93,7 +98,7 @@ function buildEntries(
   for (const [label, rows] of [...grouped.entries()].sort(([a], [b]) => a.localeCompare(b))) {
     sections.push({ label, rows });
   }
-  return { sections, unknown, matched: detected.length };
+  return { sections, unknown, taken, matched: detected.length };
 }
 
 export function SensorCatalogue({
@@ -119,7 +124,7 @@ export function SensorCatalogue({
   onPick: (e: Entry) => void;
 }) {
   const found = useMemo(() => haystacks(catalogue ?? []), [catalogue]);
-  const { sections, unknown, matched } = useMemo(
+  const { sections, unknown, taken, matched } = useMemo(
     () => buildEntries(scan, catalogue ?? [], found, query),
     [scan, catalogue, found, query],
   );
@@ -244,6 +249,11 @@ export function SensorCatalogue({
           {matched > 0 ? (
             <p className="font-mono text-[11px] sm:text-[10px] leading-relaxed text-muted-foreground/70">
               A scan only reads, so these are matched by address; the part is checked when you add it.
+            </p>
+          ) : null}
+          {taken.length > 0 ? (
+            <p className="font-mono text-[11px] sm:text-[10px] leading-relaxed text-muted-foreground/70">
+              Already added: {taken.map((c) => `${c.usedBy} (${c.detail})`).join(", ")}
             </p>
           ) : null}
           {unknown.length > 0 ? (

@@ -67,10 +67,19 @@ function seedPick(editing: Sensor, kinds: SensorKind[]): Pick {
 // snapshot is what an edit would save, so an unchanged form can say so.
 const snapshot = (p: Pick) => JSON.stringify([p.name.trim(), p.options, p.bindings]);
 
+// The server refuses the same names on save; these say so before it is asked.
+const MAX_NAME = 64;
+const CONTROL = /[\p{Cc}\p{Bidi_Control}]/u;
+
 // blockedBy says why the form cannot be saved yet, in the operator's words, or null when it can.
-function blockedBy(pick: Pick | null): string | null {
+function blockedBy(pick: Pick | null, sensors: Sensor[], editingId?: number): string | null {
   if (!pick) return "Choose a part first.";
-  if (!pick.name.trim()) return "Give it a name.";
+  const name = pick.name.trim();
+  if (!name) return "Give it a name.";
+  if ([...name].length > MAX_NAME) return `Keep the name to ${MAX_NAME} characters.`;
+  if (CONTROL.test(name)) return "Take the control characters out of the name.";
+  const twin = sensors.find((s) => s.id !== editingId && s.name.toLowerCase() === name.toLowerCase());
+  if (twin) return `Another sensor is already called ${twin.name}.`;
   // In the order the form asks, so the reason points at the first thing to fix.
   if (pick.kind.binds && pick.bindings.length === 0) return "Choose at least one sensor for it to read.";
   if (pick.kind.binds && pick.bindings.some((b) => !b.name.trim() || !b.sensorId)) {
@@ -182,7 +191,7 @@ export function SensorDialog({
     });
   }, []);
 
-  const blocked = blockedBy(pick);
+  const blocked = blockedBy(pick, sensors, editing?.id);
   const unchanged = editing !== null && pick !== null && snapshot(pick) === seed;
 
   return (

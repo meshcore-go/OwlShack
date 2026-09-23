@@ -95,7 +95,7 @@ func (b *backend) DiscoverSensors(ctx context.Context, provider string) (api.Sen
 	for _, c := range res.Candidates {
 		out.Candidates = append(out.Candidates, api.SensorCandidate{
 			Kind: c.Kind, Provider: c.Provider, Label: c.Label, Detail: c.Detail,
-			Addable: c.Addable, Options: c.Options,
+			Addable: c.Addable, UsedBy: c.UsedBy, Options: c.Options,
 		})
 	}
 	for _, p := range res.Problems {

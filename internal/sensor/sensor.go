@@ -134,6 +134,8 @@ type Candidate struct {
 	Detail   string
 	// Addable is always set: a part found but undrivable must not leave the bus looking empty.
 	Addable bool
+	// UsedBy names the configured sensor already on this part, and is empty while the part is free.
+	UsedBy  string
 	Options map[string]string
 }
 

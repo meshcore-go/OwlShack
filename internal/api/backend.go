@@ -311,7 +311,9 @@ type SensorCandidate struct {
 	Label    string `json:"label"`
 	Detail   string `json:"detail,omitempty"`
 	// Addable is false for a part this build cannot drive; it is still listed, or an unknown part reads as an empty bus.
-	Addable bool              `json:"addable"`
+	Addable bool `json:"addable"`
+	// UsedBy names the sensor already on this part, empty while it is free, so the page need not offer what saving refuses.
+	UsedBy  string            `json:"usedBy"`
 	Options map[string]string `json:"options"`
 }
 

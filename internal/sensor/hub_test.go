@@ -792,3 +792,33 @@ func TestFormatOf_MarksWhatIsNotAMeasurement(t *testing.T) {
 		}
 	}
 }
+
+// scanningProvider finds a chip at 0x43 and one at 0x44, so a test sees which of them a configured sensor holds.
+type scanningProvider struct{ claimingProvider }
+
+func (*scanningProvider) Discover(context.Context) ([]Candidate, error) {
+	return []Candidate{
+		{Kind: "chip", Label: "Chip", Addable: true, Options: map[string]string{"address": "0x43"}},
+		{Kind: "chip", Label: "Chip", Addable: true, Options: map[string]string{"address": "0x44"}},
+	}, nil
+}
+
+// A scan names the sensor already on a part it finds, or the page offers a chip that saving then refuses.
+func TestHub_DiscoverNamesTheSensorAlreadyOnAPart(t *testing.T) {
+	p := &scanningProvider{}
+	p.available = true
+	h := NewHub(testLog(), p)
+	h.Set([]Spec{claimSpec(1, "first", "0x43")})
+
+	res, err := h.Discover(t.Context(), "claiming")
+	if err != nil {
+		t.Fatal(err)
+	}
+	used := map[string]string{}
+	for _, c := range res.Candidates {
+		used[c.Options["address"]] = c.UsedBy
+	}
+	if used["0x43"] != "first" || used["0x44"] != "" {
+		t.Fatalf("used by %v, want 0x43 held by first and 0x44 free", used)
+	}
+}
