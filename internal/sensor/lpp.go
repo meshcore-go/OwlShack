@@ -1,6 +1,7 @@
 package sensor
 
 import (
+	"errors"
 	"fmt"
 	"math"
 	"slices"
@@ -157,7 +158,7 @@ func ValidateChannelMap(entries []ChannelEntry) error {
 			return fmt.Errorf("channel %d is the node's own: it carries a battery voltage or a board temperature, not a %s", ChannelSelf, t.Name)
 		}
 		if e.Channel == 0 {
-			return fmt.Errorf("channel 0 marks the end of the reply, so a decoder reads nothing after it")
+			return errors.New("channel 0 marks the end of the reply, so a decoder reads nothing after it")
 		}
 		if e.Channel > MaxChannel {
 			return fmt.Errorf("channel %d is above %d, the highest this build publishes on", e.Channel, MaxChannel)

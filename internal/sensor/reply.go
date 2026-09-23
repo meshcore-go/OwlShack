@@ -2,6 +2,7 @@ package sensor
 
 import (
 	"bytes"
+	"slices"
 
 	meshcore "github.com/meshcore-go/meshcore-go"
 )
@@ -10,7 +11,7 @@ import (
 var selfTypes = []byte{meshcore.LPPVoltage, meshcore.LPPTemperature}
 
 // SelfTypes are the LPP types a channel map may put on the node's own channel.
-func SelfTypes() []byte { return append([]byte(nil), selfTypes...) }
+func SelfTypes() []byte { return slices.Clone(selfTypes) }
 
 // isSelfType reports whether the node's own channel may carry this type.
 func isSelfType(t byte) bool { return bytes.IndexByte(selfTypes, t) >= 0 }

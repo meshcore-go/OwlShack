@@ -99,7 +99,6 @@ func Open(ctx context.Context, path string) (*Store, error) {
 	return s, nil
 }
 
-// WriteAsync queues fn on the writer goroutine and never blocks; false means the queue was full and fn was dropped.
 // WriterStats reports the write queue and its drops; lastDrop is zero when none, which the ever-rising count alone cannot say.
 func (s *Store) WriterStats() (queued, capacity int, dropped uint64, lastDrop time.Time) {
 	if nanos := s.lastDrop.Load(); nanos != 0 {
@@ -108,6 +107,7 @@ func (s *Store) WriterStats() (queued, capacity int, dropped uint64, lastDrop ti
 	return len(s.writerCh), cap(s.writerCh), s.dropped.Load(), lastDrop
 }
 
+// WriteAsync queues fn on the writer goroutine and never blocks; false means the queue was full and fn was dropped.
 func (s *Store) WriteAsync(fn func()) bool {
 	if s.closed() {
 		return false
