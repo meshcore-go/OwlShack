@@ -389,7 +389,10 @@ func (s *Server) serverError(w http.ResponseWriter, msg string, err error) {
 	writeError(w, http.StatusInternalServerError, msg)
 }
 
+// maxJSONBody is far past any real request: a bulk delete of 15,000 peers fits.
+const maxJSONBody = 1 << 20
+
 func readJSON(r *http.Request, v any) error {
 	defer r.Body.Close()
-	return json.NewDecoder(r.Body).Decode(v)
+	return json.NewDecoder(http.MaxBytesReader(nil, r.Body, maxJSONBody)).Decode(v)
 }
