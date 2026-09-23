@@ -123,3 +123,74 @@ export async function deleteSensor(id: number): Promise<void> {
   const res = await fetch(`/api/sensors/${id}`, { method: "DELETE" });
   if (!res.ok) throw new Error(await apiErrorMessage(res));
 }
+
+// TelemetryNode names the map's owner; each node answers for itself, so a channel means nothing without it.
+export interface TelemetryNode {
+  kind: string;
+  id: number;
+}
+
+export interface TelemetryNodeInfo {
+  node: TelemetryNode;
+  name: string;
+  // serves is false for a node that stores a map but cannot answer a telemetry request yet.
+  serves: boolean;
+  reason?: string;
+}
+
+// TelemetryMapEntry is one reading published on a channel as a type the operator chose.
+export interface TelemetryMapEntry {
+  node: TelemetryNode;
+  channel: number;
+  type: number;
+  sensorId: number;
+  metric: string;
+}
+
+export interface LPPType {
+  code: number;
+  name: string;
+  unit?: string;
+  // bytes is the payload plus its two-byte header: what this row costs of the budget.
+  bytes: number;
+  // step is the smallest change the type carries, so the loss is visible before saving.
+  step: number;
+}
+
+export interface TelemetryMap {
+  nodes: TelemetryNodeInfo[];
+  entries: TelemetryMapEntry[];
+  types: LPPType[];
+  // defaults maps a metric to the type it is offered as; an absent metric has no obvious answer.
+  defaults: Record<string, number>;
+  selfChannel: number;
+  // What the node's own channel may carry; a row there replaces the node's built-in reading.
+  selfTypes: number[];
+  // maxChannel is the highest channel worth offering, not the highest a byte holds.
+  maxChannel: number;
+  // maxBytes is the budget each node's own reply has to fit; nodes do not share it.
+  maxBytes: number;
+}
+
+export const sameNode = (a: TelemetryNode, b: TelemetryNode) =>
+  a.kind === b.kind && a.id === b.id;
+
+export async function fetchTelemetryMap(): Promise<TelemetryMap> {
+  const res = await fetch("/api/sensors/telemetry-map");
+  if (!res.ok) throw new Error(await apiErrorMessage(res));
+  return (await res.json()) as TelemetryMap;
+}
+
+// Saves one node's map; every other node's is left alone.
+export async function saveTelemetryMap(
+  node: TelemetryNode,
+  entries: TelemetryMapEntry[],
+): Promise<TelemetryMap> {
+  const res = await fetch("/api/sensors/telemetry-map", {
+    method: "PUT",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ node, entries }),
+  });
+  if (!res.ok) throw new Error(await apiErrorMessage(res));
+  return (await res.json()) as TelemetryMap;
+}

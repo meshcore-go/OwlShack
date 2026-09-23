@@ -136,7 +136,7 @@ func (b *backend) SensorKinds(provider string) ([]api.SensorKindInfo, error) {
 	return out, nil
 }
 
-// sensorWrites holds each sensor change from its checks to its reload; ponytail: one process-wide lock, per-sensor if edits queue behind a slow reload.
+// sensorWrites holds each sensor or map change from its checks to its reload; ponytail: one process-wide lock, per-sensor if edits queue behind a slow reload.
 var sensorWrites sync.Mutex
 
 func (b *backend) CreateSensor(ctx context.Context, in api.SensorInput) (int64, error) {
@@ -165,7 +165,7 @@ func (b *backend) UpdateSensor(ctx context.Context, id int64, in api.SensorInput
 	if err != nil {
 		return err
 	}
-	if err := b.checkDependents(spec); err != nil {
+	if err := b.checkDependents(ctx, spec); err != nil {
 		return err
 	}
 	row := store.Sensor{
@@ -176,12 +176,37 @@ func (b *backend) UpdateSensor(ctx context.Context, id int64, in api.SensorInput
 	if err != nil {
 		return err
 	}
-	return loadSensors(context.WithoutCancel(ctx), b.db, b.sensors)
+	ctx = context.WithoutCancel(ctx)
+	if err := loadSensors(ctx, b.db, b.sensors); err != nil {
+		return err
+	}
+	if b.telemetry != nil {
+		return b.telemetry.Load(ctx, b.db)
+	}
+	return nil
 }
 
-// checkDependents refuses an edit that would leave a derived sensor reading something this one stops reporting.
-func (b *backend) checkDependents(spec sensor.Spec) error {
+// checkDependents refuses an edit that would leave a published channel or a derived sensor reading something this one stops reporting.
+func (b *backend) checkDependents(ctx context.Context, spec sensor.Spec) error {
 	reports := b.sensors.Reports(spec)
+	if b.telemetry != nil {
+		nodes, err := b.telemetryNodes(ctx)
+		if err != nil {
+			return err
+		}
+		names := map[api.TelemetryNode]string{}
+		for _, n := range nodes {
+			names[n.Node] = n.Name
+		}
+		for node, entries := range b.telemetry.All() {
+			for _, e := range entries {
+				if e.SensorID == spec.ID && !reports[e.Metric] {
+					return fmt.Errorf("channel %d of %s publishes %s from this sensor, which it would no longer report; take it off that map first",
+						e.Channel, names[api.TelemetryNode{Kind: node.Kind, ID: node.ID}], e.Metric)
+				}
+			}
+		}
+	}
 	for _, s := range b.sensors.Snapshot() {
 		for _, bd := range s.Spec.Bindings {
 			if bd.SensorID == spec.ID && !reports[bd.Metric] {
@@ -254,7 +279,15 @@ func (b *backend) DeleteSensor(ctx context.Context, id int64) error {
 	if err != nil {
 		return err
 	}
-	return loadSensors(context.WithoutCancel(ctx), b.db, b.sensors)
+	ctx = context.WithoutCancel(ctx)
+	if err := loadSensors(ctx, b.db, b.sensors); err != nil {
+		return err
+	}
+	// A deleted sensor takes its map rows with it, so the publisher has to be told.
+	if b.telemetry != nil {
+		return b.telemetry.Load(ctx, b.db)
+	}
+	return nil
 }
 
 func sensorStatusDTOs(in []sensor.Status) []api.SensorStatus {

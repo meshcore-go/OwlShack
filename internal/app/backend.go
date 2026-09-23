@@ -36,13 +36,15 @@ type backend struct {
 	discover *discover.Service
 	// sensors outlives every radio generation: local sensors are not on the mesh.
 	sensors *sensor.Hub
+	// telemetry is the channel map the repeater publishes from; it outlives a radio generation too.
+	telemetry *telemetryPublisher
 }
 
-func newBackend(companions []*companion.Companion, rep *repeater.Repeater, db *store.Store, stats modem.StatsProvider, mux *node.RadioMux, reload func() error, resetModem func(), disc *discover.Service, sensors *sensor.Hub) *backend {
+func newBackend(companions []*companion.Companion, rep *repeater.Repeater, db *store.Store, stats modem.StatsProvider, mux *node.RadioMux, reload func() error, resetModem func(), disc *discover.Service, sensors *sensor.Hub, telemetry *telemetryPublisher) *backend {
 	return &backend{
 		companions: companions, repeater: rep, db: db,
 		stats: stats, mux: mux, reload: reload, resetModem: resetModem, discover: disc,
-		sensors: sensors,
+		sensors: sensors, telemetry: telemetry,
 	}
 }
 

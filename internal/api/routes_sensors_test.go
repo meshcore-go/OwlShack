@@ -84,3 +84,34 @@ func TestReadJSON_RefusesAnOversizedBody(t *testing.T) {
 		t.Fatalf("an ordinary body got %d and %d creates, so the refusal proves nothing", code, b.created)
 	}
 }
+
+type mapBackend struct {
+	Backend
+	sets int
+}
+
+func (m *mapBackend) SetTelemetryMap(context.Context, TelemetryNode, []TelemetryMapEntry) error {
+	m.sets++
+	return nil
+}
+
+func (m *mapBackend) TelemetryMap(context.Context) (TelemetryMap, error) { return TelemetryMap{}, nil }
+
+// A body with no entries is a mistake, not a request to clear the map; clearing one says so with [].
+func TestSetTelemetryMap_RequiresEntries(t *testing.T) {
+	for body, want := range map[string]int{
+		`{"node":{"kind":"repeater","id":1}}`:                http.StatusBadRequest,
+		`{"node":{"kind":"repeater","id":1},"entries":null}`: http.StatusBadRequest,
+		`{"node":{"kind":"repeater","id":1},"entries":[]}`:   http.StatusOK,
+	} {
+		b := &mapBackend{}
+		s := &Server{mux: http.NewServeMux()}
+		s.routes()
+		s.SetBackend(b)
+		rec := httptest.NewRecorder()
+		s.mux.ServeHTTP(rec, httptest.NewRequest(http.MethodPut, "/api/sensors/telemetry-map", strings.NewReader(body)))
+		if rec.Code != want || (want != http.StatusOK && b.sets != 0) {
+			t.Errorf("%s: %d with %d saves, want %d", body, rec.Code, b.sets, want)
+		}
+	}
+}

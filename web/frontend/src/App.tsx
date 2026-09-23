@@ -32,6 +32,11 @@ const ContactDetailPage = lazy(() =>
     default: m.ContactDetailPage,
   })),
 );
+const CompanionTelemetryPage = lazy(() =>
+  import("@/pages/CompanionTelemetryPage").then((m) => ({
+    default: m.CompanionTelemetryPage,
+  })),
+);
 const ChannelsPage = lazy(() =>
   import("@/pages/ChannelsPage").then((m) => ({ default: m.ChannelsPage })),
 );
@@ -145,6 +150,10 @@ export function App() {
           <Route
             path="/companions/:ref/contacts/:pubkey"
             element={<ContactDetailPage />}
+          />
+          <Route
+            path="/companions/:ref/telemetry"
+            element={<CompanionTelemetryPage />}
           />
           <Route
             path="/companions/:ref/channels"

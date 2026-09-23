@@ -28,6 +28,7 @@ type Store struct {
 	AppConfig      *AppConfigRepo
 	Settings       *SettingsRepo
 	Sensors        *SensorRepo
+	TelemetryMap   *TelemetryMapRepo
 	Mqtt           *MqttRepo
 	Brokers        *BrokerRepo
 	Companions     *CompanionRepo
@@ -73,6 +74,7 @@ func Open(ctx context.Context, path string) (*Store, error) {
 		AppConfig:      &AppConfigRepo{db: db},
 		Settings:       &SettingsRepo{db: db},
 		Sensors:        &SensorRepo{db: db},
+		TelemetryMap:   &TelemetryMapRepo{db: db},
 		Mqtt:           &MqttRepo{db: db},
 		Brokers:        &BrokerRepo{db: db},
 		Companions:     &CompanionRepo{db: db},
@@ -239,7 +241,7 @@ var migrations = []func(context.Context, dbExecer) error{
 	migrateV12,  // 14 — clamp triggers.path_hash_size to the 3-byte maximum the rest of the app uses
 	migrateV13,  // 15 — settings.modem_token (the openHop modem's access token)
 	migrateV14,  // 16 — optional group bot failover
-	migrateV15,  // 17 — the sensor framework: sensors and what they have learned
+	migrateV15,  // 17 — the sensor framework: sensors, telemetry_map, companion telemetry modes
 }
 
 // dbExecer is the subset of *sql.DB / *sql.Tx a migration needs.
@@ -688,7 +690,7 @@ func migrateV11(ctx context.Context, db dbExecer) error {
 	return err
 }
 
-// migrateV15 adds the sensor framework: sensors and their learned state.
+// migrateV15 adds the sensor framework: sensors, their learned state, the channel map, and who may read a companion's telemetry.
 func migrateV15(ctx context.Context, db dbExecer) error {
 	for _, q := range []string{
 		`CREATE TABLE IF NOT EXISTS sensors (
@@ -699,12 +701,26 @@ func migrateV15(ctx context.Context, db dbExecer) error {
 			options  TEXT NOT NULL DEFAULT '{}',
 			bindings TEXT NOT NULL DEFAULT '[]'
 		)`,
+		// Keyed by node kind and id rather than a foreign key, because a row may belong to the repeater singleton.
+		`CREATE TABLE IF NOT EXISTS telemetry_map (
+			id        INTEGER PRIMARY KEY AUTOINCREMENT,
+			node_kind TEXT    NOT NULL,
+			node_id   INTEGER NOT NULL,
+			channel   INTEGER NOT NULL,
+			lpp_type  INTEGER NOT NULL,
+			sensor_id INTEGER NOT NULL REFERENCES sensors(id) ON DELETE CASCADE,
+			metric    TEXT NOT NULL,
+			UNIQUE (node_kind, node_id, channel, lpp_type)
+		)`,
 		// One row per sensor, replaced in place: what a sensor has learned, never a series of it.
 		`CREATE TABLE IF NOT EXISTS sensor_state (
 			sensor_id  INTEGER PRIMARY KEY REFERENCES sensors(id) ON DELETE CASCADE,
 			state      TEXT NOT NULL,
 			updated_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP
 		)`,
+		`ALTER TABLE companions ADD COLUMN telem_base TEXT NOT NULL DEFAULT 'deny'`,
+		`ALTER TABLE companions ADD COLUMN telem_loc TEXT NOT NULL DEFAULT 'deny'`,
+		`ALTER TABLE companions ADD COLUMN telem_env TEXT NOT NULL DEFAULT 'deny'`,
 	} {
 		if _, err := db.ExecContext(ctx, q); err != nil {
 			return err

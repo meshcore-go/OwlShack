@@ -114,6 +114,18 @@ export interface ConfigCompanion {
   pathHashSize: number | null; // null = inherit the global default
   dmPolicy: string; // contacts | allowlist | anyone
   dmAllow: string[] | null;
+  // Who may read each class of telemetry: deny | selected | contacts.
+  telemetryBase: TelemetryMode;
+  telemetryLocation: TelemetryMode;
+  telemetryEnvironment: TelemetryMode;
+}
+
+export type TelemetryMode = "deny" | "selected" | "contacts";
+
+export interface CompanionTelemetryInput {
+  base: TelemetryMode;
+  location: TelemetryMode;
+  environment: TelemetryMode;
 }
 
 export interface ConfigChannel {
@@ -389,6 +401,10 @@ export const configApi = {
       ? requestId(`/api/config/companions/${id}`, "PUT", input)
       : requestId("/api/config/companions", "POST", input),
   deleteCompanion: (id: number) => request(`/api/config/companions/${id}`, "DELETE"),
+
+  // Its own endpoint: sending these with the rest of a companion would let any other form reset them.
+  setCompanionTelemetry: (id: number, input: CompanionTelemetryInput) =>
+    request(`/api/config/companions/${id}/telemetry`, "PUT", input),
 
   createChannel: (companionId: number, input: ChannelInput) =>
     requestId(`/api/config/companions/${companionId}/channels`, "POST", input),

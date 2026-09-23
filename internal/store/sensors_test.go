@@ -162,3 +162,42 @@ func TestSensorRepo_StateRoundTrip(t *testing.T) {
 		t.Errorf("a deleted sensor's state was written back: %q, %v", got, err)
 	}
 }
+
+// The map keys on node kind and id, so a repeater's rows outlive it unless Clear takes them, and the next repeater created publishes them.
+func TestRepeaterClear_TakesItsChannelMap(t *testing.T) {
+	t.Parallel()
+	st := newTestStore(t)
+	ctx := t.Context()
+
+	s := Sensor{Provider: "pisugar", Kind: "pisugar", Name: "UPS", Options: map[string]string{}}
+	c := Companion{Name: "home"}
+	row := []TelemetryMapEntry{{Channel: 2, LPPType: 116, SensorID: 0, Metric: "voltage"}}
+	st.WriteSync(func() {
+		if err := st.Sensors.Create(ctx, &s); err != nil {
+			t.Fatal(err)
+		}
+		if err := st.Companions.Create(ctx, &c); err != nil {
+			t.Fatal(err)
+		}
+		if err := st.Repeater.Set(ctx, &Repeater{Name: "rep"}); err != nil {
+			t.Fatal(err)
+		}
+		row[0].SensorID = s.ID
+		for _, node := range []TelemetryNode{{Kind: NodeKindRepeater, ID: RepeaterNodeID}, {Kind: NodeKindCompanion, ID: c.ID}} {
+			if err := st.TelemetryMap.ReplaceForNode(ctx, node, row); err != nil {
+				t.Fatal(err)
+			}
+		}
+		if err := st.Repeater.Clear(ctx); err != nil {
+			t.Fatal(err)
+		}
+	})
+
+	left, err := st.TelemetryMap.List(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(left) != 1 || left[0].Node.Kind != NodeKindCompanion {
+		t.Fatalf("after clearing the repeater the map holds %+v, want the companion's row alone", left)
+	}
+}

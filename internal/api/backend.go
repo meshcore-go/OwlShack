@@ -45,6 +45,11 @@ type Backend interface {
 	// DeleteSensor stops and forgets one sensor.
 	DeleteSensor(ctx context.Context, id int64) error
 
+	// TelemetryMap is which sensor readings each node publishes over the mesh, and what it costs.
+	TelemetryMap(ctx context.Context) (TelemetryMap, error)
+	// SetTelemetryMap replaces one node's map, which is validated as one thing because the rules are per node.
+	SetTelemetryMap(ctx context.Context, node TelemetryNode, entries []TelemetryMapEntry) error
+
 	// ChannelByHash resolves a channel hash byte across every companion; nil when unknown.
 	ChannelByHash(hash byte) *ChannelInfo
 
@@ -89,6 +94,8 @@ type Backend interface {
 	SaveBroker(ctx context.Context, in BrokerInput) (int64, error)
 	DeleteBroker(ctx context.Context, id int64) error
 	SaveCompanion(ctx context.Context, in CompanionInput) (int64, error)
+	// SetCompanionTelemetry sets who may read each class of a companion's telemetry.
+	SetCompanionTelemetry(ctx context.Context, id int64, in CompanionTelemetryInput) error
 	DeleteCompanion(ctx context.Context, id int64) error
 	SaveChannel(ctx context.Context, in ChannelInput) (int64, error)
 	DeleteChannel(ctx context.Context, id int64) error
@@ -451,6 +458,13 @@ type CompanionInput struct {
 	PathHashSize   *int     `json:"pathHashSize"`
 }
 
+// CompanionTelemetryInput is who may read each class: "deny", "selected" or "contacts".
+type CompanionTelemetryInput struct {
+	Base        string `json:"base"`
+	Location    string `json:"location"`
+	Environment string `json:"environment"`
+}
+
 type ChannelInput struct {
 	ID          int64   `json:"id"`
 	CompanionID int64   `json:"companionId"`
@@ -565,4 +579,57 @@ type ImportResult struct {
 	RestartRequired bool   `json:"restartRequired"`
 	SchemaVersion   int    `json:"schemaVersion,omitempty"`
 	Detail          string `json:"detail"`
+}
+
+// TelemetryNode names the map's owner; each node answers for itself, so a channel means nothing without it.
+type TelemetryNode struct {
+	Kind string `json:"kind"`
+	ID   int64  `json:"id"`
+}
+
+// TelemetryNodeInfo is one node an operator can give a map to.
+type TelemetryNodeInfo struct {
+	Node TelemetryNode `json:"node"`
+	Name string        `json:"name"`
+	// Serves is false for a node that stores a map but cannot send it, so the page can say so.
+	Serves bool `json:"serves"`
+	// Reason says why, when Serves is false.
+	Reason string `json:"reason,omitempty"`
+}
+
+// TelemetryMapEntry is one reading published by one node on one LPP channel as one type.
+type TelemetryMapEntry struct {
+	Node     TelemetryNode `json:"node"`
+	Channel  int           `json:"channel"`
+	Type     int           `json:"type"`
+	SensorID int64         `json:"sensorId"`
+	Metric   string        `json:"metric"`
+}
+
+// LPPTypeInfo is one CayenneLPP type a reading can be published as.
+type LPPTypeInfo struct {
+	Code int    `json:"code"`
+	Name string `json:"name"`
+	// Unit is what the type means on the wire, which is not always what the sensor reports in.
+	Unit string `json:"unit,omitempty"`
+	// Bytes is the payload plus the two-byte header, which is what the operator is spending.
+	Bytes int `json:"bytes"`
+	// Step is the smallest change the type can carry, so the loss is visible before saving.
+	Step float64 `json:"step"`
+}
+
+// TelemetryMap is the whole editor payload, so the page cannot render a map against another catalogue.
+type TelemetryMap struct {
+	Nodes   []TelemetryNodeInfo `json:"nodes"`
+	Entries []TelemetryMapEntry `json:"entries"`
+	Types   []LPPTypeInfo       `json:"types"`
+	// Defaults maps a metric to the type it is offered as; an absent metric has no obvious answer.
+	Defaults map[string]int `json:"defaults"`
+	// SelfChannel is the channel a node keeps for its own readings; a row there replaces the built-in one and may carry only SelfTypes.
+	SelfChannel int   `json:"selfChannel"`
+	SelfTypes   []int `json:"selfTypes"`
+	// MaxChannel is the highest channel worth offering; see sensor.MaxChannel for why.
+	MaxChannel int `json:"maxChannel"`
+	// MaxBytes is per node, because the budget is per reply.
+	MaxBytes int `json:"maxBytes"`
 }

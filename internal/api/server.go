@@ -126,6 +126,8 @@ func (s *Server) routes() {
 	s.mux.HandleFunc("POST /api/sensors", s.handleCreateSensor)
 	s.mux.HandleFunc("PUT /api/sensors/{id}", s.handleUpdateSensor)
 	s.mux.HandleFunc("DELETE /api/sensors/{id}", s.handleDeleteSensor)
+	s.mux.HandleFunc("GET /api/sensors/telemetry-map", s.handleTelemetryMap)
+	s.mux.HandleFunc("PUT /api/sensors/telemetry-map", s.handleSetTelemetryMap)
 
 	s.mux.HandleFunc("POST /api/backup", s.handleBackupExport)
 	s.mux.HandleFunc("POST /api/backup/estimate", s.handleBackupEstimate)
@@ -143,6 +145,7 @@ func (s *Server) routes() {
 	s.mux.HandleFunc("DELETE /api/config/mqtt/brokers/{id}", s.handleDeleteBroker)
 	s.mux.HandleFunc("POST /api/config/companions", s.handleSaveCompanion)
 	s.mux.HandleFunc("PUT /api/config/companions/{id}", s.handleSaveCompanion)
+	s.mux.HandleFunc("PUT /api/config/companions/{id}/telemetry", s.handleSetCompanionTelemetry)
 	s.mux.HandleFunc("DELETE /api/config/companions/{id}", s.handleDeleteCompanion)
 	s.mux.HandleFunc("POST /api/config/companions/{id}/channels", s.handleCreateChannel)
 	s.mux.HandleFunc("PUT /api/config/channels/{id}", s.handleSaveChannel)

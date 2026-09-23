@@ -10,7 +10,10 @@ import (
 	"testing"
 	"time"
 
+	meshcore "github.com/meshcore-go/meshcore-go"
+
 	"github.com/meshcore-go/OwlShack/internal/api"
+	"github.com/meshcore-go/OwlShack/internal/config"
 	"github.com/meshcore-go/OwlShack/internal/sensor"
 	"github.com/meshcore-go/OwlShack/internal/store"
 )
@@ -50,7 +53,7 @@ func TestSensorState_ASaveIsWrittenBeforeItReturns(t *testing.T) {
 	}
 }
 
-// A delete that would leave a derived sensor reading nothing is refused, not left dangling.
+// An edit or delete that would leave a channel or a derived sensor reading nothing is refused, not logged or left dangling.
 func TestSensorEdits_RefuseToStrandWhatReadsThem(t *testing.T) {
 	ctx := t.Context()
 	db, err := store.Open(ctx, filepath.Join(t.TempDir(), "edits.db"))
@@ -59,7 +62,12 @@ func TestSensorEdits_RefuseToStrandWhatReadsThem(t *testing.T) {
 	}
 	defer db.Close()
 	hub := sensor.NewHub(slog.New(slog.NewTextHandler(io.Discard, nil)), sensor.PiSugarProvider{}, &sensor.VirtualProvider{})
-	b := &backend{db: db, sensors: hub}
+	b := &backend{db: db, sensors: hub, telemetry: newTelemetryPublisher(hub)}
+	c := store.Companion{Name: "home"}
+	db.WriteSync(func() { err = db.Companions.Create(ctx, &c) })
+	if err != nil {
+		t.Fatal(err)
+	}
 
 	ups, err := b.CreateSensor(ctx, api.SensorInput{Provider: "pisugar", Kind: "pisugar", Name: "ups", Options: map[string]string{"address": "127.0.0.1:9"}})
 	if err != nil {
@@ -74,11 +82,27 @@ func TestSensorEdits_RefuseToStrandWhatReadsThem(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
+	node := api.TelemetryNode{Kind: store.NodeKindCompanion, ID: c.ID}
+	row := []api.TelemetryMapEntry{{Channel: 2, Type: int(meshcore.LPPAnalogInput), SensorID: id, Metric: "moisture"}}
+	if err := b.SetTelemetryMap(ctx, node, row); err != nil {
+		t.Fatalf("a map reading the expression's own metric was refused: %v", err)
+	}
+
+	derived.Options["metric"] = "humidity"
+	if err := b.UpdateSensor(ctx, id, derived); err == nil || !strings.Contains(err.Error(), "channel 2") {
+		t.Errorf("an edit that strands channel 2 gave %v, want it refused", err)
+	}
 	if err := b.DeleteSensor(ctx, ups); err == nil || !strings.Contains(err.Error(), "double") {
 		t.Errorf("deleting a sensor that double reads gave %v, want it refused", err)
 	}
 
-	// Provokes it: with nothing reading them, the deletes go through.
+	// Provokes both: with nothing reading them, the same edit and deletes go through.
+	if err := b.SetTelemetryMap(ctx, node, []api.TelemetryMapEntry{}); err != nil {
+		t.Fatal(err)
+	}
+	if err := b.UpdateSensor(ctx, id, derived); err != nil {
+		t.Errorf("the edit was refused with nothing reading it: %v", err)
+	}
 	for _, del := range []int64{id, ups} {
 		if err := b.DeleteSensor(ctx, del); err != nil {
 			t.Errorf("deleting sensor %d with nothing reading it: %v", del, err)
@@ -95,7 +119,7 @@ func TestSensorEdits_RacingCreatesOfOneNameMakeOne(t *testing.T) {
 	}
 	defer db.Close()
 	hub := sensor.NewHub(slog.New(slog.NewTextHandler(io.Discard, nil)), sensor.PiSugarProvider{})
-	b := &backend{db: db, sensors: hub}
+	b := &backend{db: db, sensors: hub, telemetry: newTelemetryPublisher(hub)}
 
 	var wg sync.WaitGroup
 	start := make(chan struct{})
@@ -115,4 +139,83 @@ func TestSensorEdits_RacingCreatesOfOneNameMakeOne(t *testing.T) {
 	if len(rows) != 1 {
 		t.Fatalf("%d sensors called ups, want 1", len(rows))
 	}
+}
+
+// A database that cannot be read is an error, not a host with no nodes, which the editor would show as nothing to publish from.
+func TestTelemetryMap_ADatabaseErrorIsNotAnEmptyHost(t *testing.T) {
+	ctx := t.Context()
+	db, err := store.Open(ctx, filepath.Join(t.TempDir(), "nodes.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	hub := sensor.NewHub(slog.New(slog.NewTextHandler(io.Discard, nil)), sensor.PiSugarProvider{})
+	b := &backend{db: db, sensors: hub, telemetry: newTelemetryPublisher(hub)}
+	if _, err := b.TelemetryMap(ctx); err != nil {
+		t.Fatalf("an empty, readable host gave %v", err)
+	}
+	db.Close()
+	if _, err := b.TelemetryMap(ctx); err == nil {
+		t.Fatal("a closed database read as a host with no nodes")
+	}
+}
+
+// A poll wedged on a bus leaves the last reading in place, and sent on it would read as fresh to every requester.
+func TestFreshOnly_DropsAReadingPastThreePolls(t *testing.T) {
+	now := time.Now()
+	sts := []sensor.Status{
+		{Spec: sensor.Spec{ID: 1}, At: now.Add(-sensorPollInterval)},
+		{Spec: sensor.Spec{ID: 2}, At: now.Add(-3*sensorPollInterval - time.Second)},
+		{Spec: sensor.Spec{ID: 3}},
+	}
+	got := freshOnly(sts, now)
+	if len(got) != 1 || got[0].Spec.ID != 1 {
+		t.Fatalf("kept %+v, want only the reading one poll old", got)
+	}
+}
+
+// Modes have their own endpoint, so every other companion edit, and the config a node is built from, must carry them.
+func TestCompanionTelemetryModes_SurviveAnEditAndAReload(t *testing.T) {
+	ctx := t.Context()
+	db, err := store.Open(ctx, filepath.Join(t.TempDir(), "modes.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer db.Close()
+	def := config.DefaultConfig()
+	if err := persistToTables(ctx, db, &def); err != nil {
+		t.Fatal(err)
+	}
+	b := &backend{db: db}
+	id, err := b.SaveCompanion(ctx, api.CompanionInput{Name: "home"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	// One mode per class, so two columns swapped in a scan show up.
+	if err := b.SetCompanionTelemetry(ctx, id, api.CompanionTelemetryInput{Base: "contacts", Location: "selected", Environment: "deny"}); err != nil {
+		t.Fatal(err)
+	}
+	check := func(when string) {
+		t.Helper()
+		cfg, err := readConfigFromTables(ctx, db)
+		if err != nil {
+			t.Fatal(err)
+		}
+		for _, c := range cfg.Companions {
+			if c.ID != id {
+				continue
+			}
+			got := [3]string{strDeref(c.TelemetryBase), strDeref(c.TelemetryLocation), strDeref(c.TelemetryEnvironment)}
+			if got != [3]string{"contacts", "selected", "deny"} {
+				t.Fatalf("%s the modes read back as %v, want contacts, selected, deny", when, got)
+			}
+			return
+		}
+		t.Fatalf("%s the companion is gone from the config", when)
+	}
+	// Checked before the edit too: a swapped scan swaps back when the edit writes what it read.
+	check("once set")
+	if _, err := b.SaveCompanion(ctx, api.CompanionInput{ID: id, Name: "home renamed"}); err != nil {
+		t.Fatal(err)
+	}
+	check("after an edit")
 }

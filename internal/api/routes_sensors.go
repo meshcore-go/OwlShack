@@ -119,3 +119,49 @@ func (s *Server) handleDeleteSensor(w http.ResponseWriter, r *http.Request) {
 	}
 	w.WriteHeader(http.StatusNoContent)
 }
+
+// handleTelemetryMap returns the map with the catalogue and budget it was built against.
+func (s *Server) handleTelemetryMap(w http.ResponseWriter, r *http.Request) {
+	b := s.backendRef()
+	if b == nil {
+		writeError(w, http.StatusServiceUnavailable, "sensors are not ready yet")
+		return
+	}
+	s.writeTelemetryMap(w, r, b)
+}
+
+// writeTelemetryMap answers with the map as it now stands; a node list that could not be read is a failure, not an empty host.
+func (s *Server) writeTelemetryMap(w http.ResponseWriter, r *http.Request, b Backend) {
+	m, err := b.TelemetryMap(r.Context())
+	if err != nil {
+		s.serverError(w, "reading the telemetry map", err)
+		return
+	}
+	writeJSON(w, http.StatusOK, m)
+}
+
+// handleSetTelemetryMap replaces one node's map; what makes a map valid is a property of the set.
+func (s *Server) handleSetTelemetryMap(w http.ResponseWriter, r *http.Request) {
+	b, ok := s.configBackend(w)
+	if !ok {
+		return
+	}
+	var body struct {
+		Node    TelemetryNode        `json:"node"`
+		Entries *[]TelemetryMapEntry `json:"entries"`
+	}
+	if err := readJSON(r, &body); err != nil {
+		writeError(w, http.StatusBadRequest, "invalid JSON: "+err.Error())
+		return
+	}
+	// A body that forgot the entries must not read as clearing the map.
+	if body.Entries == nil {
+		writeError(w, http.StatusBadRequest, "entries is required; send [] to clear the map")
+		return
+	}
+	if err := b.SetTelemetryMap(r.Context(), body.Node, *body.Entries); err != nil {
+		writeError(w, http.StatusUnprocessableEntity, err.Error())
+		return
+	}
+	s.writeTelemetryMap(w, r, b)
+}

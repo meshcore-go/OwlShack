@@ -665,6 +665,8 @@ func (c *Companion) registerPacketHandlers() {
 		c.repeaters.HandleResponsePacket(pkt)
 	})
 
+	c.node.OnPacket(meshcore.PayloadTypeReq, c.handleReq)
+
 	c.node.OnPacket(meshcore.PayloadTypePath, func(pkt *meshcore.Packet) {
 		if c.repeaters.HandlePathPacket(pkt) {
 			return
@@ -678,6 +680,8 @@ type dmCandidate struct {
 	pubkey    []byte
 	name      string
 	isContact bool
+	// telemPerms is the contact's telemetry grant; a non-contact has none.
+	telemPerms byte
 }
 
 // dmCandidates lists every key that could have sent this DM; the peer table is what the firmware decrypts against, its contacts[] auto-adding every advert heard.
@@ -699,7 +703,7 @@ func (c *Companion) dmCandidates(source byte) []dmCandidate {
 		if p := c.knownPeer(ct.PeerPubKey); p != nil && p.Name != "" {
 			name = p.Name
 		}
-		out = append(out, dmCandidate{pubkey: ct.PeerPubKey, name: name, isContact: true})
+		out = append(out, dmCandidate{pubkey: ct.PeerPubKey, name: name, isContact: true, telemPerms: ct.Metadata.TelemPerms})
 	}
 
 	for _, p := range c.node.Peers().LookupByHash([]byte{source}) {

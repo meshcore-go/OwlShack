@@ -4,6 +4,7 @@ import (
 	"context"
 	"database/sql"
 	"encoding/hex"
+	"encoding/json"
 	"errors"
 	"net/http"
 	"strings"
@@ -261,18 +262,31 @@ func (s *Server) handleUpdateContactMetadata(w http.ResponseWriter, r *http.Requ
 		return
 	}
 
-	var meta store.ContactMetadata
-	if err := readJSON(r, &meta); err != nil {
+	// Decoded onto what is stored, so a partial caller changes only the fields it names.
+	var patch json.RawMessage
+	if err := readJSON(r, &patch); err != nil || json.Unmarshal(patch, &store.ContactMetadata{}) != nil {
 		writeError(w, http.StatusBadRequest, "invalid request body")
 		return
 	}
 
 	var updateErr error
 	s.store.WriteSync(func() {
-		updateErr = s.store.Contacts.UpdateMetadata(r.Context(), cid, pubkey, meta)
+		c, err := s.store.Contacts.Get(r.Context(), cid, pubkey)
+		if err != nil {
+			updateErr = err
+			return
+		}
+		meta := c.Metadata
+		if updateErr = json.Unmarshal(patch, &meta); updateErr == nil {
+			updateErr = s.store.Contacts.UpdateMetadata(r.Context(), cid, pubkey, meta)
+		}
 	})
+	if errors.Is(updateErr, sql.ErrNoRows) {
+		writeError(w, http.StatusNotFound, "contact not found")
+		return
+	}
 	if updateErr != nil {
-		writeError(w, http.StatusInternalServerError, "failed to update contact metadata")
+		s.serverError(w, "failed to update contact metadata", updateErr)
 		return
 	}
 
