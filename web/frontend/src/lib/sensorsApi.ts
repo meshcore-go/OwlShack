@@ -24,6 +24,8 @@ export interface Sensor {
   name: string;
   options: Record<string, string>;
   bindings: SensorBinding[];
+  // reports is every metric the sensor publishes under its options, whether or not it has been read.
+  reports: string[];
   readings: SensorReading[];
   // null until read once, separating a first read pending from one that reported nothing.
   at: string | null;

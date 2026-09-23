@@ -3,7 +3,7 @@ import { Plus, Trash2 } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { SourceSelect, sourceGroups } from "@/components/SourceSelect";
-import type { Sensor, SensorBinding, SensorKind } from "@/lib/sensorsApi";
+import type { Sensor, SensorBinding } from "@/lib/sensorsApi";
 
 // freeName fills a blank row's name once its source is chosen: the metric, numbered if already taken.
 function freeName(metric: string, taken: SensorBinding[]): string {
@@ -19,20 +19,15 @@ export function BindingEditor({
   bindings,
   onChange,
   sensors,
-  kinds,
   excludeId,
 }: {
   bindings: SensorBinding[];
   onChange: (b: SensorBinding[]) => void;
   sensors: Sensor[];
-  kinds: SensorKind[];
   // excludeId keeps a sensor out of its own source list; a loop is refused on save either way.
   excludeId?: number;
 }) {
-  const groups = useMemo(
-    () => sourceGroups(sensors, kinds, excludeId),
-    [sensors, kinds, excludeId],
-  );
+  const groups = useMemo(() => sourceGroups(sensors, excludeId), [sensors, excludeId]);
 
   // Client ids: keyed on the index, removing an earlier row destroys the one being typed in.
   const keys = useRef<number[]>([]);

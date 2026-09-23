@@ -4,6 +4,8 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"io"
+	"log/slog"
 	"slices"
 	"strings"
 	"testing"
@@ -739,5 +741,23 @@ func TestBusNames_ByNumber(t *testing.T) {
 	names := busNames()
 	if a, b := slices.Index(names, "zz-a"), slices.Index(names, "zz-b"); a < 0 || b < 0 || b > a {
 		t.Errorf("bus 1002 listed at %d and bus 1010 at %d in %v, want 1002 first", b, a, names)
+	}
+}
+
+// A BME680 with its heater off takes no gas reading, so a channel or binding on its index would read nothing.
+func TestReports_ABME680WithItsHeaterOffReportsNoGas(t *testing.T) {
+	h := NewHub(slog.New(slog.NewTextHandler(io.Discard, nil)), I2CProvider{})
+	spec := func(heater string) Spec {
+		return Spec{Provider: "i2c", Kind: "bme680", Options: map[string]string{"heater": heater}}
+	}
+	off := h.Reports(spec("off"))
+	if off[IAQ] || off[Resistance] || off[AirQualityRunIn] {
+		t.Errorf("heater off reports %v, want no gas or air quality", off)
+	}
+	if !off[Temperature] || !off[Pressure] || !off[Humidity] {
+		t.Errorf("heater off reports %v, want temperature, pressure and humidity", off)
+	}
+	if on := h.Reports(spec("on")); !on[IAQ] || !on[Resistance] {
+		t.Errorf("heater on reports %v, want the gas and the index, so this proves nothing", on)
 	}
 }

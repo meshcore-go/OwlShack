@@ -7,7 +7,7 @@ import {
   SelectTrigger,
   SelectValue,
 } from "@/components/ui/select";
-import type { Sensor, SensorKind } from "@/lib/sensorsApi";
+import type { Sensor } from "@/lib/sensorsApi";
 
 // A group is one sensor and the readings of it that can be pointed at.
 export interface SourceGroup {
@@ -19,25 +19,12 @@ export interface SourceGroup {
 
 const sourceKey = (sensorId: number, metric: string) => `${sensorId}/${metric}`;
 
-// reports mirrors the server's Hub.Reports: a kind's metrics, and its own metric where the kind asks for one.
-function reports(s: Sensor, kind: SensorKind | undefined): string[] {
-  // A kind the catalogue does not carry can only say what it has reported.
-  if (!kind) return s.readings.map((r) => r.metric);
-  const own = kind.fields.some((f) => f.key === "metric") ? s.options.metric?.trim() : "";
-  return own ? [...(kind.metrics ?? []), own] : (kind.metrics ?? []);
-}
-
 // sourceGroups lists what each sensor reports, so one can be chosen before it has ever been read.
-export function sourceGroups(
-  sensors: Sensor[],
-  kinds: SensorKind[],
-  excludeId?: number,
-): SourceGroup[] {
+export function sourceGroups(sensors: Sensor[], excludeId?: number): SourceGroup[] {
   const out: SourceGroup[] = [];
   for (const s of sensors) {
     if (s.id === excludeId) continue;
-    const kind = kinds.find((k) => k.provider === s.provider && k.kind === s.kind);
-    const labels = new Map<string, string>(reports(s, kind).map((m) => [m, m]));
+    const labels = new Map<string, string>(s.reports.map((m) => [m, m]));
     for (const r of s.readings) if (labels.has(r.metric)) labels.set(r.metric, r.label || r.metric);
     if (labels.size > 0) {
       const readings = [...labels].map(([metric, label]) => ({ metric, label }));

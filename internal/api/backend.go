@@ -333,9 +333,11 @@ type SensorStatus struct {
 	Name     string            `json:"name"`
 	Options  map[string]string `json:"options"`
 	Bindings []SensorBinding   `json:"bindings"`
-	Readings []SensorReading   `json:"readings"`
-	At       *string           `json:"at"`
-	Error    string            `json:"error"`
+	// Reports is every metric the sensor publishes under its options, so a picker can offer one before it is ever read.
+	Reports  []string        `json:"reports"`
+	Readings []SensorReading `json:"readings"`
+	At       *string         `json:"at"`
+	Error    string          `json:"error"`
 }
 
 // SensorField is one option a kind needs, so the UI can build a form for a provider it knows nothing about.

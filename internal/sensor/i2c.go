@@ -38,6 +38,8 @@ type chip struct {
 	addrs []uint16
 	// metrics are the Env fields this part fills; an unmeasured one stays zero and would publish.
 	metrics []Metric
+	// reportsUnder narrows metrics by the part's options; nil reports them all.
+	reportsUnder func(options map[string]string) []Metric
 	// fields are the options this part needs beyond the bus and address every part takes.
 	fields []Field
 	// silent marks a part that answers nothing until woken, so no scan can see it.
@@ -78,6 +80,12 @@ var chips = []chip{
 			Temperature, Pressure, Humidity, Resistance, GasCompensated,
 			IAQ, StaticIAQ, CO2Equivalent, BreathVOC, GasPercentage,
 			IAQAccuracy, GasPercentageAccuracy, AirQualityRunIn,
+		},
+		reportsUnder: func(o map[string]string) []Metric {
+			if o["heater"] == "off" {
+				return []Metric{Temperature, Pressure, Humidity}
+			}
+			return nil
 		},
 		fields: []Field{
 			{
@@ -274,7 +282,7 @@ func (I2CProvider) Kinds() []KindInfo {
 		out = append(out, KindInfo{
 			Kind: c.kind, Label: c.label,
 			Description: c.describe, Category: c.category,
-			Metrics: c.metrics,
+			Metrics: c.metrics, ReportsUnder: c.reportsUnder,
 			Fields: append([]Field{
 				{
 					Key: "bus", Label: "Bus", Required: true,

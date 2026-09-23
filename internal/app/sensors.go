@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"log/slog"
+	"slices"
 	"sync"
 	"time"
 
@@ -23,7 +24,7 @@ func startSensors(ctx context.Context, db *store.Store, hub *api.Hub, log *slog.
 		return nil, err
 	}
 	sh.OnUpdate(func(st []sensor.Status) {
-		hub.Broadcast("sensors", sensorStatusDTOs(st))
+		hub.Broadcast("sensors", sensorStatusDTOs(sh, st))
 	})
 	go sh.Poll(ctx, sensorPollInterval)
 	return sh, nil
@@ -62,7 +63,7 @@ func (b *backend) Sensors() []api.SensorStatus {
 	if b.sensors == nil {
 		return []api.SensorStatus{}
 	}
-	return sensorStatusDTOs(b.sensors.Snapshot())
+	return sensorStatusDTOs(b.sensors, b.sensors.Snapshot())
 }
 
 func (b *backend) SensorProviders(ctx context.Context) []api.SensorProviderInfo {
@@ -290,7 +291,7 @@ func (b *backend) DeleteSensor(ctx context.Context, id int64) error {
 	return nil
 }
 
-func sensorStatusDTOs(in []sensor.Status) []api.SensorStatus {
+func sensorStatusDTOs(sh *sensor.Hub, in []sensor.Status) []api.SensorStatus {
 	out := make([]api.SensorStatus, 0, len(in))
 	for _, s := range in {
 		row := api.SensorStatus{
@@ -300,9 +301,14 @@ func sensorStatusDTOs(in []sensor.Status) []api.SensorStatus {
 			Name:     s.Spec.Name,
 			Options:  s.Spec.Options,
 			Bindings: apiBindings(s.Spec.Bindings),
+			Reports:  []string{},
 			Readings: make([]api.SensorReading, 0, len(s.Readings)),
 			Error:    s.Err,
 		}
+		for m := range sh.Reports(s.Spec) {
+			row.Reports = append(row.Reports, string(m))
+		}
+		slices.Sort(row.Reports)
 		if row.Options == nil {
 			row.Options = map[string]string{}
 		}

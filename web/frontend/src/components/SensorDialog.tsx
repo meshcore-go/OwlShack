@@ -215,7 +215,6 @@ export function SensorDialog({
                   }
             }
             sensors={sensors}
-            kinds={kinds ?? []}
             editingId={editing?.id}
           />
         ) : (
@@ -275,14 +274,12 @@ function SensorForm({
   onChange,
   onBack,
   sensors,
-  kinds,
   editingId,
 }: {
   pick: Pick;
   onChange: (p: Pick) => void;
   onBack: (() => void) | null;
   sensors: Sensor[];
-  kinds: SensorKind[];
   editingId?: number;
 }) {
   return (
@@ -330,7 +327,6 @@ function SensorForm({
           bindings={pick.bindings}
           onChange={(bindings) => onChange({ ...pick, bindings })}
           sensors={sensors}
-          kinds={kinds}
           excludeId={editingId}
         />
       ) : null}

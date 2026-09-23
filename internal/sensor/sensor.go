@@ -93,6 +93,8 @@ type KindInfo struct {
 	Category string
 	// Metrics is what the part reports, so the catalogue can be searched by need rather than part number.
 	Metrics []Metric
+	// ReportsUnder, when set, is what a sensor of this kind reports under its options, as a BME680 with its heater off reports no gas.
+	ReportsUnder func(options map[string]string) []Metric
 	// Binds says this kind reads other sensors, so the form offers a binding editor.
 	Binds  bool
 	Fields []Field

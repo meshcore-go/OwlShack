@@ -235,7 +235,13 @@ func (h *Hub) Reports(spec Spec) map[Metric]bool {
 		if k.Kind != spec.Kind {
 			continue
 		}
-		for _, m := range k.Metrics {
+		metrics := k.Metrics
+		if k.ReportsUnder != nil {
+			if narrowed := k.ReportsUnder(spec.Options); narrowed != nil {
+				metrics = narrowed
+			}
+		}
+		for _, m := range metrics {
 			out[m] = true
 		}
 		if slices.ContainsFunc(k.Fields, func(f Field) bool { return f.Key == optMetric }) {

@@ -20,7 +20,6 @@ import {
   saveTelemetryMap,
   type LPPType,
   type Sensor,
-  type SensorKind,
   type TelemetryMap,
   type TelemetryMapEntry,
   type TelemetryNode,
@@ -94,10 +93,6 @@ export const TelemetryMapEditor = memo(
       "/api/sensors",
       "Failed to load sensors",
     );
-    const { items: kinds } = useApiList<SensorKind>(
-      "/api/sensors/kinds",
-      "Failed to load the parts catalogue",
-    );
 
     const load = useCallback(() => {
       setFailed("");
@@ -119,7 +114,7 @@ export const TelemetryMapEditor = memo(
         .catch(() => {});
     }, [reloadToken]);
 
-    const sources = useMemo(() => sourceGroups(sensors ?? [], kinds ?? []), [sensors, kinds]);
+    const sources = useMemo(() => sourceGroups(sensors ?? []), [sensors]);
     const byCode = useMemo(() => new Map((map?.types ?? []).map((t) => [t.code, t])), [map?.types]);
     const selfChannel = map?.selfChannel ?? 0;
     const selfTypesKey = (map?.selfTypes ?? []).join(",");
