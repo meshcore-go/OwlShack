@@ -1,12 +1,12 @@
 package api
 
 import (
+	"errors"
+	"io"
 	"net/http"
 )
 
-// handleSensors lists every configured sensor with its current state. There is no separate list
-// endpoint: the configuration and the readings come from one snapshot, so the page can never show a
-// sensor whose reading belongs to a different set.
+// handleSensors lists sensors and readings from one snapshot, so the page cannot mix two sets.
 func (s *Server) handleSensors(w http.ResponseWriter, r *http.Request) {
 	b := s.backendRef()
 	if b == nil {
@@ -26,8 +26,7 @@ func (s *Server) handleSensorProviders(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, b.SensorProviders(r.Context()))
 }
 
-// handleSensorDiscover asks one provider what it can see. POST because it talks to hardware, even
-// though it configures nothing: probing a bus is not something to do on every page load.
+// handleSensorDiscover scans for parts, every provider unless one is named; POST because it talks to hardware.
 func (s *Server) handleSensorDiscover(w http.ResponseWriter, r *http.Request) {
 	b, ok := s.configBackend(w)
 	if !ok {
@@ -36,16 +35,54 @@ func (s *Server) handleSensorDiscover(w http.ResponseWriter, r *http.Request) {
 	var body struct {
 		Provider string `json:"provider"`
 	}
-	if err := readJSON(r, &body); err != nil {
+	// A chunked body has no ContentLength to test, so decode always and treat only EOF as nothing sent.
+	if err := readJSON(r, &body); err != nil && !errors.Is(err, io.EOF) {
 		writeError(w, http.StatusBadRequest, "invalid JSON: "+err.Error())
 		return
 	}
-	found, err := b.DiscoverSensors(r.Context(), body.Provider)
+	scan, err := b.DiscoverSensors(r.Context(), body.Provider)
 	if err != nil {
 		writeError(w, http.StatusUnprocessableEntity, err.Error())
 		return
 	}
-	writeJSON(w, http.StatusOK, map[string]any{"candidates": found})
+	writeJSON(w, http.StatusOK, scan)
+}
+
+// handleSensorKinds touches no hardware, so it answers for a bus that is unavailable or not yet wired.
+func (s *Server) handleSensorKinds(w http.ResponseWriter, r *http.Request) {
+	b := s.backendRef()
+	if b == nil {
+		writeError(w, http.StatusServiceUnavailable, "sensors are not ready yet")
+		return
+	}
+	kinds, err := b.SensorKinds(r.URL.Query().Get("provider"))
+	if err != nil {
+		writeError(w, http.StatusUnprocessableEntity, err.Error())
+		return
+	}
+	writeJSON(w, http.StatusOK, kinds)
+}
+
+func (s *Server) handleUpdateSensor(w http.ResponseWriter, r *http.Request) {
+	b, ok := s.configBackend(w)
+	if !ok {
+		return
+	}
+	id, ok := pathID(r, "id")
+	if !ok {
+		writeError(w, http.StatusBadRequest, "invalid id")
+		return
+	}
+	var in SensorInput
+	if err := readJSON(r, &in); err != nil {
+		writeError(w, http.StatusBadRequest, "invalid JSON: "+err.Error())
+		return
+	}
+	if err := b.UpdateSensor(r.Context(), id, in); err != nil {
+		writeError(w, http.StatusUnprocessableEntity, err.Error())
+		return
+	}
+	w.WriteHeader(http.StatusNoContent)
 }
 
 func (s *Server) handleCreateSensor(w http.ResponseWriter, r *http.Request) {

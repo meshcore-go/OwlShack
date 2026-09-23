@@ -1,27 +1,25 @@
-// Package sensor is the framework that connects sensor providers to sensor consumers.
-//
-// A Provider knows how to find and open sensors of one origin: the host system, an I2C bus, the
-// modem. A Sensor produces Readings. Consumers never see either - they read from a Hub, which owns
-// the configured set, polls it, and holds the last result for each one.
+// Package sensor polls the configured sensors through a Hub that holds each one's last result.
 package sensor
 
 import (
 	"context"
 	"fmt"
+	"strings"
 	"time"
+	"unicode"
+	"unicode/utf8"
 )
 
-// Provider is one origin of sensors. Implementations are passed to NewHub explicitly; there is no
-// global registry, so a test builds a Hub with exactly the providers it means to exercise.
+// Provider is one origin of sensors; NewHub takes them explicitly, so a test builds exactly the set it exercises.
 type Provider interface {
 	// ID is the stable key stored against every sensor this provider opened.
 	ID() string
 	// Label names the provider in the picker.
 	Label() string
-	// Available reports whether this provider can run here, and why not when it cannot. Finding
-	// nothing and being unable to look are different answers, and the operator needs to tell them
-	// apart: an empty list from an unavailable provider would read as "no sensors here".
+	// Available reports whether this provider can run here; "found nothing" and "could not look" must stay apart.
 	Available(ctx context.Context) (bool, string)
+	// Kinds lists what this provider can open and the options each needs, including parts no scan can see.
+	Kinds() []KindInfo
 	// Discover lists what could be added right now. It must not configure or claim anything.
 	Discover(ctx context.Context) ([]Candidate, error)
 	// Open turns a stored spec into a live sensor.
@@ -38,27 +36,106 @@ type Closer interface {
 	Close() error
 }
 
+// Validator adds rules a field declaration cannot express; it must not touch hardware.
+type Validator interface {
+	Validate(spec Spec) error
+}
+
+// Claimer names the hardware a spec takes exclusive use of; two specs may not claim the same, and an empty claim is shareable.
+type Claimer interface {
+	Claim(spec Spec) string
+}
+
+// Binder is a provider whose sensors read other sensors; the hub hands it a snapshot of itself.
+type Binder interface {
+	Bind(snapshot func() []Status)
+}
+
+// Field is one option a kind needs, declared so the UI can build a form for a provider it knows nothing about.
+type Field struct {
+	// Key is the Options entry this field writes.
+	Key   string
+	Label string
+	// Help is one line under the input, empty when the label says enough.
+	Help string
+	// Default is filled in when the operator leaves the field alone.
+	Default string
+	// Choices constrains the value; empty where an operator may type something unlisted, such as an address behind a multiplexer.
+	Choices []string
+	// Required rejects a spec that leaves this empty and has no default.
+	Required bool
+	// Multiline means the value wants room to grow, such as an expression.
+	Multiline bool
+	// Identifies means the value says which part this is rather than how it is tuned.
+	Identifies bool
+}
+
+// Binding is one reading an expression uses under a name of the operator's choosing, so a rename cannot break it.
+type Binding struct {
+	// Name is what the expression calls this value.
+	Name string
+	// SensorID is the sensor read, and the only part the dependency graph uses.
+	SensorID int64
+	// Metric picks which reading, for a sensor that reports more than one.
+	Metric Metric
+}
+
+// KindInfo is one entry in the parts catalogue, which has to be searchable by whatever the operator knows.
+type KindInfo struct {
+	Kind string
+	// Label is the part as it is printed on the chip, such as "SHTC3".
+	Label string
+	// Provider is filled in by the hub so one flat catalogue can span every provider.
+	Provider string
+	// Description says what the part measures, in the operator's words.
+	Description string
+	// Category groups the catalogue, such as "Environment" or "System".
+	Category string
+	// Metrics is what the part reports, so the catalogue can be searched by need rather than part number.
+	Metrics []Metric
+	// Binds says this kind reads other sensors, so the form offers a binding editor.
+	Binds  bool
+	Fields []Field
+}
+
+// ProviderProblem travels beside the results: one unavailable bus must not hide what the others found.
+type ProviderProblem struct {
+	Provider string
+	Label    string
+	Reason   string
+}
+
+// DiscoverResult keeps what a scan found apart from what it could not look at.
+type DiscoverResult struct {
+	Candidates []Candidate
+	Problems   []ProviderProblem
+}
+
 // Spec is a configured sensor: what the operator picked, as stored.
 type Spec struct {
 	ID       int64
 	Provider string
 	Kind     string
 	Name     string
-	// Options are provider-specific and opaque to everything else, which is what keeps the add form
-	// generic: Discover hands back the options a candidate needs and the UI passes them straight on.
+	// Options are provider-specific and opaque to everything else, which is what keeps the add form generic.
 	Options map[string]string
+	// Bindings are the other sensors this one reads. Empty for anything that talks to hardware.
+	Bindings []Binding
 }
 
 // Candidate is something a provider found. Nothing is configured from it until the operator says so.
 type Candidate struct {
-	Kind    string
-	Label   string
-	Detail  string
+	Kind string
+	// Provider is filled in by the hub, so a candidate carries everything needed to configure it.
+	Provider string
+	Label    string
+	Detail   string
+	// Addable is always set: a part found but undrivable must not leave the bus looking empty.
+	Addable bool
 	Options map[string]string
 }
 
-// Metric names what a reading measures. The set is open: a provider may report anything, and the UI
-// renders the name as given.
+// Metric names what a reading measures; the set is open and the UI renders the name as given.
 type Metric string
 
 const (
@@ -66,12 +143,50 @@ const (
 	Humidity    Metric = "humidity"
 	Pressure    Metric = "pressure"
 	Voltage     Metric = "voltage"
-	Load        Metric = "load"
-	Percentage  Metric = "percentage"
+	Current     Metric = "current"
+	Resistance  Metric = "resistance"
+	// GasCompensated is a gas resistance normalised to reference air, which the raw one is not comparable without.
+	GasCompensated Metric = "gas_compensated"
+	Percentage     Metric = "percentage"
+
+	// Derived by the air-quality fusion, not measured: IAQ is the 0-500 index, and StaticIAQ the same without scaling to the tracked band, so two parts compare.
+	IAQ       Metric = "iaq"
+	StaticIAQ Metric = "static_iaq"
+	// CO2Equivalent and BreathVOC are inferred from the same signal, not measured: a gas sensor cannot tell one molecule from another.
+	CO2Equivalent Metric = "co2_equivalent"
+	BreathVOC     Metric = "breath_voc"
+	GasPercentage Metric = "gas_percentage"
+	// IAQAccuracy and GasPercentageAccuracy say how far the part has calibrated, 0 to 3; below 2 it has not seen both clean and polluted air.
+	IAQAccuracy           Metric = "iaq_accuracy"
+	GasPercentageAccuracy Metric = "gas_percentage_accuracy"
+	// AirQualityRunIn is 1 once the plate has been heated long enough for the index to mean anything.
+	AirQualityRunIn Metric = "air_quality_run_in"
 )
 
-// Reading is one measurement. Label separates readings a sensor reports more than one of, such as
-// the three load averages, and is empty when the metric alone identifies it.
+// Metrics is what the framework itself knows about, not everything a reading may carry.
+func Metrics() []Metric {
+	return []Metric{
+		Temperature, Humidity, Pressure, Voltage, Current, Resistance, GasCompensated, Percentage,
+		IAQ, StaticIAQ, CO2Equivalent, BreathVOC, GasPercentage,
+		IAQAccuracy, GasPercentageAccuracy, AirQualityRunIn,
+	}
+}
+
+// formats marks the readings that are not measurements; every other metric, an operator's own included, is a number.
+var formats = map[Metric]string{
+	Charging: "flag", Plugged: "flag", AirQualityRunIn: "flag",
+	IAQAccuracy: "count", GasPercentageAccuracy: "count",
+}
+
+// FormatOf says how a reading reads: "flag" is a yes or no carried as 1 or 0, "count" a whole number, "number" anything else.
+func FormatOf(m Metric) string {
+	if f, ok := formats[m]; ok {
+		return f
+	}
+	return "number"
+}
+
+// Reading is one measurement; Label separates readings a sensor reports more than one of, and is empty otherwise.
 type Reading struct {
 	Metric Metric
 	Label  string
@@ -79,12 +194,7 @@ type Reading struct {
 	Unit   string
 }
 
-// Status is what a consumer sees for one configured sensor.
-//
-// The three states are deliberately distinguishable: At zero with no Err means configured and not
-// yet polled, At set with no Err means the last read succeeded, and Err set means the last attempt
-// failed - with Readings and At still describing the last read that worked, so a consumer can say
-// how stale they are rather than being handed zeroes.
+// Status keeps three states apart: At zero is never polled, At set is a good read, Err set is a failed attempt over the last good one.
 type Status struct {
 	Spec     Spec
 	Readings []Reading
@@ -101,8 +211,7 @@ type ProviderInfo struct {
 	Reason string
 }
 
-// Validate rejects a spec that names nothing openable. Both fields are required rather than
-// defaulted: a sensor with no provider would be stored, listed, and never read.
+// Validate rejects a spec that names nothing openable; a sensor with no provider would be stored and never read.
 func (s Spec) Validate() error {
 	if s.Provider == "" {
 		return fmt.Errorf("provider is required")
@@ -113,5 +222,27 @@ func (s Spec) Validate() error {
 	if s.Name == "" {
 		return fmt.Errorf("name is required")
 	}
+	if n := utf8.RuneCountInString(s.Name); n > maxNameLen {
+		return fmt.Errorf("name is %d characters, and %d is the most", n, maxNameLen)
+	}
+	if hasControl(s.Name, false) {
+		return fmt.Errorf("name has a control character in it")
+	}
 	return nil
+}
+
+// Caps on what an operator types, far past any real name or expression.
+const (
+	maxNameLen   = 64
+	maxOptionLen = 1024
+)
+
+// hasControl finds a character that only garbles a label, or reorders the text after it; a multiline field keeps its line breaks and tabs.
+func hasControl(s string, multiline bool) bool {
+	return strings.ContainsFunc(s, func(r rune) bool {
+		if multiline && (r == '\n' || r == '\r' || r == '\t') {
+			return false
+		}
+		return unicode.IsControl(r) || unicode.Is(unicode.Bidi_Control, r)
+	})
 }

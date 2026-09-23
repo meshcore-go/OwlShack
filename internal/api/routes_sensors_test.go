@@ -8,6 +8,52 @@ import (
 	"testing"
 )
 
+type discoverBackend struct {
+	Backend
+	provider string
+}
+
+func (d *discoverBackend) DiscoverSensors(_ context.Context, provider string) (SensorScan, error) {
+	d.provider = provider
+	return SensorScan{}, nil
+}
+
+// A chunked request has no ContentLength, so a length test scans every provider instead of the one asked for.
+func TestSensorDiscover_ReadsTheBodyWithoutAContentLength(t *testing.T) {
+	for _, tc := range []struct {
+		name          string
+		body          string
+		chunked, want bool
+		provider      string
+	}{
+		{name: "chunked", body: `{"provider":"i2c"}`, chunked: true, provider: "i2c"},
+		{name: "measured", body: `{"provider":"i2c"}`, provider: "i2c"},
+		{name: "empty", body: ""},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			b := &discoverBackend{}
+			s := &Server{mux: http.NewServeMux()}
+			s.routes()
+			s.SetBackend(b)
+
+			req := httptest.NewRequest(http.MethodPost, "/api/sensors/discover", strings.NewReader(tc.body))
+			if tc.chunked {
+				req.ContentLength = -1
+				req.TransferEncoding = []string{"chunked"}
+			}
+			rec := httptest.NewRecorder()
+			s.mux.ServeHTTP(rec, req)
+
+			if rec.Code != http.StatusOK {
+				t.Fatalf("status %d: %s", rec.Code, rec.Body)
+			}
+			if b.provider != tc.provider {
+				t.Errorf("scanned provider %q, want %q", b.provider, tc.provider)
+			}
+		})
+	}
+}
+
 type createBackend struct {
 	Backend
 	created int

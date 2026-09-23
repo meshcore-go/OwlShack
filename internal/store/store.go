@@ -239,7 +239,7 @@ var migrations = []func(context.Context, dbExecer) error{
 	migrateV12,  // 14 — clamp triggers.path_hash_size to the 3-byte maximum the rest of the app uses
 	migrateV13,  // 15 — settings.modem_token (the openHop modem's access token)
 	migrateV14,  // 16 — optional group bot failover
-	migrateV15,  // 17 — sensors (local sensors, independent of any node)
+	migrateV15,  // 17 — the sensor framework: sensors and what they have learned
 }
 
 // dbExecer is the subset of *sql.DB / *sql.Tx a migration needs.
@@ -688,18 +688,29 @@ func migrateV11(ctx context.Context, db dbExecer) error {
 	return err
 }
 
-// migrateV15 adds the local sensors table. options is provider-specific JSON, defaulted to '{}' so
-// a read never has to decide what NULL meant.
+// migrateV15 adds the sensor framework: sensors and their learned state.
 func migrateV15(ctx context.Context, db dbExecer) error {
-	_, err := db.ExecContext(ctx, `
-		CREATE TABLE IF NOT EXISTS sensors (
+	for _, q := range []string{
+		`CREATE TABLE IF NOT EXISTS sensors (
 			id       INTEGER PRIMARY KEY AUTOINCREMENT,
 			provider TEXT NOT NULL,
 			kind     TEXT NOT NULL,
 			name     TEXT NOT NULL,
-			options  TEXT NOT NULL DEFAULT '{}'
-		)`)
-	return err
+			options  TEXT NOT NULL DEFAULT '{}',
+			bindings TEXT NOT NULL DEFAULT '[]'
+		)`,
+		// One row per sensor, replaced in place: what a sensor has learned, never a series of it.
+		`CREATE TABLE IF NOT EXISTS sensor_state (
+			sensor_id  INTEGER PRIMARY KEY REFERENCES sensors(id) ON DELETE CASCADE,
+			state      TEXT NOT NULL,
+			updated_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP
+		)`,
+	} {
+		if _, err := db.ExecContext(ctx, q); err != nil {
+			return err
+		}
+	}
+	return nil
 }
 
 // migrateV8 adds settings.spi_board; NULL for a KISS modem, which is every pre-existing install.

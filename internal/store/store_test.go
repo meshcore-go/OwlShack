@@ -869,6 +869,16 @@ func TestStore_UpgradeFromReleasedSchema(t *testing.T) {
 		}
 	}
 
+	// The sensor slot creates more than one table, so an upgraded database is where a half-applied slot shows.
+	for _, q := range []string{
+		"SELECT bindings FROM sensors",
+		"SELECT state FROM sensor_state",
+	} {
+		if _, err := st.db.ExecContext(t.Context(), q); err != nil {
+			t.Errorf("after the upgrade, %q: %v", q, err)
+		}
+	}
+
 	if id, err := st.Companions.IDByName(t.Context(), "upgrade-me"); err != nil || id <= 0 {
 		t.Errorf("companion after upgrade: id %d, err %v; want a live row", id, err)
 	}

@@ -31,11 +31,16 @@ type Backend interface {
 	// SensorProviders lists the sensor origins this build knows about, with whether each can run here.
 	SensorProviders(ctx context.Context) []SensorProviderInfo
 
-	// DiscoverSensors asks one provider what it can see. Read-only: nothing is configured from it.
-	DiscoverSensors(ctx context.Context, provider string) ([]SensorCandidate, error)
+	// DiscoverSensors scans providers, or all of them when provider is empty. Read-only.
+	DiscoverSensors(ctx context.Context, provider string) (SensorScan, error)
+
+	// SensorKinds is the parts catalogue; an empty provider returns every provider's.
+	SensorKinds(provider string) ([]SensorKindInfo, error)
 
 	// CreateSensor stores a sensor and starts reading it.
 	CreateSensor(ctx context.Context, in SensorInput) (int64, error)
+
+	UpdateSensor(ctx context.Context, id int64, in SensorInput) error
 
 	// DeleteSensor stops and forgets one sensor.
 	DeleteSensor(ctx context.Context, id int64) error
@@ -288,52 +293,98 @@ type SensorProviderInfo struct {
 	ID        string `json:"id"`
 	Label     string `json:"label"`
 	Available bool   `json:"available"`
-	// Reason says why an unavailable provider cannot run here, so the operator sees "no I2C bus on
-	// this host" rather than an empty list that looks like nothing is attached.
+	// Reason says why an unavailable provider cannot run here, so no I2C bus reads as that and not as an empty list.
 	Reason string `json:"reason,omitempty"`
 }
 
-// SensorCandidate is something a provider found. Options carry whatever that provider needs to open
-// it, ready to be posted straight back, which is what keeps the add form free of per-provider fields.
+// SensorCandidate is something a provider found, its Options ready to post straight back, which keeps the add form free of per-provider fields.
 type SensorCandidate struct {
-	Kind    string            `json:"kind"`
-	Label   string            `json:"label"`
-	Detail  string            `json:"detail,omitempty"`
+	Kind     string `json:"kind"`
+	Provider string `json:"provider"`
+	Label    string `json:"label"`
+	Detail   string `json:"detail,omitempty"`
+	// Addable is false for a part this build cannot drive; it is still listed, or an unknown part reads as an empty bus.
+	Addable bool              `json:"addable"`
 	Options map[string]string `json:"options"`
 }
 
-// SensorReading is one measurement. Label separates readings of the same metric, such as the three
-// load-average windows, and is empty when the metric alone identifies it.
+// SensorReading is one measurement; Label tells apart two readings of one metric, and is empty when the metric alone names it.
 type SensorReading struct {
 	Metric string  `json:"metric"`
 	Label  string  `json:"label,omitempty"`
 	Value  float64 `json:"value"`
 	Unit   string  `json:"unit,omitempty"`
+	// Format is "number", "flag" (a yes or no as 1 or 0) or "count", so the page never shows charging as 1.000.
+	Format string `json:"format"`
 }
 
-// SensorStatus is one configured sensor and its last result.
-//
-// At is null until the sensor has been read once, which is what separates "configured, not yet
-// polled" from "read fine". Error describes the most recent attempt while Readings and At still
-// describe the last one that worked, so a failing sensor shows its last good value and its age
-// rather than being blanked to zeroes.
+// SensorStatus is one sensor; Error describes the latest attempt, Readings and At the last one that worked.
 type SensorStatus struct {
 	ID       int64             `json:"id"`
 	Provider string            `json:"provider"`
 	Kind     string            `json:"kind"`
 	Name     string            `json:"name"`
 	Options  map[string]string `json:"options"`
+	Bindings []SensorBinding   `json:"bindings"`
 	Readings []SensorReading   `json:"readings"`
 	At       *string           `json:"at"`
-	Error    string            `json:"error,omitempty"`
+	Error    string            `json:"error"`
 }
 
-// SensorInput is the add form's payload.
+// SensorField is one option a kind needs, so the UI can build a form for a provider it knows nothing about.
+type SensorField struct {
+	Key   string `json:"key"`
+	Label string `json:"label"`
+	Help  string `json:"help,omitempty"`
+	// Default is filled in when the operator leaves the field alone.
+	Default string `json:"default,omitempty"`
+	// Choices, when set, means the value must be one of these and the UI offers a picker.
+	Choices   []string `json:"choices,omitempty"`
+	Required  bool     `json:"required"`
+	Multiline bool     `json:"multiline,omitempty"`
+	// Identifies means the value says which part this is, so a card can name it without every option.
+	Identifies bool `json:"identifies,omitempty"`
+}
+
+// SensorKindInfo is one entry in the parts catalogue, which has to stay searchable at sixty parts.
+type SensorKindInfo struct {
+	Kind        string        `json:"kind"`
+	Provider    string        `json:"provider"`
+	Label       string        `json:"label"`
+	Description string        `json:"description,omitempty"`
+	Category    string        `json:"category,omitempty"`
+	Metrics     []string      `json:"metrics,omitempty"`
+	Binds       bool          `json:"binds,omitempty"`
+	Fields      []SensorField `json:"fields"`
+}
+
+// SensorProviderProblem sits apart from the results, so an unreadable bus never reads as an empty one.
+type SensorProviderProblem struct {
+	Provider string `json:"provider"`
+	Label    string `json:"label"`
+	Reason   string `json:"reason"`
+}
+
+// SensorScan is one scan: what was found, and what could not be looked at.
+type SensorScan struct {
+	Candidates []SensorCandidate       `json:"candidates"`
+	Problems   []SensorProviderProblem `json:"problems"`
+}
+
+// SensorBinding names one reading under the name an expression calls it, so a rename cannot break it.
+type SensorBinding struct {
+	Name     string `json:"name"`
+	SensorID int64  `json:"sensorId"`
+	Metric   string `json:"metric"`
+}
+
+// SensorInput is the add and edit form's payload.
 type SensorInput struct {
 	Provider string            `json:"provider"`
 	Kind     string            `json:"kind"`
 	Name     string            `json:"name"`
 	Options  map[string]string `json:"options"`
+	Bindings []SensorBinding   `json:"bindings,omitempty"`
 }
 
 type SettingsInput struct {
