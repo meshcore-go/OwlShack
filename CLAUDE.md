@@ -57,7 +57,9 @@ node's single dispatch goroutine and stalls all RX when `writerCh` is full.
 the `migrations` slice; never edit, renumber or squash a slot that has shipped —
 a released DB has stamped that version and will skip it.
 `TestMigrations_ShippedSlotsFrozen` fingerprints the released SQL; a failure
-there means append instead, **not** re-pin the constant. Each migration runs in
+there means append instead, **not** re-pin the constant. The one exception is a
+change to how the harness records SQL: then every digest moves at once, and the
+change must show each shipped slot's SQL is byte-identical before re-pinning. Each migration runs in
 one transaction with its version bump and takes a `dbExecer`, so it must not
 open its own `BeginTx`.
 
