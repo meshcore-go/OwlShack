@@ -31,10 +31,12 @@ radio/connection change still restarts everything (modem reconnect);
 `listenAddr` needs a process restart.
 
 - **Local sensors are not config.** `sensors` (provider, kind, name, options
-  JSON, bindings JSON), `sensor_state` (one row per sensor: what a part like the
-  BME680 has learned, replaced in place) and `telemetry_map` (per node:
-  `node_kind`, `node_id`, channel, LPP type, sensor and metric; unique on node,
-  channel and type) live outside `config.Config` and bypass `configMutate`.
+  JSON, bindings JSON; the name unique ignoring case), `sensor_state` (one row per
+  sensor: what a part like the BME680 has learned, replaced in place) and
+  `telemetry_map` (per node: `node_kind`, `node_id`, channel, LPP type, sensor and
+  metric; unique on node, channel and type) live outside `config.Config` and
+  bypass `configMutate`. `node_kind` and the three `telem_*` columns are CHECKed
+  to their few values.
   Sensor and map writes go through `internal/app/sensors.go` and
   `telemetry_map.go`, which hold `sensorWrites` from their checks to the hub
   reload so racing requests cannot each pass the checks the other breaks.

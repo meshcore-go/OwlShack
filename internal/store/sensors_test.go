@@ -201,3 +201,53 @@ func TestRepeaterClear_TakesItsChannelMap(t *testing.T) {
 		t.Fatalf("after clearing the repeater the map holds %+v, want the companion's row alone", left)
 	}
 }
+
+// The hub's check gives the reason; the index holds against any other writer, folding case as the hub does.
+func TestSensorRepo_RefusesASecondSensorOfOneName(t *testing.T) {
+	t.Parallel()
+	st := newTestStore(t)
+	ctx := t.Context()
+	add := func(name string) error {
+		var err error
+		st.WriteSync(func() {
+			err = st.Sensors.Create(ctx, &Sensor{Provider: "pisugar", Kind: "pisugar", Name: name, Options: map[string]string{}})
+		})
+		return err
+	}
+	if err := add("UPS"); err != nil {
+		t.Fatal(err)
+	}
+	if err := add("ups"); err == nil {
+		t.Error("a second sensor called ups was stored beside UPS")
+	}
+	if err := add("UPS 2"); err != nil {
+		t.Errorf("a different name was refused, so the refusal above proves nothing: %v", err)
+	}
+}
+
+// A value the code would read as deny, or a map row for no kind of node, is refused rather than stored.
+func TestMigrateV15_ChecksTheClosedColumns(t *testing.T) {
+	t.Parallel()
+	st := newTestStore(t)
+	ctx := t.Context()
+	if _, err := st.db.ExecContext(ctx, `INSERT INTO sensors (id, provider, kind, name) VALUES (1, 'pisugar', 'pisugar', 'UPS')`); err != nil {
+		t.Fatal(err)
+	}
+	for _, tc := range []struct{ bad, good string }{
+		{
+			`INSERT INTO companions (name, private_key, pubkey, telem_base) VALUES ('a', '', '', 'everyone')`,
+			`INSERT INTO companions (name, private_key, pubkey, telem_base) VALUES ('b', '', '', 'contacts')`,
+		},
+		{
+			`INSERT INTO telemetry_map (node_kind, node_id, channel, lpp_type, sensor_id, metric) VALUES ('phone', 1, 2, 116, 1, 'voltage')`,
+			`INSERT INTO telemetry_map (node_kind, node_id, channel, lpp_type, sensor_id, metric) VALUES ('companion', 1, 2, 116, 1, 'voltage')`,
+		},
+	} {
+		if _, err := st.db.ExecContext(ctx, tc.bad); err == nil {
+			t.Errorf("stored: %s", tc.bad)
+		}
+		if _, err := st.db.ExecContext(ctx, tc.good); err != nil {
+			t.Errorf("the good row was refused too, so the refusal proves nothing: %v", err)
+		}
+	}
+}
