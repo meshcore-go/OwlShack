@@ -51,7 +51,7 @@ const (
 type Opts struct {
 	// Address selects the SA0 strap; zero means DefaultAddress, since 0x00 is the general call.
 	Address uint16
-	// MeasurementReadTimeout bounds the wait for a conversion; 0 polls forever.
+	// MeasurementReadTimeout bounds the wait for a conversion; zero is DefaultOpts'.
 	MeasurementReadTimeout time.Duration
 }
 
@@ -85,7 +85,7 @@ func NewI2C(bus i2c.Bus, opts *Opts) (*LPS22HB, error) {
 	if d.opts.Address == 0 {
 		d.opts.Address = DefaultAddress
 	}
-	if d.opts.MeasurementReadTimeout < 0 {
+	if d.opts.MeasurementReadTimeout <= 0 {
 		d.opts.MeasurementReadTimeout = DefaultOpts.MeasurementReadTimeout
 	}
 	d.dev = i2c.Dev{Bus: bus, Addr: d.opts.Address}
@@ -157,8 +157,11 @@ func (d *LPS22HB) Sense(e *physic.Env) error {
 	return d.read(e)
 }
 
-// SenseContinuous repeats the one-shot sequence, so every sample was converted for the caller that asked.
+// SenseContinuous repeats the one-shot sequence, so every sample was converted for the caller that asked; the first failed read closes the channel.
 func (d *LPS22HB) SenseContinuous(interval time.Duration) (<-chan physic.Env, error) {
+	if interval <= 0 {
+		return nil, fmt.Errorf("lps22hb: sensing interval %s is not positive", interval)
+	}
 	d.mu.Lock()
 	defer d.mu.Unlock()
 	if d.stop != nil {
@@ -168,9 +171,7 @@ func (d *LPS22HB) SenseContinuous(interval time.Duration) (<-chan physic.Env, er
 	sensing := make(chan physic.Env)
 	stop := make(chan struct{})
 	d.stop = stop
-	d.wg.Add(1)
-	go func() {
-		defer d.wg.Done()
+	d.wg.Go(func() {
 		defer close(sensing)
 		t := time.NewTicker(interval)
 		defer t.Stop()
@@ -184,8 +185,7 @@ func (d *LPS22HB) SenseContinuous(interval time.Duration) (<-chan physic.Env, er
 				err := d.read(&e)
 				d.mu.Unlock()
 				if err != nil {
-					// A transient read error should not tear down the stream.
-					continue
+					return
 				}
 				select {
 				case sensing <- e:
@@ -194,7 +194,7 @@ func (d *LPS22HB) SenseContinuous(interval time.Duration) (<-chan physic.Env, er
 				}
 			}
 		}
-	}()
+	})
 	return sensing, nil
 }
 
@@ -247,7 +247,7 @@ func (d *LPS22HB) await(reg byte, done func(byte) bool) error {
 		if done(v[0]) {
 			return nil
 		}
-		if d.opts.MeasurementReadTimeout > 0 && !time.Now().Before(deadline) {
+		if !time.Now().Before(deadline) {
 			return fmt.Errorf("timed out with register %#02x reading %#02x", reg, v[0])
 		}
 		time.Sleep(pollInterval)

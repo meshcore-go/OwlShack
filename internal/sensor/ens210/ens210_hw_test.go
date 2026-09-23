@@ -66,7 +66,7 @@ func TestHardware_SenseMatchesTheRawRegisters(t *testing.T) {
 	// T_VAL and H_VAL hold the last single-shot result until the next one is started.
 	dev := i2c.Dev{Bus: bus, Addr: DefaultAddress}
 	var raw [6]byte
-	if err := dev.Tx([]byte{REG_T_VAL}, raw[:]); err != nil {
+	if err := dev.Tx([]byte{regTVal}, raw[:]); err != nil {
 		t.Fatalf("re-reading the measurement registers: %v", err)
 	}
 	tRaw := binary.LittleEndian.Uint32(append(raw[0:3:3], 0)) & 0xFFFF

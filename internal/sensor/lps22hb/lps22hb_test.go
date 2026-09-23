@@ -2,6 +2,7 @@ package lps22hb
 
 import (
 	"math"
+	"strings"
 	"testing"
 	"time"
 
@@ -219,5 +220,67 @@ func TestNewI2C_WaitsForTheMemoryRebootNotJustTheResetBit(t *testing.T) {
 	// Close fails unless both boot-status polls were consumed, which is the assertion.
 	if err := bus.Close(); err != nil {
 		t.Errorf("open did not wait out the memory reboot: %v", err)
+	}
+}
+
+// neverReadyBus is an LPS22HB whose conversion never lands: WHO_AM_I answers and every other register reads zero, STATUS included.
+type neverReadyBus struct{}
+
+func (neverReadyBus) String() string                  { return "neverReadyBus" }
+func (neverReadyBus) SetSpeed(physic.Frequency) error { return nil }
+
+func (neverReadyBus) Tx(addr uint16, w, r []byte) error {
+	if len(w) == 1 && w[0] == 0x0F {
+		r[0] = 0xB1
+	}
+	return nil
+}
+
+// Zero is unset, as in every driver here, not "wait for ever": a part that stopped converting would hold its caller for good.
+func TestSense_TakesTheDefaultTimeoutForZero(t *testing.T) {
+	d, err := NewI2C(neverReadyBus{}, &Opts{})
+	if err != nil {
+		t.Fatalf("NewI2C: %v", err)
+	}
+	done := make(chan error, 1)
+	go func() {
+		var e physic.Env
+		done <- d.Sense(&e)
+	}()
+	select {
+	case err := <-done:
+		if err == nil || !strings.Contains(err.Error(), "timed out") {
+			t.Fatalf("Sense gave %v, want a timeout", err)
+		}
+	case <-time.After(10 * DefaultOpts.MeasurementReadTimeout):
+		t.Fatal("a zero timeout waited for ever on a part that never finished")
+	}
+}
+
+// A stream that carried on past a failed read would go quiet for an unplugged part, which reads as a long interval, and a zero interval would panic its ticker.
+func TestSenseContinuous_EndsAtAFailedReadAndRefusesNoInterval(t *testing.T) {
+	bus := &i2ctest.Playback{Ops: append(openOps(DefaultAddress, 0xB1), measureOps(DefaultAddress, 4096*1000, 2150)...), DontPanic: true}
+	d, err := NewI2C(bus, nil)
+	if err != nil {
+		t.Fatalf("NewI2C: %v", err)
+	}
+	if _, err := d.SenseContinuous(0); err == nil {
+		t.Fatal("a zero interval was taken")
+	}
+	ch, err := d.SenseContinuous(time.Millisecond)
+	if err != nil {
+		t.Fatalf("SenseContinuous: %v", err)
+	}
+	defer d.Halt()
+	// The one measurement played back, then the read that finds the part gone.
+	for i, want := range []bool{true, false} {
+		select {
+		case _, ok := <-ch:
+			if ok != want {
+				t.Fatalf("receive %d: open = %v, want %v", i, ok, want)
+			}
+		case <-time.After(10 * DefaultOpts.MeasurementReadTimeout):
+			t.Fatalf("receive %d: the stream went quiet instead of ending", i)
+		}
 	}
 }

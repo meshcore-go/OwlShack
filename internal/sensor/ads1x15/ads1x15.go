@@ -60,18 +60,22 @@ const (
 // Variant is which of the two parts answered.
 type Variant uint8
 
+// The zero Variant is no part, so a Dev that never identified one cannot pass for an ADS1115.
 const (
 	// ADS1115 cannot identify itself, so it is what this driver concludes when it finds no SGM58031.
-	ADS1115 Variant = iota
+	ADS1115 Variant = iota + 1
 	// SGM58031 has seven pointer registers including a Chip_ID, so it says what it is.
 	SGM58031
 )
 
 func (v Variant) String() string {
-	if v == SGM58031 {
+	switch v {
+	case ADS1115:
+		return "ADS1115"
+	case SGM58031:
 		return "SGM58031"
 	}
-	return "ADS1115"
+	return fmt.Sprintf("Variant(%d)", uint8(v))
 }
 
 // Channel is an input selection: one pin against ground, or a documented differential pair.

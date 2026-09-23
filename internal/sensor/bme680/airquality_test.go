@@ -444,6 +444,28 @@ func TestGap_DiscardsRunInAndNothingElse(t *testing.T) {
 	}
 }
 
+// An RTC-less Pi steps its wall clock when NTP syncs, and within a run that is no gap: the plate was heated on time throughout.
+func TestRunIn_SurvivesAWallClockStep(t *testing.T) {
+	t.Parallel()
+	for _, step := range []time.Duration{2 * time.Hour, -2 * time.Hour} {
+		tr := newTracker(pollPeriod)
+		// time.Now carries a monotonic reading, as the driver's stamp does.
+		out, at := run(tr, 50_000, runInSamples, time.Now())
+		if !out.RunIn {
+			t.Fatal("run-in did not complete, so this proves nothing")
+		}
+		// The stored stamp is wall time, so moving it back is the wall clock moving forward between two samples.
+		tr.st.LastGasUnixNano -= step.Nanoseconds()
+		if out := tr.observe(50_000, 25, 40, at); !out.RunIn {
+			t.Errorf("a %s wall-clock step restarted the run-in", step)
+		}
+		// Provokes the positive: a real gap on the monotonic clock still restarts it.
+		if out := tr.observe(50_000, 25, 40, at.Add(3*pollPeriod)); out.RunIn {
+			t.Errorf("a %s gap did not restart the run-in, so the step check proves nothing", 3*pollPeriod)
+		}
+	}
+}
+
 // Output 12's threshold ships at zero, so it is true from the first sample; anything else would be an invented delay, and it gates accuracy.
 func TestStabilised_IsTrueFromTheFirstSample(t *testing.T) {
 	t.Parallel()

@@ -121,6 +121,8 @@ type tracker struct {
 	vocIntercept float64
 
 	st trackerState
+	// last is this run's previous sample, whose monotonic reading an NTP step cannot move.
+	last time.Time
 }
 
 // newTracker sizes the filters, run-in window and promotion count for the period; a period BSEC has no mode for takes the 300 s coefficients (§6.3).
@@ -180,9 +182,13 @@ func coefficient(cutoffHz, periodSec float64) float64 {
 // monitorRunIn is S5 (§11.3): three accumulators latching a flag each, and the soft-start ramp; dt is what this sample carries, zero across a gap.
 func (t *tracker) monitorRunIn(at time.Time) (stabilised, runIn, matured bool, softStart, dt float64) {
 	st := &t.st
-	elapsed := at.Sub(time.Unix(0, st.LastGasUnixNano)).Seconds()
+	last := t.last
+	if last.IsZero() && st.LastGasUnixNano != 0 {
+		last = time.Unix(0, st.LastGasUnixNano) // a restored state has only its wall stamp
+	}
+	elapsed := at.Sub(last).Seconds()
 	switch {
-	case st.LastGasUnixNano == 0:
+	case last.IsZero():
 		elapsed = 0
 	case elapsed > t.maxGapSec || elapsed < 0:
 		st.RunInAccumSec, st.RunIn = 0, false
@@ -207,7 +213,7 @@ func (t *tracker) monitorRunIn(at time.Time) (stabilised, runIn, matured bool, s
 			st.RunIn = true
 		}
 	}
-	st.LastGasUnixNano = at.UnixNano()
+	t.last, st.LastGasUnixNano = at, at.UnixNano()
 
 	softStart = 1.0
 	if !st.RunIn && t.runInSec > 0 {
@@ -218,15 +224,12 @@ func (t *tracker) monitorRunIn(at time.Time) (stabilised, runIn, matured bool, s
 
 // restartRunIn is §11.3's reset for a timestamp that went backwards: run-in starts over and the next sample accrues nothing.
 func (t *tracker) restartRunIn() {
-	t.st.RunIn, t.st.RunInAccumSec, t.st.LastGasUnixNano = false, 0, 0
+	t.st.RunIn, t.st.RunInAccumSec, t.st.LastGasUnixNano, t.last = false, 0, 0, time.Time{}
 }
 
 // condition is S3 (§11.2): the gas goes to log10 and all three signals are low-passed.
 func (t *tracker) condition(gasOhms, tempC, rh float64) (gas, temp, hum float64) {
-	if gasOhms <= gasFloorOhms {
-		gasOhms = gasFloorOhms
-	}
-	g := math.Log10(gasOhms)
+	g := math.Log10(max(gasOhms, gasFloorOhms))
 	if t.st.Smoothed[0] == 0 {
 		t.st.Smoothed = [3]float64{g, tempC, rh}
 	}

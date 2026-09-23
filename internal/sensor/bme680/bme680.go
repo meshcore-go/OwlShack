@@ -205,7 +205,9 @@ type Opts struct {
 	TemperatureOffset physic.Temperature
 	// Ambient is what the heater resistance is calculated against; nothing on the bus can tell us it.
 	Ambient physic.Temperature
-	// SamplePeriod is how often the host will call Sense, which sizes the fusion's filters, run-in and promotion count; zero leaves the fusion off and reports no index.
+	// AirQuality runs the air-quality fusion over the gas readings, which needs the heater and SamplePeriod.
+	AirQuality bool
+	// SamplePeriod is how often the host will call Sense, which sizes the fusion's filters, run-in and promotion count.
 	SamplePeriod time.Duration
 
 	// MeasurementReadTimeout bounds the wait for a conversion to land.
@@ -326,11 +328,17 @@ func NewI2C(bus i2c.Bus, opts *Opts) (*BME680, error) {
 	if o.Filter >= filterCount {
 		return nil, fmt.Errorf("bme680: filter %d is not one of the eight the part has", o.Filter)
 	}
+	switch {
+	case o.AirQuality && o.Heater == HeaterOff:
+		return nil, errors.New("bme680: the air-quality fusion reads the gas plate, whose heater is off")
+	case o.AirQuality && o.SamplePeriod <= 0:
+		return nil, fmt.Errorf("bme680: the air-quality fusion is sized for the period Sense is called at, not %s", o.SamplePeriod)
+	}
 	if o.MeasurementReadTimeout <= 0 {
 		o.MeasurementReadTimeout = DefaultOpts.MeasurementReadTimeout
 	}
 	d := &BME680{dev: &i2c.Dev{Bus: bus, Addr: o.Address}, opts: o}
-	if o.Heater != HeaterOff && o.SamplePeriod > 0 {
+	if o.AirQuality {
 		d.air = newTracker(o.SamplePeriod)
 	}
 	if err := d.init(); err != nil {
@@ -376,8 +384,8 @@ func Probe(bus i2c.Bus, addr uint16) error {
 	return nil
 }
 
-// Variant reports whether the part is a BME688, which measures gas over a wider range.
-func (d *BME680) Variant() byte { return d.variant }
+// IsBME688 reports whether the part is a BME688, which measures gas over a wider range.
+func (d *BME680) IsBME688() bool { return d.variant == variantGasHigh }
 
 func (d *BME680) Address() uint16 { return d.opts.Address }
 
@@ -447,10 +455,7 @@ func (d *BME680) configureHeater() error {
 		}
 		return d.update(regCtrlGas0, maskHeaterOff, maskHeaterOff)
 	}
-	target := d.opts.HeaterTarget.Celsius()
-	if target > maxHeaterTarget {
-		target = maxHeaterTarget
-	}
+	target := min(d.opts.HeaterTarget.Celsius(), maxHeaterTarget)
 	if err := d.write(regResHeat0, d.calib.resHeat(target, d.opts.Ambient.Celsius())); err != nil {
 		return fmt.Errorf("bme680: setting the heater resistance: %w", err)
 	}
@@ -486,10 +491,10 @@ func (d *BME680) heatDuration() time.Duration {
 
 // warmUp is the library's model of how long a plate off for this long takes to reach temperature: 446 ms from hot, 855 ms after half a minute, 1858 ms from cold.
 func warmUp(off time.Duration) time.Duration {
-	x := off.Seconds()
-	if max := maxWarmUpOff.Seconds(); x > max || off < 0 {
-		x = max
+	if off < 0 || off > maxWarmUpOff {
+		off = maxWarmUpOff
 	}
+	x := off.Seconds()
 	y := ((((-4.92979491e-10*x+3.62989311e-07)*x-1.03665916e-04)*x+1.64253004e-02)*x + 4.46429551e-01)
 	return time.Duration(math.Round(y*1000)) * time.Millisecond
 }
@@ -648,8 +653,11 @@ func (d *BME680) RestoreAirQuality(state []byte) error {
 	return nil
 }
 
-// SenseContinuous repeats the forced measurement, so every sample is one the caller asked for.
+// SenseContinuous repeats the forced measurement, so every sample is one the caller asked for; the first failed read closes the channel.
 func (d *BME680) SenseContinuous(interval time.Duration) (<-chan physic.Env, error) {
+	if interval <= 0 {
+		return nil, fmt.Errorf("bme680: sensing interval %s is not positive", interval)
+	}
 	d.mu.Lock()
 	defer d.mu.Unlock()
 	if d.stop != nil {
@@ -659,9 +667,7 @@ func (d *BME680) SenseContinuous(interval time.Duration) (<-chan physic.Env, err
 	sensing := make(chan physic.Env)
 	stop := make(chan struct{})
 	d.stop = stop
-	d.wg.Add(1)
-	go func() {
-		defer d.wg.Done()
+	d.wg.Go(func() {
 		defer close(sensing)
 		t := time.NewTicker(interval)
 		defer t.Stop()
@@ -675,8 +681,7 @@ func (d *BME680) SenseContinuous(interval time.Duration) (<-chan physic.Env, err
 				err := d.sense(&e)
 				d.mu.Unlock()
 				if err != nil {
-					// A transient read error should not tear down the stream.
-					continue
+					return
 				}
 				select {
 				case sensing <- e:
@@ -685,7 +690,7 @@ func (d *BME680) SenseContinuous(interval time.Duration) (<-chan physic.Env, err
 				}
 			}
 		}
-	}()
+	})
 	return sensing, nil
 }
 

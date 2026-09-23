@@ -21,7 +21,7 @@ const (
 	cmdWake           = 0x3517
 	cmdSleep          = 0xB098
 	cmdSoftReset      = 0x805D
-	cmdReadIdRegister = 0xEFC8
+	cmdReadIDRegister = 0xEFC8
 
 	// Temperature first, no clock stretching: stretching a 12ms conversion trips host I2C bugs.
 	cmdMeasureNormal   = 0x7866
@@ -53,7 +53,7 @@ type Opts struct {
 	Address uint16
 	// LowPower trades repeatability for a 1ms conversion instead of 13ms.
 	LowPower bool
-	// MeasurementReadTimeout bounds the wait for a conversion; 0 polls forever.
+	// MeasurementReadTimeout bounds the wait for a conversion; zero is DefaultOpts'.
 	MeasurementReadTimeout time.Duration
 }
 
@@ -85,7 +85,7 @@ func NewI2C(bus i2c.Bus, opts *Opts) (*SHTC3, error) {
 		addr = DefaultAddress
 	}
 	d := &SHTC3{dev: i2c.Dev{Bus: bus, Addr: addr}, opts: *opts}
-	if d.opts.MeasurementReadTimeout < 0 {
+	if d.opts.MeasurementReadTimeout <= 0 {
 		d.opts.MeasurementReadTimeout = DefaultOpts.MeasurementReadTimeout
 	}
 	if err := d.init(); err != nil {
@@ -110,7 +110,7 @@ func (d *SHTC3) init() (err error) {
 	if werr := d.wake(); werr != nil {
 		return werr
 	}
-	id, rerr := d.readWord(cmdReadIdRegister)
+	id, rerr := d.readWord(cmdReadIDRegister)
 	if rerr != nil {
 		return fmt.Errorf("shtc3: reading identity: %w", rerr)
 	}
@@ -129,7 +129,7 @@ func Probe(bus i2c.Bus, addr uint16) (err error) {
 		return werr
 	}
 	defer d.sleepAfter(&err)
-	id, rerr := d.readWord(cmdReadIdRegister)
+	id, rerr := d.readWord(cmdReadIDRegister)
 	if rerr != nil {
 		err = fmt.Errorf("shtc3: reading identity at %#02x: %w", addr, rerr)
 		return err
@@ -152,8 +152,11 @@ func (d *SHTC3) Sense(e *physic.Env) error {
 	return d.read(e)
 }
 
-// SenseContinuous repeats the single-shot sequence; the part has no hardware continuous mode.
+// SenseContinuous repeats the single-shot sequence, the part having no continuous mode; the first failed read closes the channel.
 func (d *SHTC3) SenseContinuous(interval time.Duration) (<-chan physic.Env, error) {
+	if interval <= 0 {
+		return nil, fmt.Errorf("shtc3: sensing interval %s is not positive", interval)
+	}
 	d.mu.Lock()
 	defer d.mu.Unlock()
 	if d.stop != nil {
@@ -163,9 +166,7 @@ func (d *SHTC3) SenseContinuous(interval time.Duration) (<-chan physic.Env, erro
 	sensing := make(chan physic.Env)
 	stop := make(chan struct{})
 	d.stop = stop
-	d.wg.Add(1)
-	go func() {
-		defer d.wg.Done()
+	d.wg.Go(func() {
 		defer close(sensing)
 		t := time.NewTicker(interval)
 		defer t.Stop()
@@ -179,8 +180,7 @@ func (d *SHTC3) SenseContinuous(interval time.Duration) (<-chan physic.Env, erro
 				err := d.read(&e)
 				d.mu.Unlock()
 				if err != nil {
-					// A transient read error should not tear down the stream.
-					continue
+					return
 				}
 				select {
 				case sensing <- e:
@@ -189,7 +189,7 @@ func (d *SHTC3) SenseContinuous(interval time.Duration) (<-chan physic.Env, erro
 				}
 			}
 		}
-	}()
+	})
 	return sensing, nil
 }
 
@@ -239,7 +239,7 @@ func (d *SHTC3) readMeasurement() ([6]byte, error) {
 		if err == nil {
 			return v, nil
 		}
-		if d.opts.MeasurementReadTimeout > 0 && !time.Now().Before(deadline) {
+		if !time.Now().Before(deadline) {
 			return v, fmt.Errorf("shtc3: timed out reading measurement: %w", err)
 		}
 		time.Sleep(retryInterval)

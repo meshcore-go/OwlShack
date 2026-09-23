@@ -18,17 +18,17 @@ import (
 const DefaultAddress = 0x43
 
 const (
-	REG_PART_ID    = 0x00 // 2 bytes, little-endian, reads 0x0210
-	REG_DIE_REV    = 0x02 // 2 bytes, little-endian
-	REG_UID        = 0x04 // 8 bytes, unique identifier
-	REG_SYS_CTRL   = 0x10 // bit0 LOW_POWER, bit7 RESET
-	REG_SYS_STAT   = 0x11 // bit0 SYS_ACTIVE
-	REG_SENS_RUN   = 0x21 // bit0 T, bit1 H: 1=continuous, 0=single-shot
-	REG_SENS_START = 0x22 // bit0 T, bit1 H: 1=start
-	REG_SENS_STOP  = 0x23 // bit0 T, bit1 H: 1=stop
-	REG_SENS_STAT  = 0x24 // bit0 T, bit1 H: 1=measuring
-	REG_T_VAL      = 0x30 // 3 bytes
-	REG_H_VAL      = 0x33 // 3 bytes
+	regPartID    = 0x00 // 2 bytes, little-endian, reads 0x0210
+	regDieRev    = 0x02 // 2 bytes, little-endian
+	regUID       = 0x04 // 8 bytes, unique identifier
+	regSysCtrl   = 0x10 // bit0 LOW_POWER, bit7 RESET
+	regSysStat   = 0x11 // bit0 SYS_ACTIVE
+	regSensRun   = 0x21 // bit0 T, bit1 H: 1=continuous, 0=single-shot
+	regSensStart = 0x22 // bit0 T, bit1 H: 1=start
+	regSensStop  = 0x23 // bit0 T, bit1 H: 1=stop
+	regSensStat  = 0x24 // bit0 T, bit1 H: 1=measuring
+	regTVal      = 0x30 // 3 bytes
+	regHVal      = 0x33 // 3 bytes
 )
 
 // partIDValue is the value PART_ID reads on a genuine ENS210.
@@ -37,9 +37,9 @@ const partIDValue = 0x0210
 type Opts struct {
 	// Address is the device address; zero means DefaultAddress.
 	Address uint16
-	// MeasurementReadTimeout bounds the wait after triggering; 0 polls forever.
+	// MeasurementReadTimeout bounds the wait after triggering; zero is DefaultOpts'.
 	MeasurementReadTimeout time.Duration
-	// MeasurementWaitInterval paces the re-read while a conversion finishes.
+	// MeasurementWaitInterval paces the re-read while a conversion finishes; zero is DefaultOpts'.
 	MeasurementWaitInterval time.Duration
 }
 
@@ -75,8 +75,11 @@ func NewI2C(bus i2c.Bus, opts *Opts) (*ENS210, error) {
 		addr = DefaultAddress
 	}
 	d := &ENS210{dev: i2c.Dev{Bus: bus, Addr: addr}, opts: *opts}
+	if d.opts.MeasurementReadTimeout <= 0 {
+		d.opts.MeasurementReadTimeout = DefaultOpts.MeasurementReadTimeout
+	}
 	if d.opts.MeasurementWaitInterval <= 0 {
-		d.opts.MeasurementWaitInterval = 10 * time.Millisecond
+		d.opts.MeasurementWaitInterval = DefaultOpts.MeasurementWaitInterval
 	}
 	if err := d.init(); err != nil {
 		return nil, err
@@ -86,7 +89,7 @@ func NewI2C(bus i2c.Bus, opts *Opts) (*ENS210, error) {
 
 func (d *ENS210) init() error {
 	// Soft reset, then wait the boot time (tbooting, ~1.2ms typ).
-	if err := d.dev.Tx([]byte{REG_SYS_CTRL, 0x80}, nil); err != nil {
+	if err := d.dev.Tx([]byte{regSysCtrl, 0x80}, nil); err != nil {
 		return fmt.Errorf("ens210: reset: %w", err)
 	}
 	time.Sleep(2 * time.Millisecond)
@@ -96,9 +99,9 @@ func (d *ENS210) init() error {
 		return err
 	}
 	var id [12]byte
-	rerr := d.dev.Tx([]byte{REG_PART_ID}, id[:])
+	rerr := d.dev.Tx([]byte{regPartID}, id[:])
 	// Restore low power regardless of the read outcome.
-	if err := d.dev.Tx([]byte{REG_SYS_CTRL, 0x01}, nil); err != nil && rerr == nil {
+	if err := d.dev.Tx([]byte{regSysCtrl, 0x01}, nil); err != nil && rerr == nil {
 		rerr = fmt.Errorf("ens210: restoring low power: %w", err)
 	}
 	if rerr != nil {
@@ -121,8 +124,8 @@ func Probe(bus i2c.Bus, addr uint16) error {
 		return err
 	}
 	var id [2]byte
-	rerr := d.dev.Tx([]byte{REG_PART_ID}, id[:])
-	if err := d.dev.Tx([]byte{REG_SYS_CTRL, 0x01}, nil); err != nil && rerr == nil {
+	rerr := d.dev.Tx([]byte{regPartID}, id[:])
+	if err := d.dev.Tx([]byte{regSysCtrl, 0x01}, nil); err != nil && rerr == nil {
 		rerr = fmt.Errorf("ens210: restoring low power: %w", err)
 	}
 	if rerr != nil {
@@ -136,17 +139,17 @@ func Probe(bus i2c.Bus, addr uint16) error {
 
 // enterActive restores low power on its own failure, or the part is left drawing active current for nothing.
 func (d *ENS210) enterActive() (err error) {
-	if err := d.dev.Tx([]byte{REG_SYS_CTRL, 0x00}, nil); err != nil { // LOW_POWER = 0
+	if err := d.dev.Tx([]byte{regSysCtrl, 0x00}, nil); err != nil { // LOW_POWER = 0
 		return fmt.Errorf("ens210: disabling low power: %w", err)
 	}
 	defer func() {
 		if err != nil {
-			_ = d.dev.Tx([]byte{REG_SYS_CTRL, 0x01}, nil)
+			_ = d.dev.Tx([]byte{regSysCtrl, 0x01}, nil)
 		}
 	}()
 	for i := 0; i < 20; i++ {
 		var st [1]byte
-		if err := d.dev.Tx([]byte{REG_SYS_STAT}, st[:]); err != nil {
+		if err := d.dev.Tx([]byte{regSysStat}, st[:]); err != nil {
 			return fmt.Errorf("ens210: reading status: %w", err)
 		}
 		if st[0]&0x01 != 0 {
@@ -172,35 +175,36 @@ func (d *ENS210) Sense(e *physic.Env) error {
 		return errors.New("ens210: Sense cannot be used while sensing continuously")
 	}
 	// Single-shot mode: SENS_RUN bits cleared, then start both sensors.
-	if err := d.dev.Tx([]byte{REG_SENS_RUN, 0x00}, nil); err != nil {
+	if err := d.dev.Tx([]byte{regSensRun, 0x00}, nil); err != nil {
 		return fmt.Errorf("ens210: setting single-shot mode: %w", err)
 	}
-	if err := d.dev.Tx([]byte{REG_SENS_START, 0x03}, nil); err != nil {
+	if err := d.dev.Tx([]byte{regSensStart, 0x03}, nil); err != nil {
 		return fmt.Errorf("ens210: starting measurement: %w", err)
 	}
 	return d.read(e)
 }
 
-// SenseContinuous puts the device in continuous mode; Halt stops it and closes the channel.
+// SenseContinuous puts the device in continuous mode; Halt stops it and closes the channel, as does the first failed read.
 func (d *ENS210) SenseContinuous(interval time.Duration) (<-chan physic.Env, error) {
+	if interval <= 0 {
+		return nil, fmt.Errorf("ens210: sensing interval %s is not positive", interval)
+	}
 	d.mu.Lock()
 	defer d.mu.Unlock()
 	if d.stop != nil {
 		return nil, errors.New("ens210: already sensing continuously")
 	}
-	if err := d.dev.Tx([]byte{REG_SENS_RUN, 0x03}, nil); err != nil { // continuous, both
+	if err := d.dev.Tx([]byte{regSensRun, 0x03}, nil); err != nil { // continuous, both
 		return nil, fmt.Errorf("ens210: setting continuous mode: %w", err)
 	}
-	if err := d.dev.Tx([]byte{REG_SENS_START, 0x03}, nil); err != nil {
+	if err := d.dev.Tx([]byte{regSensStart, 0x03}, nil); err != nil {
 		return nil, fmt.Errorf("ens210: starting measurement: %w", err)
 	}
 
 	sensing := make(chan physic.Env)
 	stop := make(chan struct{})
 	d.stop = stop
-	d.wg.Add(1)
-	go func() {
-		defer d.wg.Done()
+	d.wg.Go(func() {
 		defer close(sensing)
 		t := time.NewTicker(interval)
 		defer t.Stop()
@@ -214,8 +218,7 @@ func (d *ENS210) SenseContinuous(interval time.Duration) (<-chan physic.Env, err
 				err := d.read(&e)
 				d.mu.Unlock()
 				if err != nil {
-					// A transient read error should not tear down the stream.
-					continue
+					return
 				}
 				select {
 				case sensing <- e:
@@ -224,7 +227,7 @@ func (d *ENS210) SenseContinuous(interval time.Duration) (<-chan physic.Env, err
 				}
 			}
 		}
-	}()
+	})
 	return sensing, nil
 }
 
@@ -233,7 +236,7 @@ func (d *ENS210) read(e *physic.Env) error {
 	deadline := time.Now().Add(d.opts.MeasurementReadTimeout)
 	for {
 		var v [6]byte
-		if err := d.dev.Tx([]byte{REG_T_VAL}, v[:]); err != nil {
+		if err := d.dev.Tx([]byte{regTVal}, v[:]); err != nil {
 			return fmt.Errorf("ens210: reading measurement: %w", err)
 		}
 		tRaw, tValid, tCRC := decode(v[0:3])
@@ -249,7 +252,7 @@ func (d *ENS210) read(e *physic.Env) error {
 			e.Humidity = physic.RelativeHumidity(math.Round(float64(hRaw) / 512.0 * float64(physic.PercentRH)))
 			return nil
 		}
-		if d.opts.MeasurementReadTimeout > 0 && !time.Now().Before(deadline) {
+		if !time.Now().Before(deadline) {
 			return errors.New("ens210: timed out waiting for a valid measurement")
 		}
 		time.Sleep(d.opts.MeasurementWaitInterval)
@@ -275,7 +278,7 @@ func (d *ENS210) Halt() error {
 
 	d.mu.Lock()
 	defer d.mu.Unlock()
-	if err := d.dev.Tx([]byte{REG_SENS_STOP, 0x03}, nil); err != nil {
+	if err := d.dev.Tx([]byte{regSensStop, 0x03}, nil); err != nil {
 		return fmt.Errorf("ens210: stopping measurement: %w", err)
 	}
 	return nil

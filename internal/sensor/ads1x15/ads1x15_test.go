@@ -231,3 +231,14 @@ func (b *refusingBus) Tx(uint16, []byte, []byte) error {
 }
 func (b *refusingBus) SetSpeed(physic.Frequency) error { return nil }
 func (b *refusingBus) String() string                  { return "refusingBus" }
+
+// A Dev that never identified its part must not pass for an ADS1115.
+func TestVariant_ZeroIsNoPart(t *testing.T) {
+	var v Variant
+	if v == ADS1115 || v == SGM58031 {
+		t.Fatalf("the zero Variant is %s", v)
+	}
+	if s := v.String(); s == ADS1115.String() || s == SGM58031.String() {
+		t.Errorf("the zero Variant prints as %s", s)
+	}
+}

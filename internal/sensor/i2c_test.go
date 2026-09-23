@@ -646,8 +646,8 @@ func TestBMEOpts_CarriesThePollPeriodAndTheForm(t *testing.T) {
 	if err != nil {
 		t.Fatalf("bmeOpts: %v", err)
 	}
-	if got.SamplePeriod != 30*time.Second {
-		t.Errorf("sample period = %s, want 30s", got.SamplePeriod)
+	if got.SamplePeriod != 30*time.Second || !got.AirQuality {
+		t.Errorf("sample period = %s with the fusion %v, want 30s and on", got.SamplePeriod, got.AirQuality)
 	}
 	if got.Address != 0x77 {
 		t.Errorf("address = %#02x, want 0x77", got.Address)
@@ -663,8 +663,9 @@ func TestBMEOpts_CarriesThePollPeriodAndTheForm(t *testing.T) {
 		t.Errorf("temperature offset = %v K, want 1.5", k)
 	}
 
-	if off, err := bmeOpts(0x76, map[string]string{"heater": "off"}, 30*time.Second); err != nil || off.Heater != bme680.HeaterOff {
-		t.Errorf("heater off gave %v, %v", off.Heater, err)
+	// A cold plate has nothing to fuse, and asking for the fusion anyway would refuse the part at open.
+	if off, err := bmeOpts(0x76, map[string]string{"heater": "off"}, 30*time.Second); err != nil || off.Heater != bme680.HeaterOff || off.AirQuality {
+		t.Errorf("heater off gave %v with the fusion %v, %v", off.Heater, off.AirQuality, err)
 	}
 	for _, bad := range []map[string]string{{"oversampling": "3x"}, {"temperature_offset": "warm"}} {
 		if _, err := bmeOpts(0x76, bad, 30*time.Second); err == nil {

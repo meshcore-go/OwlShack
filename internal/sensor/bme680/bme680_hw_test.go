@@ -50,7 +50,7 @@ func TestHardware_Identity(t *testing.T) {
 		t.Fatalf("NewI2C: %v", err)
 	}
 	defer d.Halt()
-	t.Logf("%s variant=%#02x", d, d.Variant())
+	t.Logf("%s, BME688 %v", d, d.IsBME688())
 	c := d.calib
 	t.Logf("trim t1=%d t2=%d t3=%d p1=%d gh1=%d gh2=%d gh3=%d resHeatRange=%d resHeatVal=%d rangeSwErr=%d",
 		c.t1, c.t2, c.t3, c.p1, c.gh1, c.gh2, c.gh3, c.resHeatRange, c.resHeatVal, c.rangeSwErr)

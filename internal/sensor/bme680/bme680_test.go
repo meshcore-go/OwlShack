@@ -4,6 +4,7 @@ import (
 	"errors"
 	"math"
 	"reflect"
+	"strings"
 	"testing"
 	"time"
 
@@ -168,6 +169,9 @@ func TestSense_ConvertsARealMeasurement(t *testing.T) {
 	}
 	if _, ok := d.SenseGas(); ok {
 		t.Error("SenseGas vouched for a reading taken with the heater off")
+	}
+	if d.IsBME688() {
+		t.Error("a part answering variant 0x00 said it is a BME688")
 	}
 	if err := bus.Close(); err != nil {
 		t.Errorf("playback not fully consumed: %v", err)
@@ -359,6 +363,9 @@ func TestSense_BME688UsesItsOwnGasPathAndEnableBit(t *testing.T) {
 	d, err := NewI2C(bus, gasOpts())
 	if err != nil {
 		t.Fatalf("NewI2C: %v", err)
+	}
+	if !d.IsBME688() {
+		t.Error("a part answering variant 0x01 did not say it is a BME688")
 	}
 	var e physic.Env
 	if err := d.Sense(&e); err != nil {
@@ -611,7 +618,7 @@ func TestSenseGasCompensated_MovesWithTheAirTheReadingWasTakenIn(t *testing.T) {
 // airOpts runs the fusion, which needs both a gas plate and the rate the host will read at.
 func airOpts() *Opts {
 	o := *gasOpts()
-	o.SamplePeriod = 30 * time.Second
+	o.AirQuality, o.SamplePeriod = true, 30*time.Second
 	return &o
 }
 
@@ -622,22 +629,32 @@ func validGasField() []byte {
 	return f
 }
 
-// With no rate to size the filters, or no plate to feed them, the part must report no index rather than a plausible one.
+// With no rate to size the filters, or no plate to feed them, a fusion asked for is refused at open rather than left off in silence.
 func TestNewI2C_FusionNeedsAPlateAndASamplePeriod(t *testing.T) {
-	coldOpts := func() *Opts {
-		o := *noGasOpts()
-		o.SamplePeriod = 30 * time.Second
-		return &o
+	for _, tc := range []struct {
+		name string
+		opts func(*Opts)
+		heat time.Duration
+	}{
+		{"no sample period", func(o *Opts) { o.SamplePeriod = 0 }, fixedHeat},
+		{"heater off", func(o *Opts) { o.Heater, o.HeaterDuration = HeaterOff, 0 }, 0},
+	} {
+		o := airOpts()
+		tc.opts(o)
+		bus := &i2ctest.Playback{Ops: openOps(DefaultAddress, chipID, variantGasLow, tc.heat), DontPanic: true}
+		if _, err := NewI2C(bus, o); err == nil || !strings.Contains(err.Error(), "fusion") {
+			t.Errorf("%s: NewI2C gave %v, want the fusion refused", tc.name, err)
+		}
 	}
+
 	for _, tc := range []struct {
 		name string
 		opts *Opts
 		heat time.Duration
 		want bool
 	}{
-		{"a plate and a period", airOpts(), fixedHeat, true},
-		{"no sample period", gasOpts(), fixedHeat, false},
-		{"heater off", coldOpts(), 0, false},
+		{"asked for, with a plate and a period", airOpts(), fixedHeat, true},
+		{"not asked for", gasOpts(), fixedHeat, false},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			bus := &i2ctest.Playback{
@@ -802,5 +819,36 @@ func TestSenseAirQuality_StampsTheSampleWhenTheMeasurementStarted(t *testing.T) 
 	stamp := time.Unix(0, d.air.st.LastGasUnixNano)
 	if stamp.Sub(before) >= after.Sub(stamp) {
 		t.Errorf("the sample is stamped %s into a %s Sense, want at the trigger", stamp.Sub(before), after.Sub(before))
+	}
+}
+
+// A stream that carried on past a failed read would go quiet for an unplugged part, which reads as a long interval, and a zero interval would panic its ticker.
+func TestSenseContinuous_EndsAtAFailedReadAndRefusesNoInterval(t *testing.T) {
+	bus := &i2ctest.Playback{
+		Ops:       append(openOps(DefaultAddress, chipID, variantGasLow, 0), senseOps(DefaultAddress, realField)...),
+		DontPanic: true,
+	}
+	d, err := NewI2C(bus, noGasOpts())
+	if err != nil {
+		t.Fatalf("NewI2C: %v", err)
+	}
+	if _, err := d.SenseContinuous(0); err == nil {
+		t.Fatal("a zero interval was taken")
+	}
+	ch, err := d.SenseContinuous(time.Millisecond)
+	if err != nil {
+		t.Fatalf("SenseContinuous: %v", err)
+	}
+	defer d.Halt()
+	// The one measurement played back, then the read that finds the part gone.
+	for i, want := range []bool{true, false} {
+		select {
+		case _, ok := <-ch:
+			if ok != want {
+				t.Fatalf("receive %d: open = %v, want %v", i, ok, want)
+			}
+		case <-time.After(3 * DefaultOpts.MeasurementReadTimeout):
+			t.Fatalf("receive %d: the stream went quiet instead of ending", i)
+		}
 	}
 }

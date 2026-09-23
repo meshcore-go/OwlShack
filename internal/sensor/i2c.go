@@ -160,6 +160,7 @@ func bmeOpts(addr uint16, o map[string]string, period time.Duration) (bme680.Opt
 	if o["heater"] == "off" {
 		opts.Heater = bme680.HeaterOff
 	}
+	opts.AirQuality = opts.Heater != bme680.HeaterOff
 	if v := o["temperature_offset"]; v != "" {
 		off, err := strconv.ParseFloat(v, 64)
 		// Self-heating is a degree or two, so tens of degrees is a typo; negated so NaN fails too.
