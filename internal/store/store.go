@@ -125,23 +125,32 @@ func (s *Store) WriteAsync(fn func()) bool {
 
 // WriteSync runs fn on the writer goroutine and blocks; calling it from the RX dispatch thread or inside another writer closure deadlocks.
 func (s *Store) WriteSync(fn func()) {
-	if s.closed() {
-		return
-	}
 	done := make(chan struct{})
 	select {
-	case <-s.closing:
-		return
 	case s.writerCh <- func() {
 		defer close(done)
 		fn()
 	}:
+	case <-s.closing:
+		s.writeAfterClose(fn)
+		return
 	}
 	select {
 	case <-done:
 	case <-s.closing:
-		<-s.writerDone // drain finished: fn has either run or never will
+		<-s.writerDone
+		select {
+		case <-done:
+		default:
+			s.writeAfterClose(fn)
+		}
 	}
+}
+
+// writeAfterClose runs fn on the caller once the writer stops; skipping it leaves the caller's error nil, which reads as success.
+func (s *Store) writeAfterClose(fn func()) {
+	<-s.writerDone
+	fn()
 }
 
 func (s *Store) closed() bool {

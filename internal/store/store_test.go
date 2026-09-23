@@ -787,20 +787,20 @@ func TestStore_ForeignKeysEnforced(t *testing.T) {
 	}
 }
 
-// A late writer call during shutdown must be a no-op, not a send on a closed channel.
+// A late write must not read as a success: WriteAsync says it dropped the closure, WriteSync runs it so the error carries the closed database.
 func TestStore_WriteAfterClose(t *testing.T) {
 	t.Parallel()
 	st := newTestStore(t)
 	if err := st.Close(); err != nil {
 		t.Fatalf("Close: %v", err)
 	}
-	ran := false
-	if st.WriteAsync(func() { ran = true }) {
+	if st.WriteAsync(func() {}) {
 		t.Error("WriteAsync after Close returned true")
 	}
-	st.WriteSync(func() { ran = true })
-	if ran {
-		t.Error("closure ran after Close")
+	var err error
+	st.WriteSync(func() { err = st.Messages.Delete(t.Context(), 1) })
+	if err == nil {
+		t.Error("WriteSync after Close left the error nil, which the caller reads as a write that happened")
 	}
 }
 
