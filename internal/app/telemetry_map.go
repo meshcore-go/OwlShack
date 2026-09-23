@@ -1,10 +1,12 @@
 package app
 
 import (
+	"cmp"
 	"context"
 	"database/sql"
 	"errors"
 	"fmt"
+	"slices"
 	"strings"
 
 	"github.com/meshcore-go/OwlShack/internal/api"
@@ -28,9 +30,6 @@ func (b *backend) TelemetryMap(ctx context.Context) (api.TelemetryMap, error) {
 		MaxChannel:  sensor.MaxChannel,
 		MaxBytes:    sensor.MaxTelemetryPayload,
 	}
-	if b.telemetry == nil {
-		return out, nil
-	}
 	for node, entries := range b.telemetry.All() {
 		for _, e := range entries {
 			out.Entries = append(out.Entries, api.TelemetryMapEntry{
@@ -40,6 +39,10 @@ func (b *backend) TelemetryMap(ctx context.Context) (api.TelemetryMap, error) {
 			})
 		}
 	}
+	slices.SortFunc(out.Entries, func(a, b api.TelemetryMapEntry) int {
+		return cmp.Or(strings.Compare(a.Node.Kind, b.Node.Kind), cmp.Compare(a.Node.ID, b.Node.ID),
+			cmp.Compare(a.Channel, b.Channel), cmp.Compare(a.Type, b.Type))
+	})
 	return out, nil
 }
 
@@ -85,9 +88,6 @@ func companionServes(c store.Companion) (bool, string) {
 }
 
 func (b *backend) SetTelemetryMap(ctx context.Context, node api.TelemetryNode, in []api.TelemetryMapEntry) error {
-	if b.telemetry == nil {
-		return fmt.Errorf("sensors are not ready yet")
-	}
 	sensorWrites.Lock()
 	defer sensorWrites.Unlock()
 	target, err := b.telemetryNode(ctx, node)
@@ -97,11 +97,14 @@ func (b *backend) SetTelemetryMap(ctx context.Context, node api.TelemetryNode, i
 
 	entries := make([]sensor.ChannelEntry, 0, len(in))
 	for _, e := range in {
+		if e.Node != node {
+			return api.Invalid(fmt.Errorf("channel %d is for %s %d, not the %s %d being saved", e.Channel, e.Node.Kind, e.Node.ID, node.Kind, node.ID))
+		}
 		if e.Channel < 0 || e.Channel > 255 {
-			return fmt.Errorf("channel %d is outside the 0 to 255 an LPP channel holds", e.Channel)
+			return api.Invalid(fmt.Errorf("channel %d is outside the 0 to 255 an LPP channel holds", e.Channel))
 		}
 		if e.Type < 0 || e.Type > 255 {
-			return fmt.Errorf("%d is not an LPP type", e.Type)
+			return api.Invalid(fmt.Errorf("%d is not an LPP type", e.Type))
 		}
 		entries = append(entries, sensor.ChannelEntry{
 			Channel: byte(e.Channel), Type: byte(e.Type),
@@ -109,10 +112,10 @@ func (b *backend) SetTelemetryMap(ctx context.Context, node api.TelemetryNode, i
 		})
 	}
 	if err := sensor.ValidateChannelMap(entries); err != nil {
-		return err
+		return api.Invalid(err)
 	}
 	if err := b.checkRowsResolve(entries); err != nil {
-		return err
+		return api.Invalid(err)
 	}
 
 	rows := make([]store.TelemetryMapEntry, 0, len(entries))
@@ -158,7 +161,7 @@ func (b *backend) telemetryNode(ctx context.Context, node api.TelemetryNode) (st
 			return store.TelemetryNode{Kind: node.Kind, ID: node.ID}, nil
 		}
 	}
-	return store.TelemetryNode{}, fmt.Errorf("no %s with id %d is configured on this host", node.Kind, node.ID)
+	return store.TelemetryNode{}, api.Invalid(fmt.Errorf("no %s with id %d is configured on this host", node.Kind, node.ID))
 }
 
 func selfTypeCodes() []int {

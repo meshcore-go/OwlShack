@@ -113,6 +113,15 @@ type Backend interface {
 	DeleteRepeater(ctx context.Context) error
 }
 
+// ValidationError is a backend refusing the request itself, which a handler answers 422 with its reason; any other error is the server's.
+type ValidationError struct{ Err error }
+
+func (e *ValidationError) Error() string { return e.Err.Error() }
+func (e *ValidationError) Unwrap() error { return e.Err }
+
+// Invalid marks err as the request's fault.
+func Invalid(err error) error { return &ValidationError{Err: err} }
+
 // RepeaterNodeOps are runtime operations on the running repeater node.
 type RepeaterNodeOps struct {
 	Name       string

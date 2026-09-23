@@ -98,14 +98,22 @@ func (r *SensorRepo) Update(ctx context.Context, s *Sensor) error {
 		return fmt.Errorf("reading update result: %w", err)
 	}
 	if n == 0 {
-		return fmt.Errorf("no sensor with id %d", s.ID)
+		return fmt.Errorf("no sensor with id %d: %w", s.ID, sql.ErrNoRows)
 	}
 	return nil
 }
 
 func (r *SensorRepo) Delete(ctx context.Context, id int64) error {
-	if _, err := r.db.ExecContext(ctx, `DELETE FROM sensors WHERE id = ?`, id); err != nil {
+	res, err := r.db.ExecContext(ctx, `DELETE FROM sensors WHERE id = ?`, id)
+	if err != nil {
 		return fmt.Errorf("deleting sensor: %w", err)
+	}
+	n, err := res.RowsAffected()
+	if err != nil {
+		return fmt.Errorf("reading delete result: %w", err)
+	}
+	if n == 0 {
+		return fmt.Errorf("no sensor with id %d: %w", id, sql.ErrNoRows)
 	}
 	return nil
 }

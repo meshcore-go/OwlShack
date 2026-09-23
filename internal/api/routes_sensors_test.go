@@ -2,6 +2,11 @@ package api
 
 import (
 	"context"
+	"database/sql"
+	"errors"
+	"fmt"
+	"io"
+	"log/slog"
 	"net/http"
 	"net/http/httptest"
 	"strings"
@@ -82,6 +87,60 @@ func TestReadJSON_RefusesAnOversizedBody(t *testing.T) {
 	}
 	if code := post("air"); code != http.StatusOK || b.created != 1 {
 		t.Fatalf("an ordinary body got %d and %d creates, so the refusal proves nothing", code, b.created)
+	}
+}
+
+// errBackend answers every sensor write with the one error it holds.
+type errBackend struct {
+	Backend
+	err error
+}
+
+func (b errBackend) DiscoverSensors(context.Context, string) (SensorScan, error) {
+	return SensorScan{}, b.err
+}
+func (b errBackend) SensorKinds(string) ([]SensorKindInfo, error)             { return nil, b.err }
+func (b errBackend) CreateSensor(context.Context, SensorInput) (int64, error) { return 0, b.err }
+func (b errBackend) UpdateSensor(context.Context, int64, SensorInput) error   { return b.err }
+func (b errBackend) DeleteSensor(context.Context, int64) error                { return b.err }
+func (b errBackend) SetTelemetryMap(context.Context, TelemetryNode, []TelemetryMapEntry) error {
+	return b.err
+}
+
+// A refusal is the request's fault and says why, a missing sensor is a 404, and a failed database is the server's: a 500 whose text stays in the log.
+func TestSensorRoutes_TellARefusalFromAFailure(t *testing.T) {
+	type route struct{ method, path, body string }
+	byID := []route{{"PUT", "/api/sensors/7", `{}`}, {"DELETE", "/api/sensors/7", ""}}
+	all := append([]route{
+		{"POST", "/api/sensors/discover", `{}`},
+		{"GET", "/api/sensors/kinds", ""},
+		{"POST", "/api/sensors", `{}`},
+		{"PUT", "/api/sensors/telemetry-map", `{"node":{"kind":"repeater","id":1},"entries":[]}`},
+	}, byID...)
+	for _, tc := range []struct {
+		name   string
+		err    error
+		routes []route
+		status int
+		shown  string
+	}{
+		{"a refusal", Invalid(errors.New("another sensor is already called air")), all, http.StatusUnprocessableEntity, "already called air"},
+		{"a missing sensor", fmt.Errorf("no sensor with id 7: %w", sql.ErrNoRows), byID, http.StatusNotFound, "no such sensor"},
+		{"a database failure", errors.New("disk I/O error in /var/lib/owlshack/meshcore.db"), all, http.StatusInternalServerError, ""},
+	} {
+		for _, r := range tc.routes {
+			s := &Server{mux: http.NewServeMux(), log: slog.New(slog.NewTextHandler(io.Discard, nil))}
+			s.routes()
+			s.SetBackend(errBackend{err: tc.err})
+			rec := httptest.NewRecorder()
+			s.mux.ServeHTTP(rec, httptest.NewRequest(r.method, r.path, strings.NewReader(r.body)))
+			if rec.Code != tc.status {
+				t.Errorf("%s on %s %s: %d, want %d", tc.name, r.method, r.path, rec.Code, tc.status)
+			}
+			if body := rec.Body.String(); !strings.Contains(body, tc.shown) || strings.Contains(body, "/var/lib") {
+				t.Errorf("%s on %s %s answered %q", tc.name, r.method, r.path, body)
+			}
+		}
 	}
 }
 

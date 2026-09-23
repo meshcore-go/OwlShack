@@ -1,6 +1,7 @@
 package api
 
 import (
+	"database/sql"
 	"errors"
 	"io"
 	"net/http"
@@ -42,7 +43,7 @@ func (s *Server) handleSensorDiscover(w http.ResponseWriter, r *http.Request) {
 	}
 	scan, err := b.DiscoverSensors(r.Context(), body.Provider)
 	if err != nil {
-		writeError(w, http.StatusUnprocessableEntity, err.Error())
+		s.writeSensorError(w, "scanning for sensors failed", err)
 		return
 	}
 	writeJSON(w, http.StatusOK, scan)
@@ -57,7 +58,7 @@ func (s *Server) handleSensorKinds(w http.ResponseWriter, r *http.Request) {
 	}
 	kinds, err := b.SensorKinds(r.URL.Query().Get("provider"))
 	if err != nil {
-		writeError(w, http.StatusUnprocessableEntity, err.Error())
+		s.writeSensorError(w, "reading the parts catalogue failed", err)
 		return
 	}
 	writeJSON(w, http.StatusOK, kinds)
@@ -79,7 +80,7 @@ func (s *Server) handleUpdateSensor(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	if err := b.UpdateSensor(r.Context(), id, in); err != nil {
-		writeError(w, http.StatusUnprocessableEntity, err.Error())
+		s.writeSensorError(w, "saving the sensor failed", err)
 		return
 	}
 	w.WriteHeader(http.StatusNoContent)
@@ -97,7 +98,7 @@ func (s *Server) handleCreateSensor(w http.ResponseWriter, r *http.Request) {
 	}
 	id, err := b.CreateSensor(r.Context(), in)
 	if err != nil {
-		writeError(w, http.StatusUnprocessableEntity, err.Error())
+		s.writeSensorError(w, "adding the sensor failed", err)
 		return
 	}
 	writeJSON(w, http.StatusOK, map[string]int64{"id": id})
@@ -114,7 +115,7 @@ func (s *Server) handleDeleteSensor(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	if err := b.DeleteSensor(r.Context(), id); err != nil {
-		writeError(w, http.StatusUnprocessableEntity, err.Error())
+		s.writeSensorError(w, "removing the sensor failed", err)
 		return
 	}
 	w.WriteHeader(http.StatusNoContent)
@@ -160,8 +161,21 @@ func (s *Server) handleSetTelemetryMap(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	if err := b.SetTelemetryMap(r.Context(), body.Node, *body.Entries); err != nil {
-		writeError(w, http.StatusUnprocessableEntity, err.Error())
+		s.writeSensorError(w, "saving the telemetry map failed", err)
 		return
 	}
 	s.writeTelemetryMap(w, r, b)
+}
+
+// writeSensorError answers a refusal with its reason and a missing sensor with 404; anything else is the server's, logged and not shown.
+func (s *Server) writeSensorError(w http.ResponseWriter, msg string, err error) {
+	var verr *ValidationError
+	switch {
+	case errors.As(err, &verr):
+		writeError(w, http.StatusUnprocessableEntity, err.Error())
+	case errors.Is(err, sql.ErrNoRows):
+		writeError(w, http.StatusNotFound, "no such sensor")
+	default:
+		s.serverError(w, msg, err)
+	}
 }

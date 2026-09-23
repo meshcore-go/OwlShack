@@ -136,15 +136,19 @@ func (r *CompanionRepo) Update(ctx context.Context, c *Companion) error {
 }
 
 func (r *CompanionRepo) Delete(ctx context.Context, id int64) error {
-	// Cleared here rather than by a cascade, because the map keys on node kind and id and a row may be the repeater's.
-	if err := deleteTelemetryMapForNode(ctx, r.db, TelemetryNode{Kind: NodeKindCompanion, ID: id}); err != nil {
-		return fmt.Errorf("deleting the companion's telemetry map: %w", err)
-	}
-	_, err := r.db.ExecContext(ctx, `DELETE FROM companions WHERE id = ?`, id)
+	tx, err := r.db.BeginTx(ctx, nil)
 	if err != nil {
 		return fmt.Errorf("deleting companion: %w", err)
 	}
-	return nil
+	defer tx.Rollback()
+	// Cleared here rather than by a cascade, because the map keys on node kind and id and a row may be the repeater's.
+	if err := deleteTelemetryMapForNode(ctx, tx, TelemetryNode{Kind: NodeKindCompanion, ID: id}); err != nil {
+		return fmt.Errorf("deleting the companion's telemetry map: %w", err)
+	}
+	if _, err := tx.ExecContext(ctx, `DELETE FROM companions WHERE id = ?`, id); err != nil {
+		return fmt.Errorf("deleting companion: %w", err)
+	}
+	return tx.Commit()
 }
 
 // CompanionChannel is a companion-owned channel; an empty private_key means a public/hashtag-derived one.

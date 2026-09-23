@@ -169,6 +169,37 @@ func TestTelemetryMapRepo_DropsRowsWithTheirSensor(t *testing.T) {
 	}
 }
 
+// The map rows and the companion go together or not at all, or a failed delete leaves a companion that publishes nothing.
+func TestCompanionDelete_KeepsTheMapWhenTheDeleteFails(t *testing.T) {
+	t.Parallel()
+	st := newTestStore(t)
+	ctx := t.Context()
+	id := mapTestSensor(t, st, "air")
+	node := TelemetryNode{Kind: NodeKindCompanion, ID: mapTestCompanion(t, st, "home")}
+	var err error
+	st.WriteSync(func() {
+		if err = st.TelemetryMap.ReplaceForNode(ctx, node, []TelemetryMapEntry{{Channel: 2, LPPType: 103, SensorID: id, Metric: "temperature"}}); err != nil {
+			return
+		}
+		if _, err = st.db.ExecContext(ctx, `CREATE TRIGGER refuse BEFORE DELETE ON companions BEGIN SELECT RAISE(ABORT, 'refused'); END`); err != nil {
+			return
+		}
+		if st.Companions.Delete(ctx, node.ID) == nil {
+			t.Error("the companion delete went through the trigger that refuses it")
+		}
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	rows, err := st.TelemetryMap.List(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(rows) != 1 {
+		t.Fatalf("after a refused delete the map holds %d rows, want the companion's row still there", len(rows))
+	}
+}
+
 // A companion's rows are cleared by its own delete, since a row may be the repeater's and there is nothing to cascade from.
 func TestTelemetryMapRepo_DropsRowsWithTheirCompanion(t *testing.T) {
 	t.Parallel()

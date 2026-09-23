@@ -60,16 +60,10 @@ func loadSensors(ctx context.Context, db *store.Store, sh *sensor.Hub) error {
 }
 
 func (b *backend) Sensors() []api.SensorStatus {
-	if b.sensors == nil {
-		return []api.SensorStatus{}
-	}
 	return sensorStatusDTOs(b.sensors, b.sensors.Snapshot())
 }
 
 func (b *backend) SensorProviders(ctx context.Context) []api.SensorProviderInfo {
-	if b.sensors == nil {
-		return []api.SensorProviderInfo{}
-	}
 	infos := b.sensors.Providers(ctx)
 	out := make([]api.SensorProviderInfo, 0, len(infos))
 	for _, p := range infos {
@@ -81,12 +75,9 @@ func (b *backend) SensorProviders(ctx context.Context) []api.SensorProviderInfo 
 }
 
 func (b *backend) DiscoverSensors(ctx context.Context, provider string) (api.SensorScan, error) {
-	if b.sensors == nil {
-		return api.SensorScan{}, fmt.Errorf("sensors are not ready yet")
-	}
 	res, err := b.sensors.Discover(ctx, provider)
 	if err != nil {
-		return api.SensorScan{}, err
+		return api.SensorScan{}, api.Invalid(err)
 	}
 	out := api.SensorScan{
 		Candidates: make([]api.SensorCandidate, 0, len(res.Candidates)),
@@ -107,12 +98,9 @@ func (b *backend) DiscoverSensors(ctx context.Context, provider string) (api.Sen
 }
 
 func (b *backend) SensorKinds(provider string) ([]api.SensorKindInfo, error) {
-	if b.sensors == nil {
-		return nil, fmt.Errorf("sensors are not ready yet")
-	}
 	kinds, err := b.sensors.Kinds(provider)
 	if err != nil {
-		return nil, err
+		return nil, api.Invalid(err)
 	}
 	out := make([]api.SensorKindInfo, 0, len(kinds))
 	for _, k := range kinds {
@@ -181,37 +169,32 @@ func (b *backend) UpdateSensor(ctx context.Context, id int64, in api.SensorInput
 	if err := loadSensors(ctx, b.db, b.sensors); err != nil {
 		return err
 	}
-	if b.telemetry != nil {
-		return b.telemetry.Load(ctx, b.db)
-	}
-	return nil
+	return b.telemetry.Load(ctx, b.db)
 }
 
 // checkDependents refuses an edit that would leave a published channel or a derived sensor reading something this one stops reporting.
 func (b *backend) checkDependents(ctx context.Context, spec sensor.Spec) error {
 	reports := b.sensors.Reports(spec)
-	if b.telemetry != nil {
-		nodes, err := b.telemetryNodes(ctx)
-		if err != nil {
-			return err
-		}
-		names := map[api.TelemetryNode]string{}
-		for _, n := range nodes {
-			names[n.Node] = n.Name
-		}
-		for node, entries := range b.telemetry.All() {
-			for _, e := range entries {
-				if e.SensorID == spec.ID && !reports[e.Metric] {
-					return fmt.Errorf("channel %d of %s publishes %s from this sensor, which it would no longer report; take it off that map first",
-						e.Channel, names[api.TelemetryNode{Kind: node.Kind, ID: node.ID}], e.Metric)
-				}
+	nodes, err := b.telemetryNodes(ctx)
+	if err != nil {
+		return err
+	}
+	names := map[api.TelemetryNode]string{}
+	for _, n := range nodes {
+		names[n.Node] = n.Name
+	}
+	for node, entries := range b.telemetry.All() {
+		for _, e := range entries {
+			if e.SensorID == spec.ID && !reports[e.Metric] {
+				return api.Invalid(fmt.Errorf("channel %d of %s publishes %s from this sensor, which it would no longer report; take it off that map first",
+					e.Channel, names[api.TelemetryNode{Kind: node.Kind, ID: node.ID}], e.Metric))
 			}
 		}
 	}
 	for _, s := range b.sensors.Snapshot() {
 		for _, bd := range s.Spec.Bindings {
 			if bd.SensorID == spec.ID && !reports[bd.Metric] {
-				return fmt.Errorf("%s reads %s from this sensor, which it would no longer report", s.Spec.Name, bd.Metric)
+				return api.Invalid(fmt.Errorf("%s reads %s from this sensor, which it would no longer report", s.Spec.Name, bd.Metric))
 			}
 		}
 	}
@@ -220,13 +203,14 @@ func (b *backend) checkDependents(ctx context.Context, spec sensor.Spec) error {
 
 // prepareSensor defaults then validates, and the id lets the hub refuse an edit that makes two sensors read each other.
 func (b *backend) prepareSensor(id int64, in api.SensorInput) (sensor.Spec, error) {
-	if b.sensors == nil {
-		return sensor.Spec{}, fmt.Errorf("sensors are not ready yet")
-	}
-	return b.sensors.Prepare(sensor.Spec{
+	spec, err := b.sensors.Prepare(sensor.Spec{
 		ID: id, Provider: in.Provider, Kind: in.Kind, Name: in.Name, Options: in.Options,
 		Bindings: apiToSpecBindings(in.Bindings),
 	})
+	if err != nil {
+		return spec, api.Invalid(err)
+	}
+	return spec, nil
 }
 
 func specBindings(bs []store.SensorBinding) []sensor.Binding {
@@ -262,16 +246,13 @@ func apiBindings(bs []sensor.Binding) []api.SensorBinding {
 }
 
 func (b *backend) DeleteSensor(ctx context.Context, id int64) error {
-	if b.sensors == nil {
-		return fmt.Errorf("sensors are not ready yet")
-	}
 	sensorWrites.Lock()
 	defer sensorWrites.Unlock()
 	// Refused rather than left dangling: a derived sensor reading this one would fail every poll from then on.
 	for _, s := range b.sensors.Snapshot() {
 		for _, bd := range s.Spec.Bindings {
 			if bd.SensorID == id {
-				return fmt.Errorf("%s reads this sensor; remove it, or its binding, first", s.Spec.Name)
+				return api.Invalid(fmt.Errorf("%s reads this sensor; remove it, or its binding, first", s.Spec.Name))
 			}
 		}
 	}
@@ -285,10 +266,7 @@ func (b *backend) DeleteSensor(ctx context.Context, id int64) error {
 		return err
 	}
 	// A deleted sensor takes its map rows with it, so the publisher has to be told.
-	if b.telemetry != nil {
-		return b.telemetry.Load(ctx, b.db)
-	}
-	return nil
+	return b.telemetry.Load(ctx, b.db)
 }
 
 func sensorStatusDTOs(sh *sensor.Hub, in []sensor.Status) []api.SensorStatus {

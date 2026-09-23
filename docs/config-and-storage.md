@@ -396,9 +396,9 @@ GET  /api/sensors                                            (every sensor with 
 GET  /api/sensors/providers
 POST /api/sensors/discover                                   { provider? }   (candidates beside problems, such as a bus that would not open)
 GET  /api/sensors/kinds                                      (the parts catalogue)
-POST /api/sensors                      PUT|DELETE /api/sensors/{id}   (refused when it would strand a published channel or a derived sensor)
+POST /api/sensors                      PUT|DELETE /api/sensors/{id}   (refused 422 when it would strand a published channel or a derived sensor; 404 for an id not configured)
 GET  /api/sensors/telemetry-map                              (every node's map, the LPP catalogue and defaults, the 145-byte budget)
-PUT  /api/sensors/telemetry-map                              { node, entries }   (entries required; [] clears the node's map)
+PUT  /api/sensors/telemetry-map                              { node, entries }   (entries required, each naming that node; [] clears the node's map)
 
 POST /api/backup                                             (options JSON -> .db file download)
 POST /api/backup/estimate                                    (same body; row counts, no file built)

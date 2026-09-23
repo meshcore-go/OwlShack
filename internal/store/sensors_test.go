@@ -1,6 +1,8 @@
 package store
 
 import (
+	"database/sql"
+	"errors"
 	"reflect"
 	"testing"
 )
@@ -86,16 +88,19 @@ func TestSensorRepo_EmptyOptionsReadBackEmpty(t *testing.T) {
 	}
 }
 
-// An update against a sensor that is gone must say so, or the operator believes an edit landed.
-func TestSensorRepo_UpdateRejectsAMissingRow(t *testing.T) {
+// An update or delete against a sensor that is gone must say so, as a missing row the API can answer 404, or the operator believes it landed.
+func TestSensorRepo_UpdateAndDeleteRejectAMissingRow(t *testing.T) {
 	t.Parallel()
 	st := newTestStore(t)
-	var err error
+	var upd, del error
 	st.WriteSync(func() {
-		err = st.Sensors.Update(t.Context(), &Sensor{ID: 999, Provider: "pisugar", Kind: "pisugar", Name: "x"})
+		upd = st.Sensors.Update(t.Context(), &Sensor{ID: 999, Provider: "pisugar", Kind: "pisugar", Name: "x"})
+		del = st.Sensors.Delete(t.Context(), 999)
 	})
-	if err == nil {
-		t.Fatal("Update reported success for a sensor that does not exist")
+	for op, err := range map[string]error{"Update": upd, "Delete": del} {
+		if !errors.Is(err, sql.ErrNoRows) {
+			t.Errorf("%s of a sensor that does not exist gave %v, want a missing row", op, err)
+		}
 	}
 }
 

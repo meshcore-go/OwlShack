@@ -1,6 +1,8 @@
 package app
 
 import (
+	"database/sql"
+	"errors"
 	"fmt"
 	"io"
 	"log/slog"
@@ -83,7 +85,7 @@ func TestSensorEdits_RefuseToStrandWhatReadsThem(t *testing.T) {
 		t.Fatal(err)
 	}
 	node := api.TelemetryNode{Kind: store.NodeKindCompanion, ID: c.ID}
-	row := []api.TelemetryMapEntry{{Channel: 2, Type: int(meshcore.LPPAnalogInput), SensorID: id, Metric: "moisture"}}
+	row := []api.TelemetryMapEntry{{Node: node, Channel: 2, Type: int(meshcore.LPPAnalogInput), SensorID: id, Metric: "moisture"}}
 	if err := b.SetTelemetryMap(ctx, node, row); err != nil {
 		t.Fatalf("a map reading the expression's own metric was refused: %v", err)
 	}
@@ -156,6 +158,159 @@ func TestTelemetryMap_ADatabaseErrorIsNotAnEmptyHost(t *testing.T) {
 	db.Close()
 	if _, err := b.TelemetryMap(ctx); err == nil {
 		t.Fatal("a closed database read as a host with no nodes")
+	}
+}
+
+// The API answers a refusal 422 with its reason and anything else 500 without it, so every refusal has to be marked and nothing else may be.
+func TestSensorEdits_MarkARefusalApartFromAFailure(t *testing.T) {
+	ctx := t.Context()
+	db, err := store.Open(ctx, filepath.Join(t.TempDir(), "marks.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	hub := sensor.NewHub(slog.New(slog.NewTextHandler(io.Discard, nil)), sensor.PiSugarProvider{}, &sensor.VirtualProvider{})
+	b := &backend{db: db, sensors: hub, telemetry: newTelemetryPublisher(hub)}
+	ups := api.SensorInput{Provider: "pisugar", Kind: "pisugar", Name: "ups", Options: map[string]string{"address": "127.0.0.1:9"}}
+	id, err := b.CreateSensor(ctx, ups)
+	if err != nil {
+		t.Fatal(err)
+	}
+	derived := api.SensorInput{
+		Provider: "virtual", Kind: sensor.KindExpression, Name: "double",
+		Options:  map[string]string{"expression": "v * 2", "metric": "moisture", "unit": "%"},
+		Bindings: []api.SensorBinding{{Name: "v", SensorID: id, Metric: "voltage"}},
+	}
+	if _, err := b.CreateSensor(ctx, derived); err != nil {
+		t.Fatal(err)
+	}
+	c := store.Companion{Name: "home"}
+	db.WriteSync(func() { err = db.Companions.Create(ctx, &c) })
+	if err != nil {
+		t.Fatal(err)
+	}
+	home := api.TelemetryNode{Kind: store.NodeKindCompanion, ID: c.ID}
+	row := func(ch int) []api.TelemetryMapEntry {
+		return []api.TelemetryMapEntry{{Node: home, Channel: ch, Type: 116, SensorID: id, Metric: "voltage"}}
+	}
+	elsewhere := func(name, addr string) api.SensorInput {
+		return api.SensorInput{Provider: "pisugar", Kind: "pisugar", Name: name, Options: map[string]string{"address": addr}}
+	}
+	var verr *api.ValidationError
+	for name, err := range map[string]error{
+		"a duplicate name":        second(b.CreateSensor(ctx, elsewhere("ups", "127.0.0.1:10"))),
+		"an unknown provider":     second(b.SensorKinds("nonesuch")),
+		"a scan of no provider":   second(b.DiscoverSensors(ctx, "nonesuch")),
+		"deleting what is read":   b.DeleteSensor(ctx, id),
+		"a node that is not here": b.SetTelemetryMap(ctx, api.TelemetryNode{Kind: store.NodeKindRepeater, ID: store.RepeaterNodeID}, []api.TelemetryMapEntry{}),
+		"channel 0":               b.SetTelemetryMap(ctx, home, row(0)),
+		"channel 300":             b.SetTelemetryMap(ctx, home, row(300)),
+	} {
+		if !errors.As(err, &verr) {
+			t.Errorf("%s gave %v, which is not marked as the request's fault", name, err)
+		}
+	}
+	for name, err := range map[string]error{
+		"editing a sensor that is gone":  b.UpdateSensor(ctx, 999, elsewhere("gone", "127.0.0.1:11")),
+		"deleting a sensor that is gone": b.DeleteSensor(ctx, 999),
+	} {
+		if !errors.Is(err, sql.ErrNoRows) || errors.As(err, &verr) {
+			t.Errorf("%s gave %v, want an unmarked missing row", name, err)
+		}
+	}
+
+	// Provokes the other half: a database that cannot be written is the server's failure, never the request's.
+	db.Close()
+	if _, err := b.CreateSensor(ctx, elsewhere("another", "127.0.0.1:12")); err == nil || errors.As(err, &verr) {
+		t.Errorf("a create on a closed database gave %v, want an unmarked failure", err)
+	}
+}
+
+func second[T any](_ T, err error) error { return err }
+
+// Map iteration order is random, so without a sort the editor's rows come back shuffled between two loads.
+func TestTelemetryMap_ComesBackInNodeOrder(t *testing.T) {
+	ctx := t.Context()
+	db, err := store.Open(ctx, filepath.Join(t.TempDir(), "order.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer db.Close()
+	hub := sensor.NewHub(slog.New(slog.NewTextHandler(io.Discard, nil)), sensor.PiSugarProvider{})
+	b := &backend{db: db, sensors: hub, telemetry: newTelemetryPublisher(hub)}
+	id, err := b.CreateSensor(ctx, api.SensorInput{Provider: "pisugar", Kind: "pisugar", Name: "ups", Options: map[string]string{"address": "127.0.0.1:9"}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	var nodes []api.TelemetryNode
+	for _, name := range []string{"one", "two", "three", "four"} {
+		c := store.Companion{Name: name}
+		db.WriteSync(func() { err = db.Companions.Create(ctx, &c) })
+		if err != nil {
+			t.Fatal(err)
+		}
+		node := api.TelemetryNode{Kind: store.NodeKindCompanion, ID: c.ID}
+		nodes = append(nodes, node)
+		rows := []api.TelemetryMapEntry{
+			{Node: node, Channel: 3, Type: 116, SensorID: id, Metric: "voltage"},
+			{Node: node, Channel: 2, Type: 116, SensorID: id, Metric: "voltage"},
+		}
+		if err := b.SetTelemetryMap(ctx, node, rows); err != nil {
+			t.Fatal(err)
+		}
+	}
+	for range 20 {
+		m, err := b.TelemetryMap(ctx)
+		if err != nil {
+			t.Fatal(err)
+		}
+		var got []api.TelemetryNode
+		for i, e := range m.Entries {
+			if want := nodes[i/2]; e.Node != want || e.Channel != 2+i%2 {
+				t.Fatalf("entry %d is %+v, want node %+v channel %d", i, e, want, 2+i%2)
+			}
+			got = append(got, e.Node)
+		}
+		if len(got) != 2*len(nodes) {
+			t.Fatalf("%d entries, want %d", len(got), 2*len(nodes))
+		}
+	}
+}
+
+// Every row carries the node it is for, and a row filed under another node's map would publish from the wrong one.
+func TestSetTelemetryMap_RefusesARowForAnotherNode(t *testing.T) {
+	ctx := t.Context()
+	db, err := store.Open(ctx, filepath.Join(t.TempDir(), "rows.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer db.Close()
+	hub := sensor.NewHub(slog.New(slog.NewTextHandler(io.Discard, nil)), sensor.PiSugarProvider{})
+	b := &backend{db: db, sensors: hub, telemetry: newTelemetryPublisher(hub)}
+	id, err := b.CreateSensor(ctx, api.SensorInput{Provider: "pisugar", Kind: "pisugar", Name: "ups", Options: map[string]string{"address": "127.0.0.1:9"}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	var ids []int64
+	for _, name := range []string{"home", "away"} {
+		c := store.Companion{Name: name}
+		db.WriteSync(func() { err = db.Companions.Create(ctx, &c) })
+		if err != nil {
+			t.Fatal(err)
+		}
+		ids = append(ids, c.ID)
+	}
+	home := api.TelemetryNode{Kind: store.NodeKindCompanion, ID: ids[0]}
+	row := func(node api.TelemetryNode) []api.TelemetryMapEntry {
+		return []api.TelemetryMapEntry{{Node: node, Channel: 2, Type: 116, SensorID: id, Metric: "voltage"}}
+	}
+	for _, other := range []api.TelemetryNode{{Kind: store.NodeKindCompanion, ID: ids[1]}, {}} {
+		if err := b.SetTelemetryMap(ctx, home, row(other)); err == nil {
+			t.Errorf("a row for %+v was saved into %+v's map", other, home)
+		}
+	}
+	// Provokes the positive: the same row for the node being saved goes in.
+	if err := b.SetTelemetryMap(ctx, home, row(home)); err != nil {
+		t.Errorf("a row for the node being saved was refused: %v", err)
 	}
 }
 
