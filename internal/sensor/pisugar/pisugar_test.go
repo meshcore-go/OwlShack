@@ -3,11 +3,13 @@ package pisugar
 import (
 	"bufio"
 	"context"
+	"io"
 	"maps"
 	"net"
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 )
 
 // The answers a real PiSugar 2 (2-LEDs) gave over /tmp/pisugar-server.sock, captured 2026-09-22.
@@ -147,6 +149,105 @@ func TestGet_IgnoresAnEventPushedMidExchange(t *testing.T) {
 	if v := sense(t, fake(t, piSugar2, "single"))["battery_v"].Value; v != 3.8405669 {
 		t.Fatalf("voltage read %v, want 3.8405669", v)
 	}
+}
+
+// A line is read into memory whole, so a server that never ends one must be cut off at a line's length, not run on to the deadline.
+func TestGet_RefusesALineLongerThanAnyAnswer(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "pisugar.sock")
+	ln, err := net.Listen("unix", path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { ln.Close() })
+	go func() {
+		c, err := ln.Accept()
+		if err != nil {
+			return
+		}
+		defer c.Close()
+		endless := []byte(strings.Repeat("x", 4096))
+		for {
+			if _, err := c.Write(endless); err != nil {
+				return
+			}
+		}
+	}()
+
+	c, err := Dial(context.Background(), path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer c.Close()
+	start := time.Now()
+	if _, err := c.Get("battery_v"); err == nil {
+		t.Fatal("an endless line read as an answer")
+	}
+	if took := time.Since(start); took > Timeout/2 {
+		t.Errorf("an endless line took %v to refuse, which is the deadline and not the line's length", took)
+	}
+}
+
+// The deadline is the only bound on an exchange, so a caller's shorter one has to reach it.
+func TestDial_KeepsTheCallersEarlierDeadline(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "pisugar.sock")
+	ln, err := net.Listen("unix", path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { ln.Close() })
+	go func() {
+		for {
+			c, err := ln.Accept()
+			if err != nil {
+				return
+			}
+			t.Cleanup(func() { c.Close() })
+		}
+	}()
+
+	ctx, cancel := context.WithTimeout(context.Background(), 50*time.Millisecond)
+	defer cancel()
+	c, err := Dial(ctx, path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer c.Close()
+	start := time.Now()
+	if _, err := c.Get("model"); err == nil {
+		t.Fatal("a server that said nothing answered")
+	}
+	if took := time.Since(start); took > Timeout/2 {
+		t.Errorf("a silent server held the exchange %v, past the caller's 50ms", took)
+	}
+}
+
+// Conn's reads go through its line reader; a Read of its own would take bytes that reader already buffered.
+func TestConn_OffersNoReadAroundItsLineReader(t *testing.T) {
+	if _, ok := any(&Conn{}).(io.Reader); ok {
+		t.Error("Conn is an io.Reader, so a caller can read past the buffered lines")
+	}
+	if _, ok := any(&Conn{}).(io.Writer); ok {
+		t.Error("Conn is an io.Writer, so a caller can write outside an exchange")
+	}
+}
+
+// A connection that cannot be bounded could wait forever, so it is refused rather than used.
+func TestNewConn_RefusesAConnectionItCannotBound(t *testing.T) {
+	a, b := net.Pipe()
+	b.Close()
+	a.Close()
+	if c, err := newConn(context.Background(), a); err == nil {
+		c.Close()
+		t.Fatal("a connection whose deadline could not be set was used")
+	}
+	// Provokes the positive: an open one is bounded and used.
+	a, b = net.Pipe()
+	defer b.Close()
+	c, err := newConn(context.Background(), a)
+	if err != nil {
+		t.Fatalf("an open connection was refused: %v", err)
+	}
+	c.Close()
 }
 
 func TestSense_RefusesAServerThatIsNotOne(t *testing.T) {

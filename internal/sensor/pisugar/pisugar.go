@@ -13,10 +13,10 @@ import (
 )
 
 const (
-	// DefaultSocket and DefaultTCP are where pisugar-server listens unless it was told otherwise.
+	// DefaultSocket, DefaultTCP and DefaultPort are where pisugar-server listens unless it was told otherwise.
 	DefaultSocket = "/tmp/pisugar-server.sock"
-	DefaultTCP    = "127.0.0.1:8423"
-	defaultPort   = "8423"
+	DefaultTCP    = "127.0.0.1:" + DefaultPort
+	DefaultPort   = "8423"
 	// Timeout bounds one whole exchange, so a server that accepts and then says nothing cannot hold up a caller with no deadline of its own.
 	Timeout = 3 * time.Second
 )
@@ -43,7 +43,7 @@ var commands = []struct{ key, unit string }{
 
 // Conn is one exchange with the server. It is not safe for concurrent use.
 type Conn struct {
-	net.Conn
+	c net.Conn
 	r *bufio.Reader
 }
 
@@ -57,23 +57,39 @@ func Dial(ctx context.Context, addr string) (*Conn, error) {
 	if err != nil {
 		return nil, err
 	}
-	// One deadline for the whole exchange, so Get cannot wait forever for a line that never comes.
-	_ = c.SetDeadline(time.Now().Add(Timeout))
-	return &Conn{Conn: c, r: bufio.NewReader(c)}, nil
+	return newConn(ctx, c)
 }
+
+// newConn sets one deadline for the whole exchange, the caller's if it is sooner, so Get cannot wait forever for a line that never comes.
+func newConn(ctx context.Context, c net.Conn) (*Conn, error) {
+	deadline := time.Now().Add(Timeout)
+	if d, ok := ctx.Deadline(); ok && d.Before(deadline) {
+		deadline = d
+	}
+	if err := c.SetDeadline(deadline); err != nil {
+		c.Close()
+		return nil, fmt.Errorf("pisugar: bounding the exchange: %w", err)
+	}
+	return &Conn{c: c, r: bufio.NewReader(c)}, nil
+}
+
+func (c *Conn) Close() error { return c.c.Close() }
 
 // Get sends one command and returns its value, skipping the button events pisugar-server pushes down the same socket.
 func (c *Conn) Get(key string) (string, error) {
-	if _, err := fmt.Fprintf(c, "get %s\n", key); err != nil {
+	if _, err := fmt.Fprintf(c.c, "get %s\n", key); err != nil {
 		return "", err
 	}
 	prefix := key + ":"
 	for {
-		line, err := c.r.ReadString('\n')
+		raw, err := c.r.ReadSlice('\n')
+		if errors.Is(err, bufio.ErrBufferFull) {
+			return "", fmt.Errorf("pisugar: a line over %d bytes, which no pisugar-server answer is", c.r.Size())
+		}
 		if err != nil {
 			return "", err
 		}
-		line = strings.TrimRight(line, "\r\n")
+		line := strings.TrimRight(string(raw), "\r\n")
 		if after, ok := strings.CutPrefix(line, prefix); ok {
 			return strings.TrimSpace(after), nil
 		}
@@ -144,7 +160,7 @@ func ParseAddress(s string) (network, address string, err error) {
 	}
 	s = strings.TrimPrefix(s, "tcp://")
 	if !strings.Contains(s, ":") {
-		s = net.JoinHostPort(s, defaultPort)
+		s = net.JoinHostPort(s, DefaultPort)
 	}
 	if _, _, err := net.SplitHostPort(s); err != nil {
 		return "", "", fmt.Errorf("%q is neither a socket path nor a host:port", s)

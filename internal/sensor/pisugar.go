@@ -5,6 +5,8 @@ import (
 	"errors"
 	"fmt"
 	"io/fs"
+	"net"
+	"time"
 
 	"github.com/meshcore-go/OwlShack/internal/sensor/pisugar"
 )
@@ -71,9 +73,8 @@ func (PiSugarProvider) Validate(spec Spec) error {
 	return err
 }
 
-// Discover asks each default address what it is; the model names the candidate, since a PiSugar 2 and a 3 answer different commands.
+// Discover stops at the first default address that answers, as one local server listens on both; the model names the candidate, since a PiSugar 2 and a 3 answer different commands.
 func (PiSugarProvider) Discover(ctx context.Context) ([]Candidate, error) {
-	var out []Candidate
 	for _, addr := range piSugarAddrs {
 		c, err := pisugar.Dial(ctx, addr)
 		if err != nil {
@@ -84,12 +85,25 @@ func (PiSugarProvider) Discover(ctx context.Context) ([]Candidate, error) {
 		if err != nil {
 			continue
 		}
-		out = append(out, Candidate{
+		return []Candidate{{
 			Kind: piSugarKind, Label: model, Detail: addr, Addable: true,
 			Options: map[string]string{"address": addr},
-		})
+		}}, nil
 	}
-	return out, nil
+	return nil, nil
+}
+
+// Claim is the server a spec reads, so one board is not added twice; the default socket and a loopback default port are the one local server.
+func (PiSugarProvider) Claim(spec Spec) string {
+	_, address, err := pisugar.ParseAddress(spec.Options["address"])
+	if err != nil {
+		return ""
+	}
+	host, port, _ := net.SplitHostPort(address)
+	if address == pisugar.DefaultSocket || port == pisugar.DefaultPort && (host == "localhost" || net.ParseIP(host).IsLoopback()) {
+		return "this host's pisugar-server"
+	}
+	return address
 }
 
 func (PiSugarProvider) Open(spec Spec) (Sensor, error) {
@@ -99,10 +113,32 @@ func (PiSugarProvider) Open(spec Spec) (Sensor, error) {
 	return &piSugar{addr: spec.Options["address"]}, nil
 }
 
+// piSugarRetry is how long a server that timed out is left alone, since the hub reads one sensor at a time and a silent server costs its whole timeout.
+const piSugarRetry = 5 * time.Minute
+
 // piSugar dials per read rather than holding the socket, which would have to survive the server restarting under it between polls.
-type piSugar struct{ addr string }
+type piSugar struct {
+	addr string
+	// timedOut is answered, without dialling, until retryAt.
+	timedOut error
+	retryAt  time.Time
+}
 
 func (s *piSugar) Read(ctx context.Context) ([]Reading, error) {
+	if time.Now().Before(s.retryAt) {
+		return nil, s.timedOut
+	}
+	out, err := s.read(ctx)
+	var ne net.Error
+	if errors.As(err, &ne) && ne.Timeout() {
+		s.timedOut = fmt.Errorf("%w; trying again every %s", err, piSugarRetry)
+		s.retryAt = time.Now().Add(piSugarRetry)
+		return nil, s.timedOut
+	}
+	return out, err
+}
+
+func (s *piSugar) read(ctx context.Context) ([]Reading, error) {
 	c, err := pisugar.Dial(ctx, s.addr)
 	if err != nil {
 		return nil, err
