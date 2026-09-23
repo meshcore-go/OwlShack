@@ -16,6 +16,9 @@ Schema `user_version` 17: adds the sensor tables and who may read each companion
   the parts that could sit at each address that answers, and checks the part when you add it. An
   SHTC3 answers nothing until woken, so it is added from the list. A device with no driver is still
   listed, and a bus that could not be scanned says so, so an empty list means an empty bus.
+  Each sensor's card says whether it is healthy, calibrating, waiting for its first read, stale or
+  failing, and a bar at the top counts each state and shows only that state when tapped. A derived
+  sensor shows what it reads and each source's value, and the page says once when updates stop.
 - **An air-quality index from the BME680.** With its heater on it is sampled every 3 seconds, as
   MeshCore firmware runs Bosch's BSEC. Once it has run in (5 minutes, and again after every restart)
   it reports an index, a static index, CO2 and breath VOC equivalents and how far it has calibrated.
