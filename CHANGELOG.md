@@ -9,59 +9,33 @@ Schema `user_version` 17: adds the sensor tables and who may read each companion
 
 ### Added
 
-- **Sensors on the host.** A new Sensors page reads I2C parts on the Pi's buses every 5 seconds:
-  SHTC3, LPS22HB, BME680, ENS210, and the inputs of an ADS1115 or SGM58031 ADC, plus a PiSugar UPS
-  through pisugar-server. An expression sensor works a value out from others, such as a dew point,
-  or an ADC divider in volts. A scan only reads, so it never disturbs what is on the bus: it offers
-  the parts that could sit at each address that answers, and checks the part when you add it. An
-  SHTC3 answers nothing until woken, so it is added from the list. A device with no driver is still
-  listed, and a bus that could not be scanned says so, so an empty list means an empty bus.
-  Each sensor's card says whether it is healthy, calibrating, waiting for its first read, stale or
-  failing, and a bar at the top counts each state and shows only that state when tapped. A derived
-  sensor shows what it reads and each source's value, and the page says once when updates stop.
-  A sensor that will not open, such as one added at the wrong address, is tried again less and
-  less often, up to every 5 minutes, and its card counts down to the next try.
-- **Sensors read from the web.** An HTTP sensor fetches an address on its own schedule, every 10
-  minutes by default, and reads numbers out of the reply: from JSON by a path such as
-  `current.temperature_2m`, or from text with a pattern. One fetch can give several values, such as
-  a weather report's temperature, humidity and wind, and each can be published on the mesh or feed a
-  derived sensor. It can send extra headers and log in with a username and password, a bearer token
-  or an API key in a header or the query. Passwords and keys are never sent back to the page, and an
-  edit keeps them unless you type a new one. Each HTTP sensor says how old a value may get before it
-  counts as out of date. Test fetches the address once before you save, shows each value or why it
-  failed, and lists every number in a JSON reply so a value is added with one click, unit and all
-  where the service gives one.
-- **An air-quality index from the BME680.** With its heater on it is sampled every 3 seconds, as
-  MeshCore firmware runs Bosch's BSEC. Once it has run in (5 minutes, and again after every restart)
-  it reports an index, a static index, CO2 and breath VOC equivalents and how far it has calibrated.
-  It learns your air over days, and keeps what it learned across restarts.
-- **Publishing sensors over the mesh.** The repeater's new Telemetry tab, and each companion's
-  Telemetry page, choose which readings go out on which channel when another node asks, using the
-  same LPP types firmware nodes use. Channel 1 can carry a PiSugar or an ADC divider as the node's
-  own battery.
-- **Who may read a companion's telemetry.** Battery and device, position, and sensor readings each
-  have their own setting, as on a firmware companion: no one, chosen contacts, or every contact.
-  All three start at no one, so a companion answers nothing until you allow it. A position is
-  never sent: a firmware node sends one only from a GPS, and the host has none.
+- **Sensors page.** Reads I2C sensors on the Pi every 5 seconds: SHTC3, LPS22HB, BME680, ENS210,
+  ADS1115 or SGM58031 ADC inputs, and a PiSugar UPS. Each card shows whether it is healthy,
+  calibrating, waiting, stale or failing.
+- **Scanning for sensors.** A scan only reads, so it never disturbs the bus, and lists what could
+  be at each address that answers. An SHTC3 sleeps until woken, so add it from the list.
+- **Derived sensors.** Work a value out from other sensors, such as a dew point or an ADC divider
+  in volts.
+- **Web sensors.** Fetch a URL on a schedule and read numbers from the reply, such as a weather
+  report's temperature and wind. Headers and logins are supported, and Test tries it before you save.
+- **Air quality from the BME680.** An air-quality index and CO2 and VOC estimates after a 5-minute
+  run-in. It calibrates to your air over days and remembers it across restarts.
+- **Sensors over the mesh.** Choose which readings the repeater and each companion send when
+  another node asks.
+- **Who may read a companion's telemetry.** Battery, position and sensors each allow no one, chosen
+  contacts or every contact. All three start at no one.
 
 ### Changed
 
-- **The repeater follows the firmware's telemetry rules.** Its battery and temperature always go
-  out, and a guest login gets those and nothing more.
+- **Repeater telemetry follows the firmware.** Battery and temperature always go out, and a guest
+  gets only those.
 
 ### Fixed
 
-- **Warnings were hard to read in light mode.** The amber text measured about 2.7:1 against a
-  card; it is darker now and passes 4.5:1 on cards, the page and warning strips. Dark mode is
-  unchanged.
-- **A companion's ACKs now flood with its own path hash size.** One set to two- or three-byte
-  hashes flooded its DM ACKs, and its replies to a node with no route back, with one-byte hashes;
-  they now go out with the companion's setting, as a firmware companion's do.
-- **Saving one contact setting could clear another.** Marking a contact as a repeater, or saving
-  its login, could wipe a saved password or its monitoring settings. Each save now changes only
-  what it names, and a save the server cannot use (a misspelt setting, a password longer than a
-  node keeps, an interval the page does not offer) is refused with the reason instead of being
-  accepted and ignored.
+- **Warnings were hard to read in light mode.** They now meet the 4.5:1 contrast guideline.
+- **Companion ACKs flooded with one-byte path hashes.** They now use the companion's own setting.
+- **Saving one contact setting could clear another.** Each save now changes only what it names, and
+  a bad value is refused with the reason.
 
 ## v1.4.2 - 2026-09-21
 
