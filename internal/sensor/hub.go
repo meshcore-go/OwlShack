@@ -168,6 +168,11 @@ func (h *Hub) Prepare(spec Spec) (Spec, error) {
 	opts := map[string]string{}
 	maps.Copy(opts, spec.Options)
 	for _, f := range kind.Fields {
+		// Dropped, or a password stays stored under an auth method that no longer uses it.
+		if !f.Shown(opts) {
+			delete(opts, f.Key)
+			continue
+		}
 		if opts[f.Key] == "" && f.Default != "" {
 			opts[f.Key] = f.Default
 		}
@@ -361,9 +366,13 @@ func (h *Hub) Snapshot() []Status {
 func (h *Hub) snapshotLocked() []Status {
 	out := make([]Status, 0, len(h.entries))
 	for _, e := range h.entries {
-		out = append(out, Status{
-			Spec: e.spec, Readings: slices.Clone(e.readings), At: e.at, Err: e.err,
-		})
+		st := Status{Spec: e.spec, Readings: slices.Clone(e.readings), At: e.at, Err: e.err}
+		if p, ok := h.providers[e.spec.Provider].(Staler); ok {
+			if d, ok := p.StaleAfter(e.spec); ok {
+				st.StaleAfter = d
+			}
+		}
+		out = append(out, st)
 	}
 	slices.SortFunc(out, func(a, b Status) int { return cmp.Compare(a.Spec.ID, b.Spec.ID) })
 	return out
@@ -463,13 +472,25 @@ func (h *Hub) read(ctx context.Context, e *entry) {
 		h.fail(e, err.Error())
 		return
 	}
+	at := time.Now()
+	// A part sampled on its own clock is as old as its sample, not as this read.
+	if s, ok := e.sensor.(sampler); ok {
+		if at = s.SampledAt(); at.IsZero() {
+			return
+		}
+	}
 	h.mu.Lock()
 	recovered := e.err != ""
-	e.readings, e.at, e.err = readings, time.Now(), ""
+	e.readings, e.at, e.err = readings, at, ""
 	h.mu.Unlock()
 	if recovered {
 		h.log.Info("sensor reading again", "sensor", e.spec.Name, "provider", e.spec.Provider)
 	}
+}
+
+// sampler is a sensor that reads on its own clock and hands back its latest sample; a zero time is none taken yet.
+type sampler interface {
+	SampledAt() time.Time
 }
 
 // fail leaves the last good readings alone, so a consumer can show them with their age; it logs a change, not every pass.

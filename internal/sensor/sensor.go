@@ -5,6 +5,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"slices"
 	"strings"
 	"time"
 	"unicode"
@@ -42,6 +43,11 @@ type Claimer interface {
 	Claim(spec Spec) string
 }
 
+// Staler is a provider whose sensors go out of date on their own schedule, such as a web fetch every ten minutes; the rest go stale by the poll.
+type Staler interface {
+	StaleAfter(spec Spec) (time.Duration, bool)
+}
+
 // Binder is a provider whose sensors read other sensors; the hub hands it a snapshot of itself.
 type Binder interface {
 	Bind(snapshot func() []Status)
@@ -64,6 +70,21 @@ type Field struct {
 	Multiline bool
 	// Identifies means the value says which part this is rather than how it is tuned.
 	Identifies bool
+	// Secret keeps the value off every read of the sensor, so a page shows only that one is set.
+	Secret bool
+	// When shows the field only while an earlier field has one of these values; hidden, it is dropped on save.
+	When *When
+}
+
+// When is the condition a field is shown under.
+type When struct {
+	Key    string
+	Values []string
+}
+
+// Shown says whether the field applies under these options.
+func (f Field) Shown(options map[string]string) bool {
+	return f.When == nil || slices.Contains(f.When.Values, options[f.When.Key])
 }
 
 // Binding is one reading an expression uses under a name of the operator's choosing, so a rename cannot break it.
@@ -218,6 +239,8 @@ type Status struct {
 	Readings []Reading
 	At       time.Time
 	Err      string
+	// StaleAfter is how old a reading may be before it is out of date, and zero where the poll decides.
+	StaleAfter time.Duration
 }
 
 // ProviderInfo is one provider's entry in the picker.
