@@ -33,6 +33,8 @@ export interface Sensor {
   at: string | null;
   // how old the readings were when sent, by the host's clock alone, so skew between clocks never reads as age; null until read once.
   ageSecs: number | null;
+  // how long until a sensor that failed to open is tried again, by the host's clock; null when it is not waiting.
+  retryInSecs: number | null;
   // the kind's catalogue group, such as Environment.
   category: string;
   // the secret options that hold a value; options leaves them out.

@@ -425,6 +425,10 @@ func sensorStatusDTOs(sh *sensor.Hub, in []sensor.Status) []api.SensorStatus {
 			age := math.Round(max(0, now.Sub(s.At).Seconds())*10) / 10
 			row.AgeSecs = &age
 		}
+		if !s.RetryAt.IsZero() && s.Err != "" {
+			in := math.Round(max(0, s.RetryAt.Sub(now).Seconds())*10) / 10
+			row.RetryInSecs = &in
+		}
 		out = append(out, row)
 	}
 	return out

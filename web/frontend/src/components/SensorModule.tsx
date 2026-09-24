@@ -75,6 +75,7 @@ export function SensorModule({
   kind,
   feeds,
   age,
+  retryIn,
   linked,
   confirming,
   onHover,
@@ -91,6 +92,8 @@ export function SensorModule({
   feeds: Sensor[];
   // age is the host's age at sending plus the time since, so it counts up between pushes.
   age: number | null;
+  // retryIn counts down to the next try at opening a sensor that would not open.
+  retryIn: number | null;
   linked: boolean;
   confirming: boolean;
   onHover: (ids: number[] | null) => void;
@@ -184,6 +187,11 @@ export function SensorModule({
           <span className="block text-muted-foreground">
             {s.ageSecs === null ? "Never read yet." : `Last good read ${ageText(age)} ago, shown below.`}
           </span>
+          {retryIn === null ? null : (
+            <span className="block text-muted-foreground tabular-nums">
+              {retryIn > 0 ? `Trying again in ${countdown(retryIn)}.` : "Trying again now."}
+            </span>
+          )}
         </Band>
       ) : null}
       {state === "stale" ? (

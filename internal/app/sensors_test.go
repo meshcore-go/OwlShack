@@ -390,9 +390,16 @@ func TestSensorStatusDTOs_CarryAgeCategoryAndRoles(t *testing.T) {
 		},
 		At: time.Now().Add(-3 * time.Second),
 	}
-	never := sensor.Status{Spec: sensor.Spec{ID: 2, Provider: "virtual", Kind: sensor.KindExpression, Name: "b"}}
+	never := sensor.Status{Spec: sensor.Spec{ID: 2, Provider: "virtual", Kind: sensor.KindExpression, Name: "b"},
+		Err: "wrong chip", RetryAt: time.Now().Add(40 * time.Second)}
 
 	got := sensorStatusDTOs(hub, []sensor.Status{read, never})
+	if r := got[1].RetryInSecs; r == nil || *r < 39 || *r > 40 {
+		t.Errorf("a sensor retried in 40s has retryInSecs %v, want about 40", r)
+	}
+	if got[0].RetryInSecs != nil {
+		t.Errorf("an open sensor has retryInSecs %v, want null", *got[0].RetryInSecs)
+	}
 	if a := got[0].AgeSecs; a == nil || *a < 2.9 || *a > 4 {
 		t.Errorf("a read 3s ago has age %v, want about 3", a)
 	}

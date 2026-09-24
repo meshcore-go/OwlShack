@@ -232,6 +232,7 @@ export function SensorsPage() {
                         kind={kinds?.find((k) => k.provider === s.provider && k.kind === s.kind)}
                         feeds={view.feeds.get(s.id) ?? []}
                         age={s.ageSecs === null ? null : s.ageSecs + sinceSecs}
+                        retryIn={s.retryInSecs === null ? null : Math.max(0, s.retryInSecs - sinceSecs)}
                         linked={linked?.includes(s.id) ?? false}
                         confirming={confirmRemove === s.id}
                         onHover={setLinked}

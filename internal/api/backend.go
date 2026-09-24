@@ -358,6 +358,8 @@ type SensorStatus struct {
 	StaleAfterSecs float64 `json:"staleAfterSecs"`
 	// AgeSecs is how old Readings were when this was sent, by the host's clock alone, so a phone with another time never reads it as stale or fresh; null until first read.
 	AgeSecs *float64 `json:"ageSecs"`
+	// RetryInSecs is how long until a sensor that failed to open is tried again, by the host's clock; null when it is not waiting.
+	RetryInSecs *float64 `json:"retryInSecs"`
 	// Category is the kind's catalogue group, such as "Environment", so the page can group without the catalogue.
 	Category string `json:"category"`
 	Error    string `json:"error"`
