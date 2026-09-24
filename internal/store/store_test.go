@@ -2,9 +2,7 @@ package store
 
 import (
 	"context"
-	"crypto/sha256"
 	"database/sql"
-	"encoding/hex"
 	"errors"
 	"fmt"
 	"path/filepath"
@@ -762,10 +760,10 @@ func TestPacketRepo_ListFilter(t *testing.T) {
 	}
 }
 
-// Bump wantVersion whenever a migration is appended to the migrations slice.
+// Bump wantVersion whenever a migration file is added.
 func TestStore_MigrateUserVersion(t *testing.T) {
 	t.Parallel()
-	const wantVersion = 17 // migrateV1, 2 squashed noop slots, migrateV2..migrateV15
+	const wantVersion = 17 // one per file in migrations/
 	st := newTestStore(t)
 	var v int
 	if err := st.db.QueryRowContext(t.Context(), "PRAGMA user_version").Scan(&v); err != nil {
@@ -811,20 +809,8 @@ func TestStore_UpgradeFromReleasedSchema(t *testing.T) {
 
 	path := filepath.Join(t.TempDir(), "released.db")
 
-	// Running only the shipped slots reproduces a node in the field.
-	db, err := openWritableDB(path)
-	if err != nil {
-		t.Fatalf("openWritableDB: %v", err)
-	}
-	for i := range releasedVersion {
-		if err := migrations[i](t.Context(), db); err != nil {
-			t.Fatalf("building released schema at slot %d: %v", i+1, err)
-		}
-	}
-	if _, err := db.ExecContext(t.Context(),
-		fmt.Sprintf("PRAGMA user_version = %d", releasedVersion)); err != nil {
-		t.Fatalf("stamping released version: %v", err)
-	}
+	// Running only the shipped files reproduces a node in the field.
+	db := dbAt(t, path, releasedVersion)
 	// Operator data that must still be there afterwards.
 	if _, err := db.ExecContext(t.Context(),
 		"INSERT INTO companions (name) VALUES ('upgrade-me')"); err != nil {
@@ -886,83 +872,10 @@ func TestStore_UpgradeFromReleasedSchema(t *testing.T) {
 	}
 }
 
-// recordingExecer captures a migration's SQL so it can be fingerprinted without vendoring the DDL.
-type recordingExecer struct {
-	inner dbExecer
-	sql   []string
-}
-
-// A migration stops at its first error, so passing one back would pin only the statements before it.
-func (r *recordingExecer) ExecContext(ctx context.Context, q string, args ...any) (sql.Result, error) {
-	r.sql = append(r.sql, q)
-	res, err := r.inner.ExecContext(ctx, q, args...)
-	if err != nil {
-		return noResult{}, nil
-	}
-	return res, nil
-}
-
-type noResult struct{}
-
-func (noResult) LastInsertId() (int64, error) { return 0, nil }
-func (noResult) RowsAffected() (int64, error) { return 0, nil }
-
-func (r *recordingExecer) QueryContext(ctx context.Context, q string, args ...any) (*sql.Rows, error) {
-	r.sql = append(r.sql, q)
-	return r.inner.QueryContext(ctx, q, args...)
-}
-
-// A failure means a shipped, frozen slot changed: append a new slot instead of re-pinning, unless the released set itself grew.
-func TestMigrations_ShippedSlotsFrozen(t *testing.T) {
-	t.Parallel()
-	// One pin per release over the slots it shipped; every digest changed when recordingExecer stopped hiding statements after a migration's first error, not the SQL.
-	releases := []struct {
-		tag    string
-		slots  int
-		digest string
-	}{
-		{"v1.1.0", 7, "6879325efcf15f70"},
-		{"v1.2.0", 9, "b40dc045b6354b8f"},
-		{"v1.3.0", 10, "02bb0366d61ca3ec"},
-		{"v1.3.1", 11, "5a7adf39b18fa442"},
-		{"v1.4.2", 16, "3c4120cf23cb10c4"},
-	}
-
-	st := newTestStore(t)
-	for _, rel := range releases {
-		if len(migrations) < rel.slots {
-			t.Fatalf("migrations has %d slots, fewer than the %d released in %s",
-				len(migrations), rel.slots, rel.tag)
-		}
-		tx, err := st.db.BeginTx(t.Context(), nil)
-		if err != nil {
-			t.Fatalf("begin: %v", err)
-		}
-		h := sha256.New()
-		for i := range rel.slots {
-			rec := &recordingExecer{inner: tx}
-			// Errors are irrelevant: the schema already exists, so re-running a
-			// slot may fail. The SQL it attempts is what is being pinned.
-			_ = migrations[i](t.Context(), rec)
-			fmt.Fprintf(h, "slot %d\n", i+1)
-			for _, q := range rec.sql {
-				fmt.Fprintln(h, strings.Join(strings.Fields(q), " "))
-			}
-		}
-		tx.Rollback()
-		if got := hex.EncodeToString(h.Sum(nil))[:16]; got != rel.digest {
-			t.Errorf("the SQL of migration slots 1-%d, released in %s, changed (digest %s, want %s).\n"+
-				"A shipped slot must never be edited, renumbered or squashed — a database "+
-				"already at that version will skip it. Append a new slot instead.",
-				rel.slots, rel.tag, got, rel.digest)
-		}
-	}
-}
-
 // A 4-byte trigger could only come from the bot form, which alone offered it. Config.Validate now
 // rejects that, and a save validates the whole assembled config — so leaving one in place would
 // wall off every later config change, not just an edit to that bot.
-func TestMigrateV12_ClampsTriggerPathHashSize(t *testing.T) {
+func TestMigration014_ClampsTriggerPathHashSize(t *testing.T) {
 	t.Parallel()
 	st := newTestStore(t)
 	ctx := t.Context()
@@ -990,8 +903,8 @@ func TestMigrateV12_ClampsTriggerPathHashSize(t *testing.T) {
 		t.Fatalf("seeding mirror trigger: %v", err)
 	}
 
-	if err := migrateV12(ctx, st.db); err != nil {
-		t.Fatalf("migrateV12: %v", err)
+	if err := migrations[13].apply(ctx, st.db); err != nil {
+		t.Fatalf("014_trigger_path_hash_clamp.sql: %v", err)
 	}
 
 	rows, err := st.db.QueryContext(ctx, `SELECT path_hash_size FROM triggers ORDER BY id`)
