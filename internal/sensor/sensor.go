@@ -161,6 +161,8 @@ const (
 	GasPercentageAccuracy Metric = "gas_percentage_accuracy"
 	// AirQualityRunIn is 1 once the plate has been heated long enough for the index to mean anything.
 	AirQualityRunIn Metric = "air_quality_run_in"
+	// AirQualityRunInLeft is the seconds of run-in still to go, reported only while it runs, and in no part's metrics so no channel map offers a countdown to the mesh.
+	AirQualityRunInLeft Metric = "air_quality_run_in_left"
 )
 
 // Metrics is what the framework itself knows about, not everything a reading may carry.
@@ -191,6 +193,7 @@ var roles = map[Metric]string{
 	Resistance: "detail", GasCompensated: "detail", StaticIAQ: "detail",
 	CO2Equivalent: "detail", BreathVOC: "detail", GasPercentage: "detail",
 	IAQAccuracy: "calibration", GasPercentageAccuracy: "calibration", AirQualityRunIn: "calibration",
+	AirQualityRunInLeft: "calibration",
 }
 
 // RoleOf says where a reading belongs on a card: "headline" shown large, "detail" in a list, "calibration" read as how far a fusion has learned.

@@ -593,3 +593,21 @@ func TestOutOfRange_FreezesTheBands(t *testing.T) {
 		t.Error("the band did not move on an in-range reading, so the freeze test proves nothing")
 	}
 }
+
+// Without it a page can only say run-in is not done, never how long is left.
+func TestRunInLeft_CountsDownToZero(t *testing.T) {
+	t.Parallel()
+	tr := newTracker(pollPeriod)
+	out, at := run(tr, 50_000, 1, epoch)
+	if out.RunInLeft != 1200*time.Second {
+		t.Errorf("after the first sample %s is left, want the whole 20m0s", out.RunInLeft)
+	}
+	out, at = run(tr, 50_000, 10, at)
+	if out.RunInLeft != 900*time.Second {
+		t.Errorf("after 300s of samples %s is left, want 15m0s", out.RunInLeft)
+	}
+	out, _ = run(tr, 50_000, runInSamples, at)
+	if !out.RunIn || out.RunInLeft != 0 {
+		t.Errorf("run-in done %v with %s left, want done with none", out.RunIn, out.RunInLeft)
+	}
+}

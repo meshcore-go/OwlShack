@@ -502,10 +502,20 @@ func TestEnvSensor_HoldsTheIndexBackUntilRunInEnds(t *testing.T) {
 			t.Errorf("%s was reported at accuracy 0", m)
 		}
 	}
-	for _, m := range []Metric{IAQAccuracy, GasPercentageAccuracy, AirQualityRunIn} {
+	for _, m := range []Metric{IAQAccuracy, GasPercentageAccuracy, AirQualityRunIn, AirQualityRunInLeft} {
 		if !reported[m] {
 			t.Errorf("%s was held back too, so nothing says the index is still calibrating", m)
 		}
+	}
+
+	// Once run in, there is no countdown left to show.
+	dev.air.RunIn, dev.air.Accuracy = true, 1
+	got, err = s.Read(t.Context())
+	if err != nil {
+		t.Fatalf("Read: %v", err)
+	}
+	if slices.ContainsFunc(got, func(r Reading) bool { return r.Metric == AirQualityRunInLeft }) {
+		t.Error("a part that has run in still reports run-in left")
 	}
 }
 

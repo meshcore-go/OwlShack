@@ -102,6 +102,8 @@ type AirQuality struct {
 	Accuracy       int
 	GasAccuracy    int
 	RunIn          bool
+	// RunInLeft is how much more sampling run-in needs, zero once done; a gap in the samples starts it over.
+	RunInLeft time.Duration
 	// Stabilised is specification output 12, whose threshold ships at zero: it is true from the first sample.
 	Stabilised bool
 }
@@ -164,7 +166,11 @@ func (t *tracker) observe(gasOhms, tempC, rh float64, at time.Time) AirQuality {
 	stabilised, runIn, matured, softStart, dt := t.monitorRunIn(at)
 	gas, temp, hum := t.condition(gasOhms, tempC, rh)
 	compensated, band := t.track(gas, temp, hum, stabilised, runIn, matured, dt)
-	return t.mapIndex(compensated, band, softStart, runIn, stabilised)
+	out := t.mapIndex(compensated, band, softStart, runIn, stabilised)
+	if !runIn {
+		out.RunInLeft = time.Duration(math.Ceil(t.runInSec-t.st.RunInAccumSec) * float64(time.Second))
+	}
+	return out
 }
 
 // coefficient turns a cut-off frequency into a one-pole smoothing factor (§11.1); at or above Nyquist, as every default is at 300 s, the sample passes through.

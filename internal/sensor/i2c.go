@@ -549,6 +549,10 @@ func (s *envSensor) Read(context.Context) ([]Reading, error) {
 			}
 		}
 	}
+	// Outside the metrics loop, as no part declares the countdown.
+	if i := slices.IndexFunc(derived, func(r Reading) bool { return r.Metric == AirQualityRunInLeft }); i >= 0 {
+		out = append(out, derived[i])
+	}
 	return out, nil
 }
 
@@ -627,6 +631,9 @@ func (s *envSensor) readAirQuality() []Reading {
 		{Metric: IAQAccuracy, Label: "index accuracy", Value: float64(v.Accuracy)},
 		{Metric: GasPercentageAccuracy, Label: "gas percentage accuracy", Value: float64(v.GasAccuracy)},
 		{Metric: AirQualityRunIn, Label: "run-in complete", Value: runIn},
+	}
+	if !v.RunIn {
+		out = append(out, Reading{Metric: AirQualityRunInLeft, Label: "run-in left", Value: v.RunInLeft.Seconds(), Unit: "s"})
 	}
 	if v.Accuracy > 0 {
 		out = append(out,
