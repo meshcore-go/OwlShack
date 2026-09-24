@@ -42,6 +42,21 @@ type entry struct {
 	readings []Reading
 	at       time.Time
 	err      string
+	// openFails and nextOpen back off a sensor that will not open, as each try sends its identify sequence to whatever is there.
+	openFails int
+	nextOpen  time.Time
+}
+
+// openBackoff doubles from one poll to a cap, so a part plugged in late is found within minutes without a write every pass.
+const (
+	openBackoffFirst = 5 * time.Second
+	openBackoffMax   = 5 * time.Minute
+	// openSlack lets a pass that lands a moment before its retry time count, or every step would wait an extra poll.
+	openSlack = time.Second
+)
+
+func openBackoff(fails int) time.Duration {
+	return min(openBackoffFirst<<min(fails-1, 16), openBackoffMax)
 }
 
 func NewHub(log *slog.Logger, providers ...Provider) *Hub {
@@ -404,6 +419,9 @@ func (h *Hub) snapshotLocked() []Status {
 	out := make([]Status, 0, len(h.entries))
 	for _, e := range h.entries {
 		st := Status{Spec: e.spec, Readings: slices.Clone(e.readings), At: e.at, Err: e.err}
+		if e.sensor == nil {
+			st.RetryAt = e.nextOpen
+		}
 		if p, ok := h.providers[e.spec.Provider].(Staler); ok {
 			if d, ok := p.StaleAfter(e.spec); ok {
 				st.StaleAfter = d
@@ -489,13 +507,20 @@ func (h *Hub) read(ctx context.Context, e *entry) {
 			h.fail(e, fmt.Sprintf("unknown provider %q", e.spec.Provider))
 			return
 		}
+		if time.Until(e.nextOpen) > openSlack {
+			return
+		}
 		s, err := p.Open(e.spec)
 		if err != nil {
+			h.mu.Lock()
+			e.openFails++
+			e.nextOpen = time.Now().Add(openBackoff(e.openFails))
+			h.mu.Unlock()
 			h.fail(e, err.Error())
 			return
 		}
 		h.mu.Lock()
-		e.sensor = s
+		e.sensor, e.openFails, e.nextOpen = s, 0, time.Time{}
 		h.mu.Unlock()
 	}
 

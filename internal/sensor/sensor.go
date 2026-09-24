@@ -277,6 +277,8 @@ type Status struct {
 	Err      string
 	// StaleAfter is how old a reading may be before it is out of date, and zero where the poll decides.
 	StaleAfter time.Duration
+	// RetryAt is when a sensor that failed to open is next tried, and zero when it is open or has not been tried.
+	RetryAt time.Time
 }
 
 // ProviderInfo is one provider's entry in the picker.

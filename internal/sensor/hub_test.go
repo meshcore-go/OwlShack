@@ -30,6 +30,8 @@ type fakeProvider struct {
 	opens            int
 	closes           int
 	reads            int
+	// tries counts every Open, the failed ones too.
+	tries int
 }
 
 func (p *fakeProvider) ID() string    { return "fake" }
@@ -59,6 +61,7 @@ func (p *fakeProvider) Discover(context.Context) ([]Candidate, error) {
 func (p *fakeProvider) Open(Spec) (Sensor, error) {
 	p.mu.Lock()
 	defer p.mu.Unlock()
+	p.tries++
 	if p.openErr != nil {
 		return nil, p.openErr
 	}
@@ -239,10 +242,44 @@ func TestHub_FailedOpenIsReportedAndRetried(t *testing.T) {
 	}
 
 	p.set(func(p *fakeProvider) { p.openErr = nil })
+	h.entries[1].nextOpen = time.Time{}
 	h.pass(t.Context(), false)
 	got = h.Snapshot()
 	if got[0].Err != "" || len(got[0].Readings) != 1 {
 		t.Fatalf("after the device came back: got %+v, want a clean reading", got[0])
+	}
+	if !got[0].RetryAt.IsZero() {
+		t.Errorf("RetryAt = %v on an open sensor, want zero", got[0].RetryAt)
+	}
+}
+
+// Each open sends the part's identify sequence to whatever answers there, so a wrong address must not get one every pass.
+func TestHub_AFailedOpenBacksOff(t *testing.T) {
+	p := newFake()
+	p.set(func(p *fakeProvider) { p.openErr = errors.New("wrong chip") })
+	h := NewHub(testLog(), p)
+	h.Set([]Spec{spec(1)})
+
+	for i, want := range []time.Duration{5 * time.Second, 10 * time.Second, 20 * time.Second, 40 * time.Second, 80 * time.Second, 160 * time.Second, 5 * time.Minute, 5 * time.Minute} {
+		before := time.Now()
+		h.pass(t.Context(), false)
+		h.pass(t.Context(), false)
+		if p.tries != i+1 {
+			t.Fatalf("after failure %d: %d opens, want %d: a pass inside the backoff opened it again", i+1, p.tries, i+1)
+		}
+		if got := h.Snapshot()[0].RetryAt.Sub(before); got < want || got > want+time.Second {
+			t.Fatalf("after failure %d: next try in %v, want %v", i+1, got, want)
+		}
+		h.entries[1].nextOpen = time.Now().Add(openSlack / 2)
+	}
+
+	// An edit is a new entry, so a fixed address is tried straight away.
+	fixed := spec(1)
+	fixed.Options = map[string]string{"n": "2"}
+	h.Set([]Spec{fixed})
+	h.pass(t.Context(), false)
+	if p.tries != 9 {
+		t.Errorf("%d opens after an edit, want 9: the edit waited out the old backoff", p.tries)
 	}
 }
 
@@ -748,6 +785,7 @@ func TestHub_LogsAFailureWhenItStartsNotEveryPass(t *testing.T) {
 		h.pass(t.Context(), false)
 	}
 	p.set(func(p *fakeProvider) { p.openErr, p.readErr = nil, errors.New("i2c: remote I/O error") })
+	h.entries[1].nextOpen = time.Time{}
 	for range 3 {
 		h.pass(t.Context(), false)
 	}
