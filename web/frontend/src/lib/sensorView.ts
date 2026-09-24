@@ -80,11 +80,12 @@ export function displayReading(r: SensorReading): { value: string; unit?: string
   return { value: formatNumber(r.value), unit: r.unit };
 }
 
-// Four significant figures, at least two decimals below 100: 0.120125 V and 0.120375 V stay apart, and 0.00004 is not 0.
+// Four significant figures, up to two decimals below 100, with trailing zeros dropped: 0.120125 V and 0.120375 V stay apart, 0.00004 is not 0, and 36 is not 36.00.
 function formatNumber(v: number): string {
   if (v === 0) return "0";
   const mag = Math.floor(Math.log10(Math.abs(v)));
-  return v.toFixed(Math.min(6, Math.max(mag < 2 ? 2 : 0, 3 - mag)));
+  const s = v.toFixed(Math.min(6, Math.max(mag < 2 ? 2 : 0, 3 - mag)));
+  return s.includes(".") ? s.replace(/\.?0+$/, "") : s;
 }
 
 export const readingLabel = (r: SensorReading) => r.label || r.metric.replace(/_/g, " ");
