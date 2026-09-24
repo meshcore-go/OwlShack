@@ -333,12 +333,12 @@ function Tile({ reading, sensor, dim }: { reading: SensorReading; sensor: Sensor
   const accuracy = reading.metric === "iaq" ? sensor.readings.find((x) => x.metric === "iaq_accuracy")?.value : undefined;
   const provisional = accuracy !== undefined && accuracy < 2;
   return (
-    <div className={cn("flex min-w-0 flex-col gap-2 bg-card px-3.5 pb-3 pt-3.5", provisional && "hatch")}>
+    <div className={cn("@container flex min-w-0 flex-col gap-2 bg-card px-3.5 pb-3 pt-3.5", provisional && "hatch")}>
       <span className="label-overline">{readingLabel(reading)}</span>
       <div className="flex flex-wrap items-baseline gap-x-1.5 gap-y-0.5">
         <span
           className={cn(
-            "min-w-0 wrap-anywhere font-mono text-3xl font-semibold leading-none tabular-nums",
+            "min-w-0 wrap-anywhere font-mono text-2xl font-semibold @min-[11rem]:text-3xl leading-none tabular-nums",
             provisional && "text-foreground/70",
             dim && "text-muted-foreground",
           )}
