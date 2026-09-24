@@ -26,9 +26,14 @@ import {
   updateSensor,
   type Sensor,
   type SensorBinding,
+  type SensorField,
   type SensorKind,
   type SensorScan,
 } from "@/lib/sensorsApi";
+
+// shown mirrors the server's rule: a field with a condition applies only while it holds, and is dropped on save otherwise.
+const shown = (f: SensorField, options: Record<string, string>) =>
+  !f.when || f.when.values.includes(options[f.when.key] ?? "");
 
 // A pick is the part being configured, whether it came from the scan or the catalogue.
 interface Pick {
@@ -72,7 +77,7 @@ const MAX_NAME = 64;
 const CONTROL = /[\p{Cc}\p{Bidi_Control}]/u;
 
 // blockedBy says why the form cannot be saved yet, in the operator's words, or null when it can.
-function blockedBy(pick: Pick | null, sensors: Sensor[], editingId?: number): string | null {
+function blockedBy(pick: Pick | null, sensors: Sensor[], editingId?: number, stored: string[] = []): string | null {
   if (!pick) return "Choose a part first.";
   const name = pick.name.trim();
   if (!name) return "Give it a name.";
@@ -85,7 +90,10 @@ function blockedBy(pick: Pick | null, sensors: Sensor[], editingId?: number): st
   if (pick.kind.binds && pick.bindings.some((b) => !b.name.trim() || !b.sensorId)) {
     return "Finish every reading it uses.";
   }
-  const missing = pick.kind.fields.find((f) => f.required && !pick.options[f.key]?.trim());
+  // A secret already stored counts as filled in, as the page never holds it to show.
+  const missing = pick.kind.fields.find(
+    (f) => f.required && shown(f, pick.options) && !pick.options[f.key]?.trim() && !(f.secret && stored.includes(f.key)),
+  );
   return missing ? `Fill in ${missing.label}.` : null;
 }
 
@@ -158,12 +166,23 @@ export function SensorDialog({
     if (!pick) return;
     setSaving(true);
     setSaveError(null);
+    // Only the fields that apply; a secret left blank is kept from what is stored, never sent as a new empty one.
+    const fields = pick.kind.fields.filter((f) => shown(f, pick.options));
+    const keep = fields
+      .filter((f) => f.secret && !pick.options[f.key] && editing?.secretsSet.includes(f.key))
+      .map((f) => f.key);
+    const options = pick.kind.fields.length
+      ? Object.fromEntries(
+          fields.filter((f) => !(f.secret && !pick.options[f.key])).map((f) => [f.key, pick.options[f.key] ?? ""]),
+        )
+      : pick.options;
     const body = {
       provider: pick.kind.provider,
       kind: pick.kind.kind,
       name: pick.name.trim(),
-      options: pick.options,
+      options,
       bindings: pick.kind.binds ? pick.bindings : undefined,
+      keepSecrets: keep.length ? keep : undefined,
     };
     try {
       if (editing) {
@@ -191,7 +210,7 @@ export function SensorDialog({
     });
   }, []);
 
-  const blocked = blockedBy(pick, sensors, editing?.id);
+  const blocked = blockedBy(pick, sensors, editing?.id, editing?.secretsSet);
   const unchanged = editing !== null && pick !== null && snapshot(pick) === seed;
 
   return (
@@ -225,6 +244,7 @@ export function SensorDialog({
             }
             sensors={sensors}
             editingId={editing?.id}
+            stored={editing?.secretsSet ?? []}
           />
         ) : (
           <SensorCatalogue
@@ -284,12 +304,15 @@ function SensorForm({
   onBack,
   sensors,
   editingId,
+  stored,
 }: {
   pick: Pick;
   onChange: (p: Pick) => void;
   onBack: (() => void) | null;
   sensors: Sensor[];
   editingId?: number;
+  // stored names the secrets already saved, which the form never receives.
+  stored: string[];
 }) {
   return (
     // min-w-0: a grid item in DialogContent, or the widest field sets the column and carries the buttons past the padding.
@@ -340,7 +363,7 @@ function SensorForm({
         />
       ) : null}
 
-      {pick.kind.fields.map((f) => (
+      {pick.kind.fields.filter((f) => shown(f, pick.options)).map((f) => (
         <div key={f.key} className="space-y-1.5">
           <label htmlFor={`sensor-${f.key}`} className="label-overline block">
             {f.label}
@@ -391,11 +414,14 @@ function SensorForm({
           ) : (
             <Input
               id={`sensor-${f.key}`}
+              type={f.secret ? "password" : "text"}
+              // new-password, or a browser fills in the operator's own login for this site.
+              autoComplete={f.secret ? "new-password" : undefined}
               value={pick.options[f.key] ?? ""}
               onChange={(e) =>
                 onChange({ ...pick, options: { ...pick.options, [f.key]: e.target.value } })
               }
-              placeholder={f.default}
+              placeholder={f.secret && stored.includes(f.key) ? "Saved; type to replace it" : f.default}
               aria-required={f.required}
               className="rounded-none border-border font-mono text-base md:text-xs"
             />

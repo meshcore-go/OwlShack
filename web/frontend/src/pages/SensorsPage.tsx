@@ -15,7 +15,7 @@ import { deleteSensor, type Sensor, type SensorKind } from "@/lib/sensorsApi";
 import { SENSOR_STATES, STALE_SECS, ageText, stateOf, type SensorState } from "@/lib/sensorView";
 
 // Catalogue groups in the order an operator reads a rig; any other category follows, alphabetically.
-const GROUPS = ["Environment", "Power", "Analogue", "Derived"];
+const GROUPS = ["Environment", "Power", "Analogue", "Online", "Derived"];
 
 export function SensorsPage() {
   const {

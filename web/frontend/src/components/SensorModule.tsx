@@ -55,8 +55,18 @@ export function isWide(s: Sensor): boolean {
 function partOf(s: Sensor, kind: SensorKind | undefined): string {
   if (!kind) return `${s.provider} / ${s.kind}`;
   if (s.bindings.length) return kind.label;
-  const values = kind.fields.filter((f) => f.identifies).map((f) => s.options[f.key]);
+  const values = kind.fields.filter((f) => f.identifies).map((f) => hostOf(s.options[f.key]));
   return [kind.label, ...values.filter(Boolean)].join(" ");
+}
+
+// A web address names its sensor by host; the rest of it, and any key in its query, is not for a card.
+function hostOf(v: string | undefined): string | undefined {
+  if (!v || !/^https?:\/\//.test(v)) return v;
+  try {
+    return new URL(v).host;
+  } catch {
+    return v;
+  }
 }
 
 export function SensorModule({
@@ -172,9 +182,7 @@ export function SensorModule({
         <Band tone="failing" icon={<TriangleAlert className="size-3.5" strokeWidth={1.8} />}>
           {s.error}
           <span className="block text-muted-foreground">
-            {s.ageSecs === null
-              ? "Never read. Tried again every 5 s."
-              : `Last good read ${ageText(age)} ago, shown below. Tried again every 5 s.`}
+            {s.ageSecs === null ? "Never read yet." : `Last good read ${ageText(age)} ago, shown below.`}
           </span>
         </Band>
       ) : null}

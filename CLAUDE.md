@@ -112,7 +112,7 @@ internal/
   echo/ modem/ monitor/ tx echoes; KISS setup + stats; type-agnostic node poller
   mqtt/ trigger/        observer + wire formatting + JWT; triggers
   telemetry/            CayenneLPP series decoding (sensor 0x04 history)
-  sensor/               local sensors: the hub, providers (I2C, PiSugar, derived), drivers, LPP replies
+  sensor/               local sensors: the hub, providers (I2C, PiSugar, web, derived), drivers, LPP replies
   api/                  HTTP+WS server, routes, hub; the Backend seam
   store/                SQLite persistence + backup/restore
 web/embed.go            go:embed of web/frontend/dist (must stay at root)

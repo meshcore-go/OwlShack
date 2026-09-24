@@ -5,14 +5,14 @@ export type SensorState = "healthy" | "calibrating" | "waiting" | "stale" | "fai
 
 export const SENSOR_STATES: SensorState[] = ["healthy", "calibrating", "waiting", "stale", "failing"];
 
-// The poll is 5 s (app.sensorPollInterval); a reading three polls old is one the mesh has stopped sending.
+// The poll pushes every 5 s (app.sensorPollInterval), so three missed pushes mean the updates have stopped.
 export const STALE_SECS = 15;
 
 // Ranked so each sensor counts once; the age is the host's own at sending, so a phone's clock never moves it.
 export function stateOf(s: Sensor): SensorState {
   if (s.error) return "failing";
   if (s.ageSecs === null) return "waiting";
-  if (s.ageSecs > STALE_SECS) return "stale";
+  if (s.ageSecs > s.staleAfterSecs) return "stale";
   return s.readings.some(uncalibrated) ? "calibrating" : "healthy";
 }
 

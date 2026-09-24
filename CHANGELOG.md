@@ -19,6 +19,14 @@ Schema `user_version` 17: adds the sensor tables and who may read each companion
   Each sensor's card says whether it is healthy, calibrating, waiting for its first read, stale or
   failing, and a bar at the top counts each state and shows only that state when tapped. A derived
   sensor shows what it reads and each source's value, and the page says once when updates stop.
+- **Sensors read from the web.** An HTTP sensor fetches an address on its own schedule, every 10
+  minutes by default, and reads numbers out of the reply: from JSON by a path such as
+  `current.temperature_2m`, or from text with a pattern. One fetch can give several values, such as
+  a weather report's temperature, humidity and wind, and each can be published on the mesh or feed a
+  derived sensor. It can send extra headers and log in with a username and password, a bearer token
+  or an API key in a header or the query. Passwords and keys are never sent back to the page, and an
+  edit keeps them unless you type a new one. Each HTTP sensor says how old a value may get before it
+  counts as out of date.
 - **An air-quality index from the BME680.** With its heater on it is sampled every 3 seconds, as
   MeshCore firmware runs Bosch's BSEC. Once it has run in (5 minutes, and again after every restart)
   it reports an index, a static index, CO2 and breath VOC equivalents and how far it has calibrated.

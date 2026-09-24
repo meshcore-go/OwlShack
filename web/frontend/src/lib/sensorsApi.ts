@@ -35,6 +35,10 @@ export interface Sensor {
   ageSecs: number | null;
   // the kind's catalogue group, such as Environment.
   category: string;
+  // the secret options that hold a value; options leaves them out.
+  secretsSet: string[];
+  // how old a reading may be before it is out of date: the poll's for most, a web sensor's own.
+  staleAfterSecs: number;
   // empty while the latest attempt worked.
   error: string;
 }
@@ -63,6 +67,10 @@ export interface SensorField {
   multiline?: boolean;
   // identifies means the value says which part this is, so a card can name it without every option.
   identifies?: boolean;
+  // secret is never sent back; the sensor's secretsSet says whether one is stored.
+  secret?: boolean;
+  // when shows the field only while another field holds one of values.
+  when?: { key: string; values: string[] };
 }
 
 // SensorKind carries description, category and metrics so the catalogue is searchable by part number or need.
@@ -109,6 +117,8 @@ export interface SensorInput {
   name: string;
   options: Record<string, string>;
   bindings?: SensorBinding[];
+  // keepSecrets names stored secrets an edit carries over, since the page never has them to send.
+  keepSecrets?: string[];
 }
 
 export async function createSensor(input: SensorInput): Promise<void> {
