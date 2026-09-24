@@ -26,7 +26,9 @@ Schema `user_version` 17: adds the sensor tables and who may read each companion
   derived sensor. It can send extra headers and log in with a username and password, a bearer token
   or an API key in a header or the query. Passwords and keys are never sent back to the page, and an
   edit keeps them unless you type a new one. Each HTTP sensor says how old a value may get before it
-  counts as out of date.
+  counts as out of date. Test fetches the address once before you save, shows each value or why it
+  failed, and lists every number in a JSON reply so a value is added with one click, unit and all
+  where the service gives one.
 - **An air-quality index from the BME680.** With its heater on it is sampled every 3 seconds, as
   MeshCore firmware runs Bosch's BSEC. Once it has run in (5 minutes, and again after every restart)
   it reports an index, a static index, CO2 and breath VOC equivalents and how far it has calibrated.

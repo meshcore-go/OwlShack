@@ -1,7 +1,8 @@
-import { useCallback, useEffect, useState } from "react";
+import { useCallback, useEffect, useState, type ReactNode } from "react";
 import { ChevronLeft, Loader2 } from "lucide-react";
 import { toast } from "sonner";
 import { Button } from "@/components/ui/button";
+import { cn } from "@/lib/utils";
 import { Input } from "@/components/ui/input";
 import { Textarea } from "@/components/ui/textarea";
 import {
@@ -21,14 +22,27 @@ import {
 import { SensorCatalogue, type Entry } from "@/components/SensorCatalogue";
 import { BindingEditor } from "@/components/BindingEditor";
 import {
+  DurationInput,
+  ListInput,
+  TestPanel,
+  fieldProblem,
+  listRows,
+  nameFor,
+  spanWords,
+  writeRows,
+  type RowResults,
+} from "@/components/SensorFields";
+import {
   createSensor,
   discoverSensors,
+  testSensor,
   updateSensor,
   type Sensor,
   type SensorBinding,
   type SensorField,
   type SensorKind,
   type SensorScan,
+  type SensorTest,
 } from "@/lib/sensorsApi";
 
 // shown mirrors the server's rule: a field with a condition applies only while it holds, and is dropped on save otherwise.
@@ -62,6 +76,7 @@ function seedPick(editing: Sensor, kinds: SensorKind[]): Pick {
       provider: editing.provider,
       label: editing.kind,
       fields: [],
+      testable: false,
     },
     name: editing.name,
     options: k ? seedOptions(k, editing.options) : { ...editing.options },
@@ -90,11 +105,50 @@ function blockedBy(pick: Pick | null, sensors: Sensor[], editingId?: number, sto
   if (pick.kind.binds && pick.bindings.some((b) => !b.name.trim() || !b.sensorId)) {
     return "Finish every reading it uses.";
   }
-  // A secret already stored counts as filled in, as the page never holds it to show.
-  const missing = pick.kind.fields.find(
-    (f) => f.required && shown(f, pick.options) && !pick.options[f.key]?.trim() && !(f.secret && stored.includes(f.key)),
-  );
-  return missing ? `Fill in ${missing.label}.` : null;
+  return fieldsProblem(pick, stored, () => true);
+}
+
+// effective is the options as the server will hold them: each field's default where it is left empty.
+function effective(pick: Pick): Record<string, string> {
+  const out: Record<string, string> = {};
+  for (const f of pick.kind.fields) out[f.key] = pick.options[f.key] || f.default || "";
+  return out;
+}
+
+// fieldsProblem is the first shown field, of those include picks, that the server would refuse, in form order.
+function fieldsProblem(pick: Pick, stored: string[], include: (f: SensorField) => boolean): string | null {
+  const opts = effective(pick);
+  const label = (key: string) => pick.kind.fields.find((x) => x.key === key)?.label ?? key;
+  for (const f of pick.kind.fields) {
+    if (!shown(f, opts) || !include(f)) continue;
+    const v = opts[f.key];
+    // A secret already stored counts as filled in, as the page never holds it to show.
+    if (f.required && f.type !== "list" && !v.trim() && !(f.secret && stored.includes(f.key))) return `Fill in ${f.label}.`;
+    const problem = fieldProblem(f, v, opts, label);
+    if (problem) return problem;
+  }
+  return null;
+}
+
+// requestBody is what Save and Test both send: only the fields that apply, and stored secrets left blank kept rather than cleared.
+function requestBody(pick: Pick, editing: Sensor | null) {
+  const fields = pick.kind.fields.filter((f) => shown(f, pick.options));
+  const keep = fields
+    .filter((f) => f.secret && !pick.options[f.key] && editing?.secretsSet.includes(f.key))
+    .map((f) => f.key);
+  const options = pick.kind.fields.length
+    ? Object.fromEntries(
+        fields.filter((f) => !(f.secret && !pick.options[f.key])).map((f) => [f.key, pick.options[f.key] ?? ""]),
+      )
+    : pick.options;
+  return {
+    provider: pick.kind.provider,
+    kind: pick.kind.kind,
+    name: pick.name.trim(),
+    options,
+    bindings: pick.kind.binds ? pick.bindings : undefined,
+    keepSecrets: keep.length ? keep : undefined,
+  };
 }
 
 export function SensorDialog({
@@ -128,6 +182,8 @@ export function SensorDialog({
   const [saveError, setSaveError] = useState<string | null>(null);
   // seed is the edited sensor as it opened, so Save stays off until something changes.
   const [seed, setSeed] = useState("");
+  const [test, setTest] = useState<SensorTest | null>(null);
+  const [testing, setTesting] = useState(false);
 
   const rescan = useCallback(async () => {
     setScanning(true);
@@ -152,6 +208,7 @@ export function SensorDialog({
     setSaveError(null);
     const seeded = editing ? seedPick(editing, kinds ?? []) : null;
     setPick(seeded);
+    setTest(null);
     setSeed(seeded ? snapshot(seeded) : "");
   }, [open, editing, kinds]);
 
@@ -166,24 +223,7 @@ export function SensorDialog({
     if (!pick) return;
     setSaving(true);
     setSaveError(null);
-    // Only the fields that apply; a secret left blank is kept from what is stored, never sent as a new empty one.
-    const fields = pick.kind.fields.filter((f) => shown(f, pick.options));
-    const keep = fields
-      .filter((f) => f.secret && !pick.options[f.key] && editing?.secretsSet.includes(f.key))
-      .map((f) => f.key);
-    const options = pick.kind.fields.length
-      ? Object.fromEntries(
-          fields.filter((f) => !(f.secret && !pick.options[f.key])).map((f) => [f.key, pick.options[f.key] ?? ""]),
-        )
-      : pick.options;
-    const body = {
-      provider: pick.kind.provider,
-      kind: pick.kind.kind,
-      name: pick.name.trim(),
-      options,
-      bindings: pick.kind.binds ? pick.bindings : undefined,
-      keepSecrets: keep.length ? keep : undefined,
-    };
+    const body = requestBody(pick, editing);
     try {
       if (editing) {
         await updateSensor(editing.id, body);
@@ -200,8 +240,24 @@ export function SensorDialog({
     }
   }, [pick, editing, onSaved]);
 
+  const runTest = useCallback(async () => {
+    if (!pick) return;
+    setTesting(true);
+    try {
+      setTest(await testSensor(editing?.id ?? 0, requestBody(pick, editing)));
+    } catch (e) {
+      setTest({
+        error: e instanceof Error ? e.message : "The test failed",
+        status: "", contentType: "", body: "", truncated: false, values: [],
+      });
+    } finally {
+      setTesting(false);
+    }
+  }, [pick, editing]);
+
   const choose = useCallback((e: Entry) => {
     setSaveError(null);
+    setTest(null);
     setPick({
       kind: e.kind,
       name: e.kind.label,
@@ -211,12 +267,15 @@ export function SensorDialog({
   }, []);
 
   const blocked = blockedBy(pick, sensors, editing?.id, editing?.secretsSet);
+  // A test needs the connection settings, not the values it is there to help pick.
+  const testBlocked = pick ? fieldsProblem(pick, editing?.secretsSet ?? [], (f) => !f.tested) : null;
+  const wide = pick?.kind.fields.some((f) => f.type === "list") ?? false;
   const unchanged = editing !== null && pick !== null && snapshot(pick) === seed;
 
   return (
     <Dialog open={open} onOpenChange={onOpenChange}>
       {/* sm:max-w-md, because the base class is sm:max-w-lg and a bare max-w-md loses to it from 640px up. */}
-      <DialogContent className="rounded-none border-border bg-card sm:max-w-md">
+      <DialogContent className={cn("rounded-none border-border bg-card", wide ? "sm:max-w-xl" : "sm:max-w-md")}>
         <DialogHeader>
           <DialogTitle className="font-mono text-sm uppercase tracking-[0.12em]">
             {editing ? "Edit sensor" : "Add sensor"}
@@ -245,6 +304,20 @@ export function SensorDialog({
             sensors={sensors}
             editingId={editing?.id}
             stored={editing?.secretsSet ?? []}
+            results={test ? Object.fromEntries(test.values.map((v) => [v.metric, v])) : undefined}
+            before={(f, onPick, picked) =>
+              f.tested && pick.kind.testable ? (
+                <TestPanel
+                  testing={testing}
+                  result={test}
+                  onTest={() => void runTest()}
+                  disabledReason={testBlocked}
+                  json={Boolean(f.columns?.some((c) => c.key === "path"))}
+                  pickedPaths={picked}
+                  onPick={onPick}
+                />
+              ) : null
+            }
           />
         ) : (
           <SensorCatalogue
@@ -305,6 +378,8 @@ function SensorForm({
   sensors,
   editingId,
   stored,
+  results,
+  before,
 }: {
   pick: Pick;
   onChange: (p: Pick) => void;
@@ -313,7 +388,12 @@ function SensorForm({
   editingId?: number;
   // stored names the secrets already saved, which the form never receives.
   stored: string[];
+  // results are the last test's reading of each value, shown under its row in the list a test reads.
+  results?: RowResults;
+  // before renders above a field, such as the test above the list it reads; onPick adds a picked path to that list.
+  before: (f: SensorField, onPick: (leaf: { path: string; unit: string }) => void, picked: string[]) => ReactNode;
 }) {
+  const set = (key: string, v: string) => onChange({ ...pick, options: { ...pick.options, [key]: v } });
   return (
     // min-w-0: a grid item in DialogContent, or the widest field sets the column and carries the buttons past the padding.
     <section className="space-y-3 min-w-0">
@@ -363,76 +443,97 @@ function SensorForm({
         />
       ) : null}
 
-      {pick.kind.fields.filter((f) => shown(f, pick.options)).map((f) => (
-        <div key={f.key} className="space-y-1.5">
-          <label htmlFor={`sensor-${f.key}`} className="label-overline block">
-            {f.label}
-            {f.required ? <span aria-hidden> *</span> : null}
-          </label>
-          {f.choices && f.choices.length > 0 ? (
-            <Select
-              value={pick.options[f.key] || ""}
-              onValueChange={(v) =>
-                onChange({ ...pick, options: { ...pick.options, [f.key]: v } })
-              }
-            >
-              <SelectTrigger
-                id={`sensor-${f.key}`}
-                aria-required={f.required}
-                className="rounded-none border-border font-mono text-xs w-full"
-              >
-                <SelectValue placeholder="Choose one" />
-              </SelectTrigger>
-              <SelectContent className="rounded-none">
-                {f.choices.map((c) => (
-                  <SelectItem key={c} value={c} className="font-mono text-xs rounded-none">
-                    {c}
-                  </SelectItem>
-                ))}
-                {/* A stored value this host no longer offers, such as a bus that has gone, still shows. */}
-                {pick.options[f.key] && !f.choices.includes(pick.options[f.key]) ? (
-                  <SelectItem value={pick.options[f.key]} className="font-mono text-xs rounded-none">
-                    {pick.options[f.key]} (not on this host)
-                  </SelectItem>
-                ) : null}
-              </SelectContent>
-            </Select>
-          ) : f.multiline ? (
-            // field-sizing-content grows the Textarea, so a long expression needs no scrollbar.
-            <Textarea
-              id={`sensor-${f.key}`}
-              value={pick.options[f.key] ?? ""}
-              onChange={(e) =>
-                onChange({ ...pick, options: { ...pick.options, [f.key]: e.target.value } })
-              }
-              placeholder={f.default}
-              rows={2}
-              spellCheck={false}
-              aria-required={f.required}
-              className="rounded-none border-border bg-transparent font-mono text-base md:text-xs min-h-0 leading-relaxed"
-            />
-          ) : (
-            <Input
-              id={`sensor-${f.key}`}
-              type={f.secret ? "password" : "text"}
-              // new-password, or a browser fills in the operator's own login for this site.
-              autoComplete={f.secret ? "new-password" : undefined}
-              value={pick.options[f.key] ?? ""}
-              onChange={(e) =>
-                onChange({ ...pick, options: { ...pick.options, [f.key]: e.target.value } })
-              }
-              placeholder={f.secret && stored.includes(f.key) ? "Saved; type to replace it" : f.default}
-              aria-required={f.required}
-              className="rounded-none border-border font-mono text-base md:text-xs"
-            />
-          )}
-          {f.help ? (
-            <p className="font-mono text-[11px] sm:text-[10px] leading-relaxed text-muted-foreground/70">
-              {f.help}
-            </p>
-          ) : null}
-        </div>
-      ))}
+      {pick.kind.fields.filter((f) => shown(f, pick.options)).map((f) => {
+        const rows = f.type === "list" ? listRows(pick.options[f.key]) : [];
+        const pickPath = (leaf: { path: string; unit: string }) =>
+          set(f.key, writeRows([...rows, { name: nameFor(leaf.path, rows.map((r) => r.name ?? "")), unit: leaf.unit, path: leaf.path }]));
+        return (
+          <div key={f.key} className="space-y-3">
+            {before(f, pickPath, rows.map((r) => r.path ?? ""))}
+            <div className="space-y-1.5">
+              <label htmlFor={`sensor-${f.key}`} className="label-overline block">
+                {f.label}
+                {f.required ? <span aria-hidden> *</span> : null}
+              </label>
+              {f.type === "duration" ? (
+                <DurationInput id={`sensor-${f.key}`} field={f} value={pick.options[f.key] ?? ""} onChange={(v) => set(f.key, v)} />
+              ) : f.type === "list" ? (
+                <ListInput
+                  id={`sensor-${f.key}`}
+                  field={f}
+                  value={pick.options[f.key] ?? ""}
+                  onChange={(v) => set(f.key, v)}
+                  results={f.tested ? results : undefined}
+                />
+              ) : f.choices && f.choices.length > 0 ? (
+                <Select
+                  value={pick.options[f.key] || ""}
+                  onValueChange={(v) =>
+                    onChange({ ...pick, options: { ...pick.options, [f.key]: v } })
+                  }
+                >
+                  <SelectTrigger
+                    id={`sensor-${f.key}`}
+                    aria-required={f.required}
+                    className="rounded-none border-border font-mono text-xs w-full"
+                  >
+                    <SelectValue placeholder="Choose one" />
+                  </SelectTrigger>
+                  <SelectContent className="rounded-none">
+                    {f.choices.map((c) => (
+                      <SelectItem key={c} value={c} className="font-mono text-xs rounded-none">
+                        {c}
+                      </SelectItem>
+                    ))}
+                    {/* A stored value this host no longer offers, such as a bus that has gone, still shows. */}
+                    {pick.options[f.key] && !f.choices.includes(pick.options[f.key]) ? (
+                      <SelectItem value={pick.options[f.key]} className="font-mono text-xs rounded-none">
+                        {pick.options[f.key]} (not on this host)
+                      </SelectItem>
+                    ) : null}
+                  </SelectContent>
+                </Select>
+              ) : f.multiline ? (
+                // field-sizing-content grows the Textarea, so a long expression needs no scrollbar.
+                <Textarea
+                  id={`sensor-${f.key}`}
+                  value={pick.options[f.key] ?? ""}
+                  onChange={(e) =>
+                    onChange({ ...pick, options: { ...pick.options, [f.key]: e.target.value } })
+                  }
+                  placeholder={f.default}
+                  rows={2}
+                  spellCheck={false}
+                  aria-required={f.required}
+                  className="rounded-none border-border bg-transparent font-mono text-base md:text-xs min-h-0 leading-relaxed"
+                />
+              ) : (
+                <Input
+                  id={`sensor-${f.key}`}
+                  type={f.secret ? "password" : "text"}
+                  // new-password, or a browser fills in the operator's own login for this site.
+                  autoComplete={f.secret ? "new-password" : undefined}
+                  value={pick.options[f.key] ?? ""}
+                  onChange={(e) =>
+                    onChange({ ...pick, options: { ...pick.options, [f.key]: e.target.value } })
+                  }
+                  placeholder={f.secret && stored.includes(f.key) ? "Saved; type to replace it" : f.default}
+                  aria-required={f.required}
+                  className="rounded-none border-border font-mono text-base md:text-xs"
+                />
+              )}
+              {f.help || f.type === "duration" ? (
+                <p className="font-mono text-[11px] sm:text-[10px] leading-relaxed text-muted-foreground/70">
+                  {f.type === "duration" && f.minSecs
+                    ? `From ${spanWords(f.minSecs)} to ${spanWords(f.maxSecs ?? 0)}${f.atLeast ? ", and at least as long as " + (pick.kind.fields.find((x) => x.key === f.atLeast)?.label ?? f.atLeast).toLowerCase() : ""}. `
+                    : ""}
+                  {f.help}
+                </p>
+              ) : null}
+            </div>
+          </div>
+        );
+      })}
     </section>
   );
 }

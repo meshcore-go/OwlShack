@@ -71,6 +71,22 @@ export interface SensorField {
   secret?: boolean;
   // when shows the field only while another field holds one of values.
   when?: { key: string; values: string[] };
+  // duration is a length of time stored as a Go duration such as 10m; list is rows of columns stored as JSON.
+  type?: "duration" | "list";
+  minSecs?: number;
+  maxSecs?: number;
+  // atLeast names a duration field this one may not be shorter than.
+  atLeast?: string;
+  columns?: SensorColumn[];
+  // tested means a test reads this list's rows, so the form puts the test just above it and shows each row's result.
+  tested?: boolean;
+}
+
+export interface SensorColumn {
+  key: string;
+  label: string;
+  placeholder?: string;
+  required: boolean;
 }
 
 // SensorKind carries description, category and metrics so the catalogue is searchable by part number or need.
@@ -83,6 +99,8 @@ export interface SensorKind {
   metrics?: string[];
   // binds means this kind reads other sensors, so the form offers a binding editor.
   binds?: boolean;
+  // testable means the form can try a sensor of this kind before it is saved.
+  testable: boolean;
   fields: SensorField[];
 }
 
@@ -119,6 +137,28 @@ export interface SensorInput {
   bindings?: SensorBinding[];
   // keepSecrets names stored secrets an edit carries over, since the page never has them to send.
   keepSecrets?: string[];
+}
+
+// A try of an unsaved sensor: what answered, the reply to pick values from, and each value or why it failed.
+export interface SensorTest {
+  // error is why the try as a whole failed, empty when it worked.
+  error: string;
+  status: string;
+  contentType: string;
+  body: string;
+  truncated: boolean;
+  values: { metric: string; value: number | null; unit: string; error: string }[];
+}
+
+// id is the sensor being edited, whose stored secrets input.keepSecrets names, or 0 when adding.
+export async function testSensor(id: number, input: SensorInput): Promise<SensorTest> {
+  const res = await fetch("/api/sensors/test", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ id, ...input }),
+  });
+  if (!res.ok) throw new Error(await apiErrorMessage(res));
+  return (await res.json()) as SensorTest;
 }
 
 export async function createSensor(input: SensorInput): Promise<void> {
