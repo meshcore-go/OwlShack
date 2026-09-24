@@ -130,7 +130,7 @@ export function SensorsPage() {
         }
         trailing={<ConnectionPill connected={connected} pending={pending} />}
         actions={
-          <Button size="sm" onClick={openAdd} className="font-mono text-xs uppercase tracking-widest">
+          <Button size="sm" onClick={openAdd} className="rounded-none font-mono text-[11px] uppercase tracking-[0.12em]">
             <Plus className="size-3.5" />
             Add sensor
           </Button>
@@ -149,7 +149,7 @@ export function SensorsPage() {
               Add a part wired to this Pi to read temperature, pressure, air quality or a voltage. Adding one scans
               the I2C buses first. A scan only reads, and nothing is written to a part until you choose it.
             </p>
-            <Button size="sm" onClick={openAdd} className="font-mono text-xs uppercase tracking-widest">
+            <Button size="sm" onClick={openAdd} className="rounded-none font-mono text-[11px] uppercase tracking-[0.12em]">
               <Plus className="size-3.5" />
               Add sensor
             </Button>
