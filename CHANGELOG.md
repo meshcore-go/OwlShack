@@ -19,6 +19,8 @@ Schema `user_version` 17: adds the sensor tables and who may read each companion
   Each sensor's card says whether it is healthy, calibrating, waiting for its first read, stale or
   failing, and a bar at the top counts each state and shows only that state when tapped. A derived
   sensor shows what it reads and each source's value, and the page says once when updates stop.
+  A sensor that will not open, such as one added at the wrong address, is tried again less and
+  less often, up to every 5 minutes, and its card counts down to the next try.
 - **Sensors read from the web.** An HTTP sensor fetches an address on its own schedule, every 10
   minutes by default, and reads numbers out of the reply: from JSON by a path such as
   `current.temperature_2m`, or from text with a pattern. One fetch can give several values, such as
