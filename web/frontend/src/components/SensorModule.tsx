@@ -32,8 +32,8 @@ export function Led({ state, className }: { state: SensorState; className?: stri
       className={cn(
         "inline-block shrink-0",
         state === "failing"
-          ? "h-2.5 w-[11px] bg-destructive [clip-path:polygon(50%_0,100%_100%,0_100%)]"
-          : "size-[9px]",
+          ? "h-2.5 w-2.75 bg-destructive [clip-path:polygon(50%_0,100%_100%,0_100%)]"
+          : "size-2.25",
         state === "healthy" && "bg-primary",
         state === "calibrating" &&
           "border-[1.5px] border-primary bg-[linear-gradient(90deg,var(--primary)_50%,transparent_50%)]",
@@ -380,7 +380,7 @@ function Calibration({ readings }: { readings: SensorReading[] }) {
               </span>
               <span className="inline-flex gap-0.5" aria-hidden="true">
                 {[1, 2, 3].map((i) => (
-                  <i key={i} className={cn("h-[7px] w-4 border", i <= x.value ? "border-primary bg-primary" : "border-primary/55")} />
+                  <i key={i} className={cn("h-1.75 w-4 border", i <= x.value ? "border-primary bg-primary" : "border-primary/55")} />
                 ))}
               </span>
               <span className="font-mono text-xs">
