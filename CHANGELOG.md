@@ -22,6 +22,9 @@ Schema `user_version` 17: adds the sensor tables and who may read each companion
   run-in. It calibrates to your air over days and remembers it across restarts.
 - **Sensors over the mesh.** Choose which readings the repeater and each companion send when
   another node asks.
+- **A copy of the database before each upgrade.** When a new version changes the database, the
+  old one is kept as `meshcore.db.pre-v<old>-to-v<new>`, so going back is stopping OwlShack and
+  moving it back.
 - **Who may read a companion's telemetry.** Battery, position and sensors each allow no one, chosen
   contacts or every contact. All three start at no one.
 
