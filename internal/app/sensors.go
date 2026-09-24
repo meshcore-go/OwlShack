@@ -120,6 +120,11 @@ func (b *backend) SensorKinds(provider string) ([]api.SensorKindInfo, error) {
 			if f.When != nil {
 				field.When = &api.SensorFieldWhen{Key: f.When.Key, Values: f.When.Values}
 			}
+			field.Type, field.AtLeast, field.Tested = f.Type, f.AtLeast, f.Tested
+			field.MinSecs, field.MaxSecs = f.Min.Seconds(), f.Max.Seconds()
+			for _, c := range f.Columns {
+				field.Columns = append(field.Columns, api.SensorColumn{Key: c.Key, Label: c.Label, Placeholder: c.Placeholder, Required: c.Required})
+			}
 			fields = append(fields, field)
 		}
 		metrics := make([]string, 0, len(k.Metrics))
@@ -129,7 +134,7 @@ func (b *backend) SensorKinds(provider string) ([]api.SensorKindInfo, error) {
 		out = append(out, api.SensorKindInfo{
 			Kind: k.Kind, Provider: k.Provider, Label: k.Label,
 			Description: k.Description, Category: k.Category,
-			Metrics: metrics, Binds: k.Binds, Fields: fields,
+			Metrics: metrics, Binds: k.Binds, Fields: fields, Testable: k.Testable,
 		})
 	}
 	return out, nil
@@ -186,6 +191,34 @@ func (b *backend) UpdateSensor(ctx context.Context, id int64, in api.SensorInput
 		return err
 	}
 	return b.telemetry.Load(ctx, b.db)
+}
+
+func (b *backend) TestSensor(ctx context.Context, id int64, in api.SensorInput) (api.SensorTest, error) {
+	if id == 0 && len(in.KeepSecrets) > 0 {
+		return api.SensorTest{}, api.Invalid(errors.New("a new sensor has no stored secrets to keep"))
+	}
+	if err := b.keepSecrets(id, &in); err != nil {
+		return api.SensorTest{}, err
+	}
+	res, err := b.sensors.Test(ctx, sensor.Spec{
+		ID: id, Provider: in.Provider, Kind: in.Kind, Name: in.Name, Options: in.Options,
+		Bindings: apiToSpecBindings(in.Bindings),
+	})
+	if err != nil {
+		return api.SensorTest{}, api.Invalid(err)
+	}
+	out := api.SensorTest{
+		Error: res.Err, Status: res.Status, ContentType: res.ContentType,
+		Body: res.Body, Truncated: res.Truncated, Values: []api.SensorTestValue{},
+	}
+	for _, v := range res.Values {
+		tv := api.SensorTestValue{Metric: string(v.Metric), Unit: v.Unit, Error: v.Err}
+		if v.Err == "" {
+			tv.Value = &v.Value
+		}
+		out.Values = append(out.Values, tv)
+	}
+	return out, nil
 }
 
 // keepSecrets carries each named secret over from the stored sensor; naming one that is not a secret of its kind, or also sending it, is refused.

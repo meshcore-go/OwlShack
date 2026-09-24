@@ -7,6 +7,8 @@ import (
 	"io"
 	"log/slog"
 	"maps"
+	"net/http"
+	"net/http/httptest"
 	"path/filepath"
 	"strings"
 	"sync"
@@ -483,5 +485,52 @@ func TestSensorSecrets_NeverReadBackAndKeptOnlyWhenAsked(t *testing.T) {
 	}
 	if stored()["token"] != "s3cret" {
 		t.Errorf("a refused edit changed the token to %q", stored()["token"])
+	}
+}
+
+// Testing an edit must use the stored key the form never had, or every edit's test would fail its login.
+func TestTestSensor_UsesAKeptSecretAndSavesNothing(t *testing.T) {
+	ctx := t.Context()
+	var gotAuth string
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		gotAuth = r.Header.Get("Authorization")
+		io.WriteString(w, `{"a":{"b":21.5}}`)
+	}))
+	defer srv.Close()
+	db, err := store.Open(ctx, filepath.Join(t.TempDir(), "test.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer db.Close()
+	hub := sensor.NewHub(slog.New(slog.NewTextHandler(io.Discard, nil)), sensor.HTTPProvider{})
+	defer hub.Close()
+	b := &backend{db: db, sensors: hub, telemetry: newTelemetryPublisher(hub)}
+	in := api.SensorInput{Provider: "http", Kind: sensor.KindHTTP, Name: "w", Options: map[string]string{
+		"url": srv.URL, "values": `[{"name":"t","unit":"C","path":"a.b"}]`, "auth": "bearer", "token": "s3cret",
+	}}
+	id, err := b.CreateSensor(ctx, in)
+	if err != nil {
+		t.Fatalf("CreateSensor: %v", err)
+	}
+	edit := in
+	edit.Options = maps.Clone(in.Options)
+	delete(edit.Options, "token")
+	edit.Options["values"] = `[{"name":"t2","unit":"C","path":"a.b"}]`
+	edit.KeepSecrets = []string{"token"}
+	res, err := b.TestSensor(ctx, id, edit)
+	if err != nil {
+		t.Fatalf("TestSensor: %v", err)
+	}
+	if gotAuth != "Bearer s3cret" {
+		t.Errorf("the test sent %q, want the stored token", gotAuth)
+	}
+	if res.Error != "" || len(res.Values) != 1 || res.Values[0].Value == nil || *res.Values[0].Value != 21.5 {
+		t.Errorf("test result %+v", res)
+	}
+	if got := hub.Snapshot()[0].Spec.Options["values"]; got != in.Options["values"] {
+		t.Errorf("a test changed the stored values to %s", got)
+	}
+	if _, err := b.TestSensor(ctx, 0, edit); err == nil {
+		t.Error("a new sensor's test kept a secret it never had")
 	}
 }

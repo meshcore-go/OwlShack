@@ -86,6 +86,24 @@ func (s *Server) handleUpdateSensor(w http.ResponseWriter, r *http.Request) {
 	w.WriteHeader(http.StatusNoContent)
 }
 
+func (s *Server) handleTestSensor(w http.ResponseWriter, r *http.Request) {
+	b, ok := s.configBackend(w)
+	if !ok {
+		return
+	}
+	var in SensorTestInput
+	if err := readJSON(r, &in); err != nil {
+		writeError(w, http.StatusBadRequest, "invalid JSON: "+err.Error())
+		return
+	}
+	res, err := b.TestSensor(r.Context(), in.ID, in.SensorInput)
+	if err != nil {
+		s.writeSensorError(w, "testing the sensor failed", err)
+		return
+	}
+	writeJSON(w, http.StatusOK, res)
+}
+
 func (s *Server) handleCreateSensor(w http.ResponseWriter, r *http.Request) {
 	b, ok := s.configBackend(w)
 	if !ok {

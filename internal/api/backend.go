@@ -44,6 +44,8 @@ type Backend interface {
 
 	// DeleteSensor stops and forgets one sensor.
 	DeleteSensor(ctx context.Context, id int64) error
+	// TestSensor tries an unsaved sensor once; id is the sensor being edited, whose stored secrets in.KeepSecrets names, or 0.
+	TestSensor(ctx context.Context, id int64, in SensorInput) (SensorTest, error)
 
 	// TelemetryMap is which sensor readings each node publishes over the mesh, and what it costs.
 	TelemetryMap(ctx context.Context) (TelemetryMap, error)
@@ -378,6 +380,24 @@ type SensorField struct {
 	Secret bool `json:"secret,omitempty"`
 	// When shows the field only while another field holds one of Values.
 	When *SensorFieldWhen `json:"when,omitempty"`
+	// Type is "duration" or "list", or empty for free text.
+	Type string `json:"type,omitempty"`
+	// MinSecs and MaxSecs bound a duration; MaxSecs 0 is unbounded.
+	MinSecs float64 `json:"minSecs,omitempty"`
+	MaxSecs float64 `json:"maxSecs,omitempty"`
+	// AtLeast names a duration field this one may not be shorter than.
+	AtLeast string `json:"atLeast,omitempty"`
+	// Columns are a list field's inputs; its value is a JSON array of objects keyed by column.
+	Columns []SensorColumn `json:"columns,omitempty"`
+	// Tested means a test reads this list's rows, so the form puts the test just above it and shows each row's result.
+	Tested bool `json:"tested,omitempty"`
+}
+
+type SensorColumn struct {
+	Key         string `json:"key"`
+	Label       string `json:"label"`
+	Placeholder string `json:"placeholder,omitempty"`
+	Required    bool   `json:"required"`
 }
 
 type SensorFieldWhen struct {
@@ -395,6 +415,33 @@ type SensorKindInfo struct {
 	Metrics     []string      `json:"metrics,omitempty"`
 	Binds       bool          `json:"binds,omitempty"`
 	Fields      []SensorField `json:"fields"`
+	// Testable means the form can try a sensor of this kind before saving it.
+	Testable bool `json:"testable"`
+}
+
+// SensorTestInput is a form as it stands, and the sensor it edits, 0 when adding.
+type SensorTestInput struct {
+	ID int64 `json:"id"`
+	SensorInput
+}
+
+// SensorTest is one try of an unsaved sensor: what answered, the reply, and each value or why it failed.
+type SensorTest struct {
+	// Error is why the try as a whole failed, empty when it worked; the values read beside it still count.
+	Error       string            `json:"error"`
+	Status      string            `json:"status"`
+	ContentType string            `json:"contentType"`
+	Body        string            `json:"body"`
+	Truncated   bool              `json:"truncated"`
+	Values      []SensorTestValue `json:"values"`
+}
+
+type SensorTestValue struct {
+	Metric string `json:"metric"`
+	// Value is null when Error says why it could not be read.
+	Value *float64 `json:"value"`
+	Unit  string   `json:"unit"`
+	Error string   `json:"error"`
 }
 
 // SensorProviderProblem sits apart from the results, so an unreadable bus never reads as an empty one.
