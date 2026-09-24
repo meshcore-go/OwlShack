@@ -20,9 +20,8 @@ func newHealthBackend(t *testing.T) *backend {
 		t.Fatalf("store.Open: %v", err)
 	}
 	t.Cleanup(func() { db.Close() })
-	// Nil stats and no nodes is the shape of a process whose radio never came up — the case the
-	// endpoint exists to make visible.
-	return newBackend(nil, nil, db, nil, nil, nil, nil, nil)
+	// Nil stats and no nodes is a process whose radio never came up, the case the endpoint exists to show.
+	return &backend{db: db}
 }
 
 func problemSet(t *testing.T, b *backend, now time.Time, act *radioActivity) map[string]bool {
@@ -154,7 +153,7 @@ func TestHealth_DoesNotPollTheBoard(t *testing.T) {
 	t.Cleanup(func() { db.Close() })
 
 	stats := &countingStats{}
-	b := newBackend(nil, nil, db, stats, nil, nil, nil, nil)
+	b := &backend{db: db, stats: stats}
 
 	info := b.health(time.Now(), &radioActivity{})
 	if got := stats.polls.Load(); got != 0 {

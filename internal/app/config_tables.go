@@ -158,6 +158,10 @@ func assembleFromRows(rows *configRows) *config.Config {
 			PathHashSize:   c.PathHashSize,
 			DMPolicy:       emptyToNil(c.DMPolicy),
 			DMAllow:        sliceToPtr(c.DMAllow),
+
+			TelemetryBase:        emptyToNil(c.TelemBase),
+			TelemetryLocation:    emptyToNil(c.TelemLoc),
+			TelemetryEnvironment: emptyToNil(c.TelemEnv),
 		}
 		if chs := chansByComp[c.ID]; len(chs) > 0 {
 			list := make(config.ChannelList, 0, len(chs))
@@ -339,6 +343,10 @@ func writeConfigToTables(ctx context.Context, st *store.Store, cfg *config.Confi
 			PathHashSize:   cc.PathHashSize,
 			DMPolicy:       cc.DMPolicyOrDefault(),
 			DMAllow:        ptrToSlice(cc.DMAllow),
+
+			TelemBase: config.TelemetryModeOrDefault(cc.TelemetryBase),
+			TelemLoc:  config.TelemetryModeOrDefault(cc.TelemetryLocation),
+			TelemEnv:  config.TelemetryModeOrDefault(cc.TelemetryEnvironment),
 		}
 		if prev, ok := byName[cc.Name]; ok {
 			row.ID = prev.ID

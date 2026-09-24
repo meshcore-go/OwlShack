@@ -72,6 +72,10 @@ type companionDTO struct {
 	PathHashSize   *int     `json:"pathHashSize"`
 	DMPolicy       string   `json:"dmPolicy"`
 	DMAllow        []string `json:"dmAllow"`
+	// Telemetry* is who may read each class: "deny", "selected" or "contacts".
+	TelemetryBase        string `json:"telemetryBase"`
+	TelemetryLocation    string `json:"telemetryLocation"`
+	TelemetryEnvironment string `json:"telemetryEnvironment"`
 }
 
 type channelDTO struct {
@@ -115,6 +119,7 @@ func companionToDTO(c store.Companion) companionDTO {
 		Latitude: c.Latitude, Longitude: c.Longitude, AdvertInterval: c.AdvertInterval,
 		PathHashSize: c.PathHashSize,
 		DMPolicy:     c.DMPolicy, DMAllow: c.DMAllow,
+		TelemetryBase: c.TelemBase, TelemetryLocation: c.TelemLoc, TelemetryEnvironment: c.TelemEnv,
 	}
 }
 
@@ -321,6 +326,28 @@ func (s *Server) handleSaveCompanion(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	writeJSON(w, http.StatusOK, map[string]int64{"id": id})
+}
+
+func (s *Server) handleSetCompanionTelemetry(w http.ResponseWriter, r *http.Request) {
+	b, ok := s.configBackend(w)
+	if !ok {
+		return
+	}
+	id, ok := pathID(r, "id")
+	if !ok {
+		writeError(w, http.StatusBadRequest, "invalid id")
+		return
+	}
+	var in CompanionTelemetryInput
+	if err := readJSON(r, &in); err != nil {
+		writeError(w, http.StatusBadRequest, "invalid JSON: "+err.Error())
+		return
+	}
+	if err := b.SetCompanionTelemetry(r.Context(), id, in); err != nil {
+		writeError(w, http.StatusUnprocessableEntity, err.Error())
+		return
+	}
+	w.WriteHeader(http.StatusNoContent)
 }
 
 func (s *Server) handleDeleteCompanion(w http.ResponseWriter, r *http.Request) {

@@ -765,7 +765,7 @@ func TestPacketRepo_ListFilter(t *testing.T) {
 // Bump wantVersion whenever a migration is appended to the migrations slice.
 func TestStore_MigrateUserVersion(t *testing.T) {
 	t.Parallel()
-	const wantVersion = 16 // migrateV1, 2 squashed noop slots, migrateV2..migrateV14
+	const wantVersion = 17 // migrateV1, 2 squashed noop slots, migrateV2..migrateV15
 	st := newTestStore(t)
 	var v int
 	if err := st.db.QueryRowContext(t.Context(), "PRAGMA user_version").Scan(&v); err != nil {
@@ -787,20 +787,20 @@ func TestStore_ForeignKeysEnforced(t *testing.T) {
 	}
 }
 
-// A late writer call during shutdown must be a no-op, not a send on a closed channel.
+// A late write must not read as a success: WriteAsync says it dropped the closure, WriteSync runs it so the error carries the closed database.
 func TestStore_WriteAfterClose(t *testing.T) {
 	t.Parallel()
 	st := newTestStore(t)
 	if err := st.Close(); err != nil {
 		t.Fatalf("Close: %v", err)
 	}
-	ran := false
-	if st.WriteAsync(func() { ran = true }) {
+	if st.WriteAsync(func() {}) {
 		t.Error("WriteAsync after Close returned true")
 	}
-	st.WriteSync(func() { ran = true })
-	if ran {
-		t.Error("closure ran after Close")
+	var err error
+	st.WriteSync(func() { err = st.Messages.Delete(t.Context(), 1) })
+	if err == nil {
+		t.Error("WriteSync after Close left the error nil, which the caller reads as a write that happened")
 	}
 }
 
@@ -869,6 +869,18 @@ func TestStore_UpgradeFromReleasedSchema(t *testing.T) {
 		}
 	}
 
+	// The sensor slot both creates tables and alters one, so an upgraded database is where a half-applied slot shows.
+	for _, q := range []string{
+		"SELECT bindings FROM sensors",
+		"SELECT node_kind FROM telemetry_map",
+		"SELECT state FROM sensor_state",
+		"SELECT telem_base, telem_loc, telem_env FROM companions",
+	} {
+		if _, err := st.db.ExecContext(t.Context(), q); err != nil {
+			t.Errorf("after the upgrade, %q: %v", q, err)
+		}
+	}
+
 	if id, err := st.Companions.IDByName(t.Context(), "upgrade-me"); err != nil || id <= 0 {
 		t.Errorf("companion after upgrade: id %d, err %v; want a live row", id, err)
 	}
@@ -880,10 +892,20 @@ type recordingExecer struct {
 	sql   []string
 }
 
+// A migration stops at its first error, so passing one back would pin only the statements before it.
 func (r *recordingExecer) ExecContext(ctx context.Context, q string, args ...any) (sql.Result, error) {
 	r.sql = append(r.sql, q)
-	return r.inner.ExecContext(ctx, q, args...)
+	res, err := r.inner.ExecContext(ctx, q, args...)
+	if err != nil {
+		return noResult{}, nil
+	}
+	return res, nil
 }
+
+type noResult struct{}
+
+func (noResult) LastInsertId() (int64, error) { return 0, nil }
+func (noResult) RowsAffected() (int64, error) { return 0, nil }
 
 func (r *recordingExecer) QueryContext(ctx context.Context, q string, args ...any) (*sql.Rows, error) {
 	r.sql = append(r.sql, q)
@@ -893,18 +915,17 @@ func (r *recordingExecer) QueryContext(ctx context.Context, q string, args ...an
 // A failure means a shipped, frozen slot changed: append a new slot instead of re-pinning, unless the released set itself grew.
 func TestMigrations_ShippedSlotsFrozen(t *testing.T) {
 	t.Parallel()
-	// One pin per release, each over the slots that release shipped. The v1.1.0
-	// pin is a prefix of the v1.2.0 one, so re-pinning the longer digest for a
-	// newly released slot cannot quietly cover an edit to an older one.
+	// One pin per release over the slots it shipped; every digest changed when recordingExecer stopped hiding statements after a migration's first error, not the SQL.
 	releases := []struct {
 		tag    string
 		slots  int
 		digest string
 	}{
-		{"v1.1.0", 7, "7af51d21828cd637"},
-		{"v1.2.0", 9, "e1e5fd0ea8417250"},
-		{"v1.3.0", 10, "0f622498527e26eb"},
-		{"v1.3.1", 11, "045401842c7b3fb7"},
+		{"v1.1.0", 7, "6879325efcf15f70"},
+		{"v1.2.0", 9, "b40dc045b6354b8f"},
+		{"v1.3.0", 10, "02bb0366d61ca3ec"},
+		{"v1.3.1", 11, "5a7adf39b18fa442"},
+		{"v1.4.2", 16, "3c4120cf23cb10c4"},
 	}
 
 	st := newTestStore(t)
@@ -989,5 +1010,36 @@ func TestMigrateV12_ClampsTriggerPathHashSize(t *testing.T) {
 	want := []int{3, 3, 1, 0}
 	if !reflect.DeepEqual(got, want) {
 		t.Errorf("path_hash_size = %v, want %v (4 clamped, the rest untouched)", got, want)
+	}
+}
+
+// A database from a newer build must be refused: accepting it skips every slot appended later while looking healthy.
+func TestStore_RefusesADatabaseFromANewerBuild(t *testing.T) {
+	t.Parallel()
+	path := filepath.Join(t.TempDir(), "newer.db")
+
+	st, err := Open(t.Context(), path)
+	if err != nil {
+		t.Fatalf("Open: %v", err)
+	}
+	st.Close()
+
+	db, err := openWritableDB(path)
+	if err != nil {
+		t.Fatalf("openWritableDB: %v", err)
+	}
+	ahead := len(migrations) + 1
+	if _, err := db.ExecContext(t.Context(), fmt.Sprintf("PRAGMA user_version = %d", ahead)); err != nil {
+		t.Fatalf("stamping ahead: %v", err)
+	}
+	db.Close()
+
+	st2, err := Open(t.Context(), path)
+	if err == nil {
+		st2.Close()
+		t.Fatal("a database stamped past the last slot opened, so a later migration would be skipped in silence")
+	}
+	if !strings.Contains(err.Error(), "newer OwlShack") {
+		t.Errorf("error %q does not say the database came from a newer build", err)
 	}
 }

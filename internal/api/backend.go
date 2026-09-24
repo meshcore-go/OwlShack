@@ -25,6 +25,33 @@ type Backend interface {
 	// DiscoveryState reports the current scan without starting one.
 	DiscoveryState() (DiscoveryState, bool)
 
+	// Sensors reports every configured local sensor with its current state.
+	Sensors() []SensorStatus
+
+	// SensorProviders lists the sensor origins this build knows about, with whether each can run here.
+	SensorProviders(ctx context.Context) []SensorProviderInfo
+
+	// DiscoverSensors scans providers, or all of them when provider is empty. Read-only.
+	DiscoverSensors(ctx context.Context, provider string) (SensorScan, error)
+
+	// SensorKinds is the parts catalogue; an empty provider returns every provider's.
+	SensorKinds(provider string) ([]SensorKindInfo, error)
+
+	// CreateSensor stores a sensor and starts reading it.
+	CreateSensor(ctx context.Context, in SensorInput) (int64, error)
+
+	UpdateSensor(ctx context.Context, id int64, in SensorInput) error
+
+	// DeleteSensor stops and forgets one sensor.
+	DeleteSensor(ctx context.Context, id int64) error
+	// TestSensor tries an unsaved sensor once; id is the sensor being edited, whose stored secrets in.KeepSecrets names, or 0.
+	TestSensor(ctx context.Context, id int64, in SensorInput) (SensorTest, error)
+
+	// TelemetryMap is which sensor readings each node publishes over the mesh, and what it costs.
+	TelemetryMap(ctx context.Context) (TelemetryMap, error)
+	// SetTelemetryMap replaces one node's map, which is validated as one thing because the rules are per node.
+	SetTelemetryMap(ctx context.Context, node TelemetryNode, entries []TelemetryMapEntry) error
+
 	// ChannelByHash resolves a channel hash byte across every companion; nil when unknown.
 	ChannelByHash(hash byte) *ChannelInfo
 
@@ -69,6 +96,8 @@ type Backend interface {
 	SaveBroker(ctx context.Context, in BrokerInput) (int64, error)
 	DeleteBroker(ctx context.Context, id int64) error
 	SaveCompanion(ctx context.Context, in CompanionInput) (int64, error)
+	// SetCompanionTelemetry sets who may read each class of a companion's telemetry.
+	SetCompanionTelemetry(ctx context.Context, id int64, in CompanionTelemetryInput) error
 	DeleteCompanion(ctx context.Context, id int64) error
 	SaveChannel(ctx context.Context, in ChannelInput) (int64, error)
 	DeleteChannel(ctx context.Context, id int64) error
@@ -85,6 +114,15 @@ type Backend interface {
 	RemoveRepeaterRegion(ctx context.Context, name string) error
 	DeleteRepeater(ctx context.Context) error
 }
+
+// ValidationError is a backend refusing the request itself, which a handler answers 422 with its reason; any other error is the server's.
+type ValidationError struct{ Err error }
+
+func (e *ValidationError) Error() string { return e.Err.Error() }
+func (e *ValidationError) Unwrap() error { return e.Err }
+
+// Invalid marks err as the request's fault.
+func Invalid(err error) error { return &ValidationError{Err: err} }
 
 // RepeaterNodeOps are runtime operations on the running repeater node.
 type RepeaterNodeOps struct {
@@ -268,6 +306,177 @@ type RadioStatsInfo struct {
 	MCUTempC   *float64 `json:"mcuTempC,omitempty"`
 }
 
+// SensorProviderInfo is one sensor origin in the picker.
+type SensorProviderInfo struct {
+	ID        string `json:"id"`
+	Label     string `json:"label"`
+	Available bool   `json:"available"`
+	// Reason says why an unavailable provider cannot run here, so no I2C bus reads as that and not as an empty list.
+	Reason string `json:"reason,omitempty"`
+}
+
+// SensorCandidate is something a provider found, its Options ready to post straight back, which keeps the add form free of per-provider fields.
+type SensorCandidate struct {
+	Kind     string `json:"kind"`
+	Provider string `json:"provider"`
+	Label    string `json:"label"`
+	Detail   string `json:"detail,omitempty"`
+	// Addable is false for a part this build cannot drive; it is still listed, or an unknown part reads as an empty bus.
+	Addable bool `json:"addable"`
+	// UsedBy names the sensor already on this part, empty while it is free, so the page need not offer what saving refuses.
+	UsedBy  string            `json:"usedBy"`
+	Options map[string]string `json:"options"`
+}
+
+// SensorReading is one measurement; Label tells apart two readings of one metric, and is empty when the metric alone names it.
+type SensorReading struct {
+	Metric string  `json:"metric"`
+	Label  string  `json:"label,omitempty"`
+	Value  float64 `json:"value"`
+	Unit   string  `json:"unit,omitempty"`
+	// Format is "number", "flag" (a yes or no as 1 or 0) or "count", so the page never shows charging as 1.000.
+	Format string `json:"format"`
+	// Role is "headline", "detail" or "calibration", so the page never keeps its own list of which is which.
+	Role string `json:"role"`
+}
+
+// SensorStatus is one sensor; Error describes the latest attempt, Readings and At the last one that worked.
+type SensorStatus struct {
+	ID       int64             `json:"id"`
+	Provider string            `json:"provider"`
+	Kind     string            `json:"kind"`
+	Name     string            `json:"name"`
+	Options  map[string]string `json:"options"`
+	Bindings []SensorBinding   `json:"bindings"`
+	// Reports is every metric the sensor publishes under its options, so a picker can offer one before it is ever read.
+	Reports  []string        `json:"reports"`
+	Readings []SensorReading `json:"readings"`
+	At       *string         `json:"at"`
+	// SecretsSet names the secret options that hold a value, which Options leaves out.
+	SecretsSet []string `json:"secretsSet"`
+	// StaleAfterSecs is how old a reading may be before it is out of date: the poll's for most, a web sensor's own.
+	StaleAfterSecs float64 `json:"staleAfterSecs"`
+	// AgeSecs is how old Readings were when this was sent, by the host's clock alone, so a phone with another time never reads it as stale or fresh; null until first read.
+	AgeSecs *float64 `json:"ageSecs"`
+	// RetryInSecs is how long until a sensor that failed to open is tried again, by the host's clock; null when it is not waiting.
+	RetryInSecs *float64 `json:"retryInSecs"`
+	// Category is the kind's catalogue group, such as "Environment", so the page can group without the catalogue.
+	Category string `json:"category"`
+	Error    string `json:"error"`
+}
+
+// SensorField is one option a kind needs, so the UI can build a form for a provider it knows nothing about.
+type SensorField struct {
+	Key   string `json:"key"`
+	Label string `json:"label"`
+	Help  string `json:"help,omitempty"`
+	// Default is filled in when the operator leaves the field alone.
+	Default string `json:"default,omitempty"`
+	// Choices, when set, means the value must be one of these and the UI offers a picker.
+	Choices   []string `json:"choices,omitempty"`
+	Required  bool     `json:"required"`
+	Multiline bool     `json:"multiline,omitempty"`
+	// Identifies means the value says which part this is, so a card can name it without every option.
+	Identifies bool `json:"identifies,omitempty"`
+	// Secret is never sent back; the form shows whether one is set and keeps it unless replaced.
+	Secret bool `json:"secret,omitempty"`
+	// When shows the field only while another field holds one of Values.
+	When *SensorFieldWhen `json:"when,omitempty"`
+	// Type is "duration" or "list", or empty for free text.
+	Type string `json:"type,omitempty"`
+	// MinSecs and MaxSecs bound a duration; MaxSecs 0 is unbounded.
+	MinSecs float64 `json:"minSecs,omitempty"`
+	MaxSecs float64 `json:"maxSecs,omitempty"`
+	// AtLeast names a duration field this one may not be shorter than.
+	AtLeast string `json:"atLeast,omitempty"`
+	// Columns are a list field's inputs; its value is a JSON array of objects keyed by column.
+	Columns []SensorColumn `json:"columns,omitempty"`
+	// Tested means a test reads this list's rows, so the form puts the test just above it and shows each row's result.
+	Tested bool `json:"tested,omitempty"`
+}
+
+type SensorColumn struct {
+	Key         string `json:"key"`
+	Label       string `json:"label"`
+	Placeholder string `json:"placeholder,omitempty"`
+	Required    bool   `json:"required"`
+}
+
+type SensorFieldWhen struct {
+	Key    string   `json:"key"`
+	Values []string `json:"values"`
+}
+
+// SensorKindInfo is one entry in the parts catalogue, which has to stay searchable at sixty parts.
+type SensorKindInfo struct {
+	Kind        string        `json:"kind"`
+	Provider    string        `json:"provider"`
+	Label       string        `json:"label"`
+	Description string        `json:"description,omitempty"`
+	Category    string        `json:"category,omitempty"`
+	Metrics     []string      `json:"metrics,omitempty"`
+	Binds       bool          `json:"binds,omitempty"`
+	Fields      []SensorField `json:"fields"`
+	// Testable means the form can try a sensor of this kind before saving it.
+	Testable bool `json:"testable"`
+}
+
+// SensorTestInput is a form as it stands, and the sensor it edits, 0 when adding.
+type SensorTestInput struct {
+	ID int64 `json:"id"`
+	SensorInput
+}
+
+// SensorTest is one try of an unsaved sensor: what answered, the reply, and each value or why it failed.
+type SensorTest struct {
+	// Error is why the try as a whole failed, empty when it worked; the values read beside it still count.
+	Error       string            `json:"error"`
+	Status      string            `json:"status"`
+	ContentType string            `json:"contentType"`
+	Body        string            `json:"body"`
+	Truncated   bool              `json:"truncated"`
+	Values      []SensorTestValue `json:"values"`
+}
+
+type SensorTestValue struct {
+	Metric string `json:"metric"`
+	// Value is null when Error says why it could not be read.
+	Value *float64 `json:"value"`
+	Unit  string   `json:"unit"`
+	Error string   `json:"error"`
+}
+
+// SensorProviderProblem sits apart from the results, so an unreadable bus never reads as an empty one.
+type SensorProviderProblem struct {
+	Provider string `json:"provider"`
+	Label    string `json:"label"`
+	Reason   string `json:"reason"`
+}
+
+// SensorScan is one scan: what was found, and what could not be looked at.
+type SensorScan struct {
+	Candidates []SensorCandidate       `json:"candidates"`
+	Problems   []SensorProviderProblem `json:"problems"`
+}
+
+// SensorBinding names one reading under the name an expression calls it, so a rename cannot break it.
+type SensorBinding struct {
+	Name     string `json:"name"`
+	SensorID int64  `json:"sensorId"`
+	Metric   string `json:"metric"`
+}
+
+// SensorInput is the add and edit form's payload.
+type SensorInput struct {
+	Provider string            `json:"provider"`
+	Kind     string            `json:"kind"`
+	Name     string            `json:"name"`
+	Options  map[string]string `json:"options"`
+	Bindings []SensorBinding   `json:"bindings,omitempty"`
+	// KeepSecrets names secret options an edit carries over from the stored sensor, as the page is never sent them.
+	KeepSecrets []string `json:"keepSecrets,omitempty"`
+}
+
 type SettingsInput struct {
 	LogLevel       *string `json:"logLevel"`
 	ConnectionType *string `json:"connectionType"`
@@ -330,6 +539,13 @@ type CompanionInput struct {
 	Longitude      *float64 `json:"longitude"`
 	AdvertInterval *int     `json:"advertInterval"`
 	PathHashSize   *int     `json:"pathHashSize"`
+}
+
+// CompanionTelemetryInput is who may read each class: "deny", "selected" or "contacts".
+type CompanionTelemetryInput struct {
+	Base        string `json:"base"`
+	Location    string `json:"location"`
+	Environment string `json:"environment"`
 }
 
 type ChannelInput struct {
@@ -446,4 +662,57 @@ type ImportResult struct {
 	RestartRequired bool   `json:"restartRequired"`
 	SchemaVersion   int    `json:"schemaVersion,omitempty"`
 	Detail          string `json:"detail"`
+}
+
+// TelemetryNode names the map's owner; each node answers for itself, so a channel means nothing without it.
+type TelemetryNode struct {
+	Kind string `json:"kind"`
+	ID   int64  `json:"id"`
+}
+
+// TelemetryNodeInfo is one node an operator can give a map to.
+type TelemetryNodeInfo struct {
+	Node TelemetryNode `json:"node"`
+	Name string        `json:"name"`
+	// Serves is false for a node that stores a map but cannot send it, so the page can say so.
+	Serves bool `json:"serves"`
+	// Reason says why, when Serves is false.
+	Reason string `json:"reason,omitempty"`
+}
+
+// TelemetryMapEntry is one reading published by one node on one LPP channel as one type.
+type TelemetryMapEntry struct {
+	Node     TelemetryNode `json:"node"`
+	Channel  int           `json:"channel"`
+	Type     int           `json:"type"`
+	SensorID int64         `json:"sensorId"`
+	Metric   string        `json:"metric"`
+}
+
+// LPPTypeInfo is one CayenneLPP type a reading can be published as.
+type LPPTypeInfo struct {
+	Code int    `json:"code"`
+	Name string `json:"name"`
+	// Unit is what the type means on the wire, which is not always what the sensor reports in.
+	Unit string `json:"unit,omitempty"`
+	// Bytes is the payload plus the two-byte header, which is what the operator is spending.
+	Bytes int `json:"bytes"`
+	// Step is the smallest change the type can carry, so the loss is visible before saving.
+	Step float64 `json:"step"`
+}
+
+// TelemetryMap is the whole editor payload, so the page cannot render a map against another catalogue.
+type TelemetryMap struct {
+	Nodes   []TelemetryNodeInfo `json:"nodes"`
+	Entries []TelemetryMapEntry `json:"entries"`
+	Types   []LPPTypeInfo       `json:"types"`
+	// Defaults maps a metric to the type it is offered as; an absent metric has no obvious answer.
+	Defaults map[string]int `json:"defaults"`
+	// SelfChannel is the channel a node keeps for its own readings; a row there replaces the built-in one and may carry only SelfTypes.
+	SelfChannel int   `json:"selfChannel"`
+	SelfTypes   []int `json:"selfTypes"`
+	// MaxChannel is the highest channel worth offering; see sensor.MaxChannel for why.
+	MaxChannel int `json:"maxChannel"`
+	// MaxBytes is per node, because the budget is per reply.
+	MaxBytes int `json:"maxBytes"`
 }

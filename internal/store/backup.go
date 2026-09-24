@@ -195,6 +195,13 @@ func PruneBackup(ctx context.Context, path string, opts PruneOptions) error {
 		}
 	}
 
+	// The map keys on node kind and id, so no cascade reaches it and an orphan would restore onto the next node to take that id.
+	if _, err := db.ExecContext(ctx, `DELETE FROM telemetry_map
+		WHERE (node_kind = 'companion' AND node_id NOT IN (SELECT id FROM companions))
+		   OR (node_kind = 'repeater' AND NOT EXISTS (SELECT 1 FROM repeater))`); err != nil {
+		return fmt.Errorf("pruning telemetry_map: %w", err)
+	}
+
 	// DATETIME columns compare against a SQL timestamp; the metrics/neighbour tables store unix seconds.
 	windows := []struct {
 		table, col string

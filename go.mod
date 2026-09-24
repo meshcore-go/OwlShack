@@ -15,6 +15,7 @@ require (
 )
 
 require (
+	github.com/expr-lang/expr v1.17.8
 	github.com/meshcore-go/meshcore-go/hardware/openhop v1.5.0
 	github.com/meshcore-go/meshcore-go/hardware/sx12xx v1.5.0
 	github.com/mmcdole/gofeed v1.4.2

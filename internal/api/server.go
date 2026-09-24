@@ -119,6 +119,16 @@ func (s *Server) routes() {
 	s.mux.HandleFunc("GET /api/radio/status", s.handleRadioStatus)
 	s.mux.HandleFunc("GET /api/health", s.handleHealth)
 	s.mux.HandleFunc("POST /api/radio/reset", s.handleRadioReset)
+	s.mux.HandleFunc("GET /api/sensors", s.handleSensors)
+	s.mux.HandleFunc("GET /api/sensors/providers", s.handleSensorProviders)
+	s.mux.HandleFunc("POST /api/sensors/discover", s.handleSensorDiscover)
+	s.mux.HandleFunc("GET /api/sensors/kinds", s.handleSensorKinds)
+	s.mux.HandleFunc("POST /api/sensors", s.handleCreateSensor)
+	s.mux.HandleFunc("POST /api/sensors/test", s.handleTestSensor)
+	s.mux.HandleFunc("PUT /api/sensors/{id}", s.handleUpdateSensor)
+	s.mux.HandleFunc("DELETE /api/sensors/{id}", s.handleDeleteSensor)
+	s.mux.HandleFunc("GET /api/sensors/telemetry-map", s.handleTelemetryMap)
+	s.mux.HandleFunc("PUT /api/sensors/telemetry-map", s.handleSetTelemetryMap)
 
 	s.mux.HandleFunc("POST /api/backup", s.handleBackupExport)
 	s.mux.HandleFunc("POST /api/backup/estimate", s.handleBackupEstimate)
@@ -136,6 +146,7 @@ func (s *Server) routes() {
 	s.mux.HandleFunc("DELETE /api/config/mqtt/brokers/{id}", s.handleDeleteBroker)
 	s.mux.HandleFunc("POST /api/config/companions", s.handleSaveCompanion)
 	s.mux.HandleFunc("PUT /api/config/companions/{id}", s.handleSaveCompanion)
+	s.mux.HandleFunc("PUT /api/config/companions/{id}/telemetry", s.handleSetCompanionTelemetry)
 	s.mux.HandleFunc("DELETE /api/config/companions/{id}", s.handleDeleteCompanion)
 	s.mux.HandleFunc("POST /api/config/companions/{id}/channels", s.handleCreateChannel)
 	s.mux.HandleFunc("PUT /api/config/channels/{id}", s.handleSaveChannel)
@@ -384,7 +395,10 @@ func (s *Server) serverError(w http.ResponseWriter, msg string, err error) {
 	writeError(w, http.StatusInternalServerError, msg)
 }
 
+// maxJSONBody is far past any real request: a bulk delete of 15,000 peers fits.
+const maxJSONBody = 1 << 20
+
 func readJSON(r *http.Request, v any) error {
 	defer r.Body.Close()
-	return json.NewDecoder(r.Body).Decode(v)
+	return json.NewDecoder(http.MaxBytesReader(nil, r.Body, maxJSONBody)).Decode(v)
 }

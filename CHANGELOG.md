@@ -5,6 +5,38 @@ top until tagged.
 
 ## Unreleased
 
+Schema `user_version` 17: adds the sensor tables and who may read each companion's telemetry.
+
+### Added
+
+- **Sensors page.** Reads I2C sensors on the Pi every 5 seconds: SHTC3, LPS22HB, BME680, ENS210,
+  ADS1115 or SGM58031 ADC inputs, and a PiSugar UPS. Each card shows whether it is healthy,
+  calibrating, waiting, stale or failing.
+- **Scanning for sensors.** A scan only reads, so it never disturbs the bus, and lists what could
+  be at each address that answers. An SHTC3 sleeps until woken, so add it from the list.
+- **Derived sensors.** Work a value out from other sensors, such as a dew point or an ADC divider
+  in volts.
+- **Web sensors.** Fetch a URL on a schedule and read numbers from the reply, such as a weather
+  report's temperature and wind. Headers and logins are supported, and Test tries it before you save.
+- **Air quality from the BME680.** An air-quality index and CO2 and VOC estimates after a 5-minute
+  run-in. It calibrates to your air over days and remembers it across restarts.
+- **Sensors over the mesh.** Choose which readings the repeater and each companion send when
+  another node asks.
+- **Who may read a companion's telemetry.** Battery, position and sensors each allow no one, chosen
+  contacts or every contact. All three start at no one.
+
+### Changed
+
+- **Repeater telemetry follows the firmware.** Battery and temperature always go out, and a guest
+  gets only those.
+
+### Fixed
+
+- **Warnings were hard to read in light mode.** They now meet the 4.5:1 contrast guideline.
+- **Companion ACKs flooded with one-byte path hashes.** They now use the companion's own setting.
+- **Saving one contact setting could clear another.** Each save now changes only what it names, and
+  a bad value is refused with the reason.
+
 ## v1.4.2 - 2026-09-21
 
 Baseline `v1.4.1`, schema `user_version` 16, unchanged.

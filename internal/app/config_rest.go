@@ -3,6 +3,7 @@ package app
 import (
 	"context"
 	"errors"
+	"fmt"
 	"slices"
 	"strings"
 
@@ -197,12 +198,15 @@ func (b *backend) SaveCompanion(ctx context.Context, in api.CompanionInput) (int
 				DMPolicy:     in.DMPolicy, DMAllow: in.DMAllow,
 			}
 			row.PrivateKey = key
-			if row.PrivateKey == "" && in.ID != 0 { // update without a key change → keep existing
-				for _, c := range rows.companions {
-					if c.ID == in.ID {
-						row.PrivateKey = c.PrivateKey
-					}
+			// Telemetry modes have their own endpoint, so an edit from any other form must carry them through.
+			for _, c := range rows.companions {
+				if c.ID != in.ID || in.ID == 0 {
+					continue
 				}
+				if row.PrivateKey == "" { // update without a key change → keep existing
+					row.PrivateKey = c.PrivateKey
+				}
+				row.TelemBase, row.TelemLoc, row.TelemEnv = c.TelemBase, c.TelemLoc, c.TelemEnv
 			}
 			row.PubKey, _ = config.PubKeyHexFromSeed(row.PrivateKey)
 
@@ -231,6 +235,40 @@ func (b *backend) SaveCompanion(ctx context.Context, in api.CompanionInput) (int
 		},
 	)
 	return row.ID, err
+}
+
+// SetCompanionTelemetry is its own endpoint, or every other companion form would have to carry the modes.
+func (b *backend) SetCompanionTelemetry(ctx context.Context, id int64, in api.CompanionTelemetryInput) error {
+	modes := []string{in.Base, in.Location, in.Environment}
+	for _, m := range modes {
+		switch m {
+		case config.TelemetryDeny, config.TelemetrySelected, config.TelemetryContacts:
+		default:
+			return fmt.Errorf("%q is not a telemetry mode", m)
+		}
+	}
+	found := false
+	var row store.Companion
+	err := b.configMutate(ctx,
+		func(rows *configRows) {
+			for i := range rows.companions {
+				if rows.companions[i].ID != id {
+					continue
+				}
+				rows.companions[i].TelemBase = in.Base
+				rows.companions[i].TelemLoc = in.Location
+				rows.companions[i].TelemEnv = in.Environment
+				row, found = rows.companions[i], true
+			}
+		},
+		func(st *store.Store) error {
+			if !found {
+				return fmt.Errorf("no companion with id %d", id)
+			}
+			return st.Companions.Update(ctx, &row)
+		},
+	)
+	return err
 }
 
 func (b *backend) DeleteCompanion(ctx context.Context, id int64) error {

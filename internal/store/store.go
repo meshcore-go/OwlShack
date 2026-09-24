@@ -27,6 +27,8 @@ type Store struct {
 	Metrics        *MetricsRepo
 	AppConfig      *AppConfigRepo
 	Settings       *SettingsRepo
+	Sensors        *SensorRepo
+	TelemetryMap   *TelemetryMapRepo
 	Mqtt           *MqttRepo
 	Brokers        *BrokerRepo
 	Companions     *CompanionRepo
@@ -71,6 +73,8 @@ func Open(ctx context.Context, path string) (*Store, error) {
 		Metrics:        &MetricsRepo{db: db},
 		AppConfig:      &AppConfigRepo{db: db},
 		Settings:       &SettingsRepo{db: db},
+		Sensors:        &SensorRepo{db: db},
+		TelemetryMap:   &TelemetryMapRepo{db: db},
 		Mqtt:           &MqttRepo{db: db},
 		Brokers:        &BrokerRepo{db: db},
 		Companions:     &CompanionRepo{db: db},
@@ -95,7 +99,6 @@ func Open(ctx context.Context, path string) (*Store, error) {
 	return s, nil
 }
 
-// WriteAsync queues fn on the writer goroutine and never blocks; false means the queue was full and fn was dropped.
 // WriterStats reports the write queue and its drops; lastDrop is zero when none, which the ever-rising count alone cannot say.
 func (s *Store) WriterStats() (queued, capacity int, dropped uint64, lastDrop time.Time) {
 	if nanos := s.lastDrop.Load(); nanos != 0 {
@@ -104,6 +107,7 @@ func (s *Store) WriterStats() (queued, capacity int, dropped uint64, lastDrop ti
 	return len(s.writerCh), cap(s.writerCh), s.dropped.Load(), lastDrop
 }
 
+// WriteAsync queues fn on the writer goroutine and never blocks; false means the queue was full and fn was dropped.
 func (s *Store) WriteAsync(fn func()) bool {
 	if s.closed() {
 		return false
@@ -123,23 +127,32 @@ func (s *Store) WriteAsync(fn func()) bool {
 
 // WriteSync runs fn on the writer goroutine and blocks; calling it from the RX dispatch thread or inside another writer closure deadlocks.
 func (s *Store) WriteSync(fn func()) {
-	if s.closed() {
-		return
-	}
 	done := make(chan struct{})
 	select {
-	case <-s.closing:
-		return
 	case s.writerCh <- func() {
 		defer close(done)
 		fn()
 	}:
+	case <-s.closing:
+		s.writeAfterClose(fn)
+		return
 	}
 	select {
 	case <-done:
 	case <-s.closing:
-		<-s.writerDone // drain finished: fn has either run or never will
+		<-s.writerDone
+		select {
+		case <-done:
+		default:
+			s.writeAfterClose(fn)
+		}
 	}
+}
+
+// writeAfterClose runs fn on the caller once the writer stops; skipping it leaves the caller's error nil, which reads as success.
+func (s *Store) writeAfterClose(fn func()) {
+	<-s.writerDone
+	fn()
 }
 
 func (s *Store) closed() bool {
@@ -193,6 +206,14 @@ func (s *Store) migrate(ctx context.Context) error {
 		return fmt.Errorf("reading schema version: %w", err)
 	}
 
+	// A database from a newer build skips nothing now and every slot appended later, drifting while it looks healthy; InspectBackup refuses a restore for the same reason.
+	if version > LatestSchemaVersion() {
+		return fmt.Errorf("database is at schema version %d but this build understands %d: "+
+			"it was written by a newer OwlShack. Run that build, or if the schema is known to match, "+
+			"stamp it back with PRAGMA user_version = %d",
+			version, LatestSchemaVersion(), LatestSchemaVersion())
+	}
+
 	// A shipped slot is frozen — a released DB has stamped its version and will skip it — so append, never merge, renumber or edit.
 	for i := version; i < len(migrations); i++ {
 		if err := s.runMigration(ctx, i+1, migrations[i]); err != nil {
@@ -220,6 +241,7 @@ var migrations = []func(context.Context, dbExecer) error{
 	migrateV12,  // 14 — clamp triggers.path_hash_size to the 3-byte maximum the rest of the app uses
 	migrateV13,  // 15 — settings.modem_token (the openHop modem's access token)
 	migrateV14,  // 16 — optional group bot failover
+	migrateV15,  // 17 — the sensor framework: sensors, telemetry_map, companion telemetry modes
 }
 
 // dbExecer is the subset of *sql.DB / *sql.Tx a migration needs.
@@ -666,6 +688,49 @@ func migrateV13(ctx context.Context, db dbExecer) error {
 func migrateV11(ctx context.Context, db dbExecer) error {
 	_, err := db.ExecContext(ctx, `ALTER TABLE triggers ADD COLUMN url TEXT NOT NULL DEFAULT ''`)
 	return err
+}
+
+// migrateV15 adds the sensor framework: sensors, their learned state, the channel map, and who may read a companion's telemetry.
+func migrateV15(ctx context.Context, db dbExecer) error {
+	for _, q := range []string{
+		`CREATE TABLE IF NOT EXISTS sensors (
+			id       INTEGER PRIMARY KEY AUTOINCREMENT,
+			provider TEXT NOT NULL,
+			kind     TEXT NOT NULL,
+			name     TEXT NOT NULL,
+			options  TEXT NOT NULL DEFAULT '{}',
+			bindings TEXT NOT NULL DEFAULT '[]'
+		)`,
+		// NOCASE, as the hub compares names; the hub's check gives the reason, this holds against any other writer.
+		`CREATE UNIQUE INDEX IF NOT EXISTS sensors_name ON sensors (name COLLATE NOCASE)`,
+		// Keyed by node kind and id rather than a foreign key, because a row may belong to the repeater singleton.
+		`CREATE TABLE IF NOT EXISTS telemetry_map (
+			id        INTEGER PRIMARY KEY AUTOINCREMENT,
+			node_kind TEXT    NOT NULL CHECK (node_kind IN ('companion', 'repeater')),
+			node_id   INTEGER NOT NULL,
+			channel   INTEGER NOT NULL,
+			lpp_type  INTEGER NOT NULL,
+			sensor_id INTEGER NOT NULL REFERENCES sensors(id) ON DELETE CASCADE,
+			metric    TEXT NOT NULL,
+			UNIQUE (node_kind, node_id, channel, lpp_type)
+		)`,
+		// A sensor's delete cascades here, which is a scan per row without it.
+		`CREATE INDEX IF NOT EXISTS telemetry_map_sensor ON telemetry_map (sensor_id)`,
+		// One row per sensor, replaced in place: what a sensor has learned, never a series of it.
+		`CREATE TABLE IF NOT EXISTS sensor_state (
+			sensor_id  INTEGER PRIMARY KEY REFERENCES sensors(id) ON DELETE CASCADE,
+			state      TEXT NOT NULL,
+			updated_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP
+		)`,
+		`ALTER TABLE companions ADD COLUMN telem_base TEXT NOT NULL DEFAULT 'deny' CHECK (telem_base IN ('deny', 'selected', 'contacts'))`,
+		`ALTER TABLE companions ADD COLUMN telem_loc TEXT NOT NULL DEFAULT 'deny' CHECK (telem_loc IN ('deny', 'selected', 'contacts'))`,
+		`ALTER TABLE companions ADD COLUMN telem_env TEXT NOT NULL DEFAULT 'deny' CHECK (telem_env IN ('deny', 'selected', 'contacts'))`,
+	} {
+		if _, err := db.ExecContext(ctx, q); err != nil {
+			return err
+		}
+	}
+	return nil
 }
 
 // migrateV8 adds settings.spi_board; NULL for a KISS modem, which is every pre-existing install.
