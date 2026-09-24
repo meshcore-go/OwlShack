@@ -274,11 +274,6 @@ export function SensorModule({
               </a>
             );
           })}
-          {s.options.expression ? (
-            <code className="mt-1 block bg-muted px-2.5 py-2 font-mono text-[11.5px] leading-normal wrap-break-word">
-              {s.options.expression}
-            </code>
-          ) : null}
         </div>
       ) : null}
 
