@@ -29,6 +29,9 @@ Schema `user_version` 17: adds the sensor tables and who may read each companion
 
 - **Repeater telemetry follows the firmware.** Battery and temperature always go out, and a guest
   gets only those.
+- **Fewer writes to the SD card.** The database syncs to disk in batches instead of after every
+  packet. A power cut can lose the last few seconds of packets and readings, but a setting you
+  saved is on disk before the page says it is saved.
 
 ### Fixed
 
@@ -36,6 +39,8 @@ Schema `user_version` 17: adds the sensor tables and who may read each companion
 - **Companion ACKs flooded with one-byte path hashes.** They now use the companion's own setting.
 - **Saving one contact setting could clear another.** Each save now changes only what it names, and
   a bad value is refused with the reason.
+- **The database's log file never shrank.** After a busy spell, such as a restore, it stayed at its
+  largest size. It now drops back to 4 MB, and `/api/health` reports its size as `walBytes`.
 
 ## v1.4.2 - 2026-09-21
 

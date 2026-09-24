@@ -122,6 +122,15 @@ func TestHealth_DroppedWritesAreReportedByAgeNotLatched(t *testing.T) {
 	}
 }
 
+// A checkpoint that never completes grows the WAL without bound and nothing else shows it, so its size is published for a monitor to threshold.
+func TestHealth_ReportsTheWALSize(t *testing.T) {
+	t.Parallel()
+	b := newHealthBackend(t)
+	if got := b.health(time.Now(), &radioActivity{}).Database.WALBytes; got <= 0 {
+		t.Errorf("walBytes = %d on a migrated database, want its WAL's size", got)
+	}
+}
+
 // countingStats records how often something asks the board a question over the wire. Embedding the
 // interface means any method this test does not define panics rather than quietly passing.
 type countingStats struct {

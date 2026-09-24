@@ -51,6 +51,7 @@ func (b *backend) health(now time.Time, act *radioActivity) api.HealthInfo {
 		info.Database = api.DatabaseHealth{
 			WriteQueueLen: queued, WriteQueueCap: capacity, WritesDropped: dropped,
 			WritesDroppedLastSecs: secsSinceTime(lastDrop, now),
+			WALBytes:              b.db.WALBytes(),
 		}
 		// Not a problem entry: the count never resets, so one transient overflow would pin "degraded" until restart.
 	}

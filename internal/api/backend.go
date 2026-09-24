@@ -246,6 +246,8 @@ type DatabaseHealth struct {
 	WritesDropped uint64 `json:"writesDropped"`
 	// The one to threshold: WritesDropped only rises, so it cannot tell "now" from "last Tuesday".
 	WritesDroppedLastSecs *int64 `json:"writesDroppedLastSecs"`
+	// WALBytes is the write-ahead log on disk: a checkpoint trims it to 4 MiB, so one that keeps growing means checkpoints are not completing.
+	WALBytes int64 `json:"walBytes"`
 }
 
 // No node listing on purpose: a name or peer count cannot report a fault (a node that fails to start exits the process), and both resolve to coordinates on public maps.
