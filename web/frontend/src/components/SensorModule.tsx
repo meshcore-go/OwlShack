@@ -93,10 +93,11 @@ export function SensorModule({
   const r = splitReadings(s.readings);
   const dim = state === "failing" || state === "stale";
   const calibrating = r.calibration.some(uncalibrated);
-  const present = new Set(s.readings.map((x) => x.metric));
-  // Reported but missing while the part calibrates: the index and what is worked out from it.
-  const held = calibrating ? s.reports.filter((m) => !present.has(m)) : [];
-  const indexHeld = held.includes("iaq");
+  const warming = r.calibration.some((x) => x.format === "flag" && !x.value);
+  // The part counted it down at its sample; the time since has passed too.
+  const left = r.calibration.find((x) => x.metric === "air_quality_run_in_left");
+  const leftSecs = left ? Math.max(0, left.value - (age ?? 0)) : null;
+  const indexHeld = calibrating && s.reports.includes("iaq") && !s.readings.some((x) => x.metric === "iaq");
   const links = [...new Set([...s.bindings.map((b) => b.sensorId), ...feeds.map((f) => f.id)])];
   const tiles = r.headline.length + (indexHeld ? 1 : 0);
 
@@ -133,7 +134,7 @@ export function SensorModule({
             >
               {WORD[state] ? (
                 <span className={cn("font-semibold", state === "calibrating" && "text-primary")}>
-                  {WORD[state]}
+                  {warming ? "Warming up" : WORD[state]}
                 </span>
               ) : null}
               <span>{ageText(age)}</span>
@@ -202,7 +203,9 @@ export function SensorModule({
             <div className="hatch flex min-w-0 flex-col gap-2 bg-card px-3.5 pb-3 pt-3.5">
               <span className="label-overline">air quality index</span>
               <span className="font-mono text-[13px] text-muted-foreground">held back</span>
-              <span className="font-mono text-[11px] text-primary">until run-in finishes</span>
+              <span className="font-mono text-[11px] text-primary">
+                {leftSecs === null ? "until run-in finishes" : `ready in ${countdown(leftSecs)}`}
+              </span>
             </div>
           ) : null}
           {r.headline.map((x) => (
@@ -213,7 +216,7 @@ export function SensorModule({
 
       {r.detail.length > 0 || r.calibration.length > 0 ? (
         <div className="grid divide-y divide-border border-t border-border @3xl:auto-cols-fr @3xl:grid-flow-col @3xl:divide-x @3xl:divide-y-0">
-          {r.detail.length > 0 || held.length > (indexHeld ? 1 : 0) ? (
+          {r.detail.length > 0 ? (
             <div className="px-3.5 py-3">
               <dl className="grid grid-cols-[minmax(0,max-content)_max-content] items-baseline justify-start gap-x-5 gap-y-1.5 @xl:grid-cols-[minmax(0,max-content)_max-content_minmax(0,max-content)_max-content] @3xl:grid-cols-[minmax(0,max-content)_max-content]">
                 {r.detail.map((x) => {
@@ -231,21 +234,9 @@ export function SensorModule({
                   );
                 })}
               </dl>
-              {held.filter((m) => m !== "iaq").length ? (
-                <p className="mt-3 text-[12.5px] leading-normal text-muted-foreground">
-                  Held back with the index:{" "}
-                  {held.filter((m) => m !== "iaq").map((m, i) => (
-                    <span key={m}>
-                      {i ? ", " : ""}
-                      <code className="font-mono">{m}</code>
-                    </span>
-                  ))}
-                  .
-                </p>
-              ) : null}
             </div>
           ) : null}
-          {r.calibration.length > 0 ? <Calibration readings={r.calibration} /> : null}
+          {r.calibration.length > 0 ? <Calibration readings={r.calibration} leftSecs={leftSecs} /> : null}
         </div>
       ) : null}
 
@@ -356,7 +347,13 @@ function Tile({ reading, sensor, dim }: { reading: SensorReading; sensor: Sensor
   );
 }
 
-function Calibration({ readings }: { readings: SensorReading[] }) {
+// m:ss, so a few minutes of run-in reads as a clock rather than a count of seconds.
+function countdown(secs: number): string {
+  const s = Math.ceil(secs);
+  return `${Math.floor(s / 60)}:${String(s % 60).padStart(2, "0")}`;
+}
+
+function Calibration({ readings, leftSecs }: { readings: SensorReading[]; leftSecs: number | null }) {
   const warming = readings.some((x) => x.format === "flag" && !x.value);
   const settling = readings.some((x) => x.format === "count" && x.value < 2);
   return (
@@ -364,13 +361,13 @@ function Calibration({ readings }: { readings: SensorReading[] }) {
       <span className="label-overline">Calibration</span>
       <div className="my-2.5 grid grid-cols-[auto_auto_minmax(0,1fr)] items-center gap-x-3 gap-y-2">
         {readings.map((x) =>
-          x.format === "flag" ? (
+          x.format === "number" ? null : x.format === "flag" ? (
             <div key={x.metric} className="contents">
               <span className="font-mono text-[11px] uppercase tracking-[0.08em] text-muted-foreground">
                 {readingLabel(x)}
               </span>
               <span className={cn("col-span-2 font-mono text-xs", x.value ? "text-primary" : "")}>
-                {x.value ? "yes" : "not yet"}
+                {x.value ? "yes" : leftSecs === null ? "not yet" : `warming up, ${countdown(leftSecs)} left`}
               </span>
             </div>
           ) : (
@@ -392,7 +389,7 @@ function Calibration({ readings }: { readings: SensorReading[] }) {
       </div>
       <p className="text-[12.5px] leading-normal text-muted-foreground">
         {warming
-          ? "The gas plate is still warming up. The index and the values worked out from it appear once run-in finishes, a few minutes after start."
+          ? `The gas plate is warming up. The air quality index, CO2 and breath VOC equivalents and gas percentage appear ${leftSecs === null ? "once run-in finishes" : `in about ${countdown(leftSecs)}`}.`
           : settling
             ? "It has not yet seen both clean and stale air, so treat the index as a guide. Air the room, then breathe near the sensor, or leave it running for a few hours."
             : "Calibrated for this room. It keeps learning in the background."}

@@ -19,7 +19,8 @@ export function stateOf(s: Sensor): SensorState {
 // A calibration flag not yet set, or an accuracy under 2 of 3, which has not yet seen both clean and polluted air.
 export function uncalibrated(r: SensorReading): boolean {
   if (r.role !== "calibration") return false;
-  return r.format === "flag" ? !r.value : r.value < 2;
+  if (r.format === "flag") return !r.value;
+  return r.format === "count" && r.value < 2;
 }
 
 export interface CardReadings {
