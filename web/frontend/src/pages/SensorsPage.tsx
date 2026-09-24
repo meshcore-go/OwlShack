@@ -7,7 +7,6 @@ import { LoadErrorAlert } from "@/components/LoadErrorAlert";
 import { PageHeader } from "@/components/PageHeader";
 import { SensorDialog } from "@/components/SensorDialog";
 import { Led, SensorModule, isWide } from "@/components/SensorModule";
-import { ConnectionPill } from "@/components/StatusIndicator";
 import { useApiList } from "@/hooks/useApiList";
 import { useWebSocket } from "@/hooks/useWebSocket";
 import { useResume } from "@/lib/resume";
@@ -50,7 +49,7 @@ export function SensorsPage() {
   useResume(refresh);
 
   // Every poll pass pushes the whole set, so the page replaces rather than merges.
-  const { connected, pending } = useWebSocket(
+  useWebSocket(
     ["sensors"],
     useCallback(
       (topic: string, data: unknown) => {
@@ -128,7 +127,6 @@ export function SensorsPage() {
             </span>
           ) : null
         }
-        trailing={<ConnectionPill connected={connected} pending={pending} />}
         actions={
           <Button size="sm" onClick={openAdd} className="rounded-none font-mono text-[11px] uppercase tracking-[0.12em]">
             <Plus className="size-3.5" />
