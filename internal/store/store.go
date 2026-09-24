@@ -5,6 +5,7 @@ import (
 	"database/sql"
 	"fmt"
 	"log/slog"
+	"os"
 	"sync"
 	"sync/atomic"
 	"time"
@@ -39,6 +40,7 @@ type Store struct {
 	Repeater       *RepeaterRepo
 	RepeaterACL    *RepeaterACLRepo
 
+	path       string
 	writerCh   chan func()
 	writerDone chan struct{}
 	closing    chan struct{}
@@ -48,9 +50,14 @@ type Store struct {
 	lastDrop atomic.Int64
 }
 
+// walSizeLimit is what a checkpoint trims the WAL back to; without it the file stays the size of the largest burst ever written.
+const walSizeLimit = 4 << 20
+
 func Open(ctx context.Context, path string) (*Store, error) {
 	// modernc.org/sqlite only honours the "_pragma=" form; the mattn-style "_journal_mode=WAL" is silently ignored.
-	dsn := "file:" + path + "?_pragma=busy_timeout(5000)&_pragma=journal_mode(WAL)&_pragma=foreign_keys(on)"
+	// NORMAL syncs at checkpoints rather than every commit, sparing the SD card; WriteSync checkpoints so a save is on disk when it returns.
+	dsn := "file:" + path + "?_pragma=busy_timeout(5000)&_pragma=journal_mode(WAL)&_pragma=foreign_keys(on)" +
+		fmt.Sprintf("&_pragma=journal_size_limit(%d)&_pragma=synchronous(NORMAL)", walSizeLimit)
 	db, err := sql.Open("sqlite", dsn)
 	if err != nil {
 		return nil, fmt.Errorf("opening database: %w", err)
@@ -63,6 +70,7 @@ func Open(ctx context.Context, path string) (*Store, error) {
 
 	s := &Store{
 		db:             db,
+		path:           path,
 		Peers:          &PeerRepo{db: db},
 		Contacts:       &ContactRepo{db: db},
 		Packets:        &PacketRepo{db: db, maxRows: DefaultMaxPackets},
@@ -132,6 +140,7 @@ func (s *Store) WriteSync(fn func()) {
 	case s.writerCh <- func() {
 		defer close(done)
 		fn()
+		s.checkpoint()
 	}:
 	case <-s.closing:
 		s.writeAfterClose(fn)
@@ -153,6 +162,23 @@ func (s *Store) WriteSync(fn func()) {
 func (s *Store) writeAfterClose(fn func()) {
 	<-s.writerDone
 	fn()
+}
+
+// checkpoint syncs the WAL and copies it into the main file, which NORMAL otherwise leaves until the WAL fills.
+// ponytail: PASSIVE never waits on a reader, so one holding an older snapshot can leave a save in the WAL until the next checkpoint.
+func (s *Store) checkpoint() {
+	if _, err := s.db.ExecContext(context.Background(), "PRAGMA wal_checkpoint(PASSIVE)"); err != nil {
+		slog.Warn("store checkpoint failed; the last save may not survive a power cut", "error", err)
+	}
+}
+
+// WALBytes is the write-ahead log's size on disk, 0 when there is none; one that keeps growing means checkpoints are not completing.
+func (s *Store) WALBytes() int64 {
+	fi, err := os.Stat(s.path + "-wal")
+	if err != nil {
+		return 0
+	}
+	return fi.Size()
 }
 
 func (s *Store) closed() bool {

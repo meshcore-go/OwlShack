@@ -78,9 +78,12 @@ by `internal/app` and swapped atomically via `SetBackend`. Add a method to
 `Backend`; do **not** reintroduce per-feature `Set*`/mutex pairs.
 
 **Driver pragmas use modernc syntax** —
-`?_pragma=busy_timeout(5000)&_pragma=journal_mode(WAL)&_pragma=foreign_keys(on)`.
+`?_pragma=busy_timeout(5000)&_pragma=journal_mode(WAL)&_pragma=foreign_keys(on)`,
+plus `journal_size_limit` and `synchronous(NORMAL)` (see `store.Open`).
 The mattn-style `_journal_mode=WAL` form is silently ignored, which once left
-the DB in rollback-journal mode with no busy timeout.
+the DB in rollback-journal mode with no busy timeout. Under NORMAL a commit is
+only synced at a checkpoint, so `WriteSync` checkpoints after its closure: an
+HTTP save is on disk when it returns, and the RX path's `WriteAsync` is not.
 
 **SNR is real dB end-to-end** (`snr REAL` / `*float64` / JSON number); RSSI is
 raw `int8` dBm. The wire is quarter-dB (x4) and meshcore-go converts at ingest;
