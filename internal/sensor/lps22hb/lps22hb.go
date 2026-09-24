@@ -95,7 +95,7 @@ func NewI2C(bus i2c.Bus, opts *Opts) (*LPS22HB, error) {
 	return d, nil
 }
 
-// init resets the sensor, checks WHO_AM_I and configures one-shot mode.
+// init resets the sensor, checks WHO_AM_I, configures one-shot mode and spends the first conversion.
 func (d *LPS22HB) init() error {
 	// WHO_AM_I first: resetting whatever else answers here would be a side effect on someone else's chip.
 	var id [1]byte
@@ -126,6 +126,11 @@ func (d *LPS22HB) init() error {
 	// Block data update, so a conversion cannot land between the halves of a reading.
 	if err := d.write(regCtrlReg1, bitBDU); err != nil {
 		return fmt.Errorf("lps22hb: configuring one-shot mode: %w", err)
+	}
+	// After a power-on the first conversion can be hundreds of hPa out (760 against 1026 on pi-4-2), so it is spent here.
+	var discard physic.Env
+	if err := d.read(&discard); err != nil {
+		return fmt.Errorf("lps22hb: first conversion: %w", err)
 	}
 	return nil
 }

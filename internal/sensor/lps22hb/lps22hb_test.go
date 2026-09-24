@@ -10,9 +10,12 @@ import (
 	"periph.io/x/conn/v3/physic"
 )
 
-// openOps is the traffic a successful open expects, as the datasheet's bytes so a wrong driver constant fails here: WHO_AM_I, reset, poll the reset and boot bits, configure.
+// coldFirst is the first conversion pi-4-2's LPS22HB gave after a full reboot: 760.31 hPa, against 1026.57 thirty seconds later.
+const coldFirst = 3114230
+
+// openOps is the traffic a successful open expects, as the datasheet's bytes so a wrong driver constant fails here: WHO_AM_I, reset, poll the reset and boot bits, configure, one conversion thrown away.
 func openOps(addr uint16, who byte) []i2ctest.IO {
-	return []i2ctest.IO{
+	ops := []i2ctest.IO{
 		{Addr: addr, W: []byte{0x0F}, R: []byte{who}},
 		{Addr: addr, W: []byte{0x11, 0x84}},
 		{Addr: addr, W: []byte{0x11}, R: []byte{0x00}},
@@ -20,6 +23,10 @@ func openOps(addr uint16, who byte) []i2ctest.IO {
 		{Addr: addr, W: []byte{0x11, 0x10}},
 		{Addr: addr, W: []byte{0x10, 0x02}},
 	}
+	if who != whoAmIValue {
+		return ops
+	}
+	return append(ops, measureOps(addr, coldFirst, 2150)...)
 }
 
 // measureOps is one Sense: trigger, poll status, read the five result bytes.
@@ -77,6 +84,14 @@ func TestNewI2C_ZeroAddressFallsBackToTheDefault(t *testing.T) {
 	}
 	if d.Address() != DefaultAddress {
 		t.Errorf("Address() = %#02x, want %#02x", d.Address(), DefaultAddress)
+	}
+}
+
+// A cold part's first conversion is wrong but plausible, so the open spends it and the first Sense is the second.
+func TestNewI2C_DiscardsTheFirstConversion(t *testing.T) {
+	e := senseAt(t, 4096*1026, 2150)
+	if hPa := float64(e.Pressure) / float64(100*physic.Pascal); math.Abs(hPa-1026) > hPaTolerance {
+		t.Errorf("first Sense = %.2f hPa, want 1026: the open's throwaway conversion reached the caller", hPa)
 	}
 }
 
@@ -213,6 +228,7 @@ func TestNewI2C_WaitsForTheMemoryRebootNotJustTheResetBit(t *testing.T) {
 		{Addr: DefaultAddress, W: []byte{0x11, 0x10}},
 		{Addr: DefaultAddress, W: []byte{0x10, 0x02}},
 	}
+	ops = append(ops, measureOps(DefaultAddress, coldFirst, 2150)...)
 	bus := &i2ctest.Playback{Ops: ops, DontPanic: true}
 	if _, err := NewI2C(bus, nil); err != nil {
 		t.Fatalf("NewI2C: %v", err)
@@ -238,19 +254,15 @@ func (neverReadyBus) Tx(addr uint16, w, r []byte) error {
 
 // Zero is unset, as in every driver here, not "wait for ever": a part that stopped converting would hold its caller for good.
 func TestSense_TakesTheDefaultTimeoutForZero(t *testing.T) {
-	d, err := NewI2C(neverReadyBus{}, &Opts{})
-	if err != nil {
-		t.Fatalf("NewI2C: %v", err)
-	}
 	done := make(chan error, 1)
 	go func() {
-		var e physic.Env
-		done <- d.Sense(&e)
+		_, err := NewI2C(neverReadyBus{}, &Opts{})
+		done <- err
 	}()
 	select {
 	case err := <-done:
 		if err == nil || !strings.Contains(err.Error(), "timed out") {
-			t.Fatalf("Sense gave %v, want a timeout", err)
+			t.Fatalf("NewI2C gave %v, want its first conversion to time out", err)
 		}
 	case <-time.After(10 * DefaultOpts.MeasurementReadTimeout):
 		t.Fatal("a zero timeout waited for ever on a part that never finished")
