@@ -350,6 +350,10 @@ type SensorStatus struct {
 	Reports  []string        `json:"reports"`
 	Readings []SensorReading `json:"readings"`
 	At       *string         `json:"at"`
+	// SecretsSet names the secret options that hold a value, which Options leaves out.
+	SecretsSet []string `json:"secretsSet"`
+	// StaleAfterSecs is how old a reading may be before it is out of date: the poll's for most, a web sensor's own.
+	StaleAfterSecs float64 `json:"staleAfterSecs"`
 	// AgeSecs is how old Readings were when this was sent, by the host's clock alone, so a phone with another time never reads it as stale or fresh; null until first read.
 	AgeSecs *float64 `json:"ageSecs"`
 	// Category is the kind's catalogue group, such as "Environment", so the page can group without the catalogue.
@@ -370,6 +374,15 @@ type SensorField struct {
 	Multiline bool     `json:"multiline,omitempty"`
 	// Identifies means the value says which part this is, so a card can name it without every option.
 	Identifies bool `json:"identifies,omitempty"`
+	// Secret is never sent back; the form shows whether one is set and keeps it unless replaced.
+	Secret bool `json:"secret,omitempty"`
+	// When shows the field only while another field holds one of Values.
+	When *SensorFieldWhen `json:"when,omitempty"`
+}
+
+type SensorFieldWhen struct {
+	Key    string   `json:"key"`
+	Values []string `json:"values"`
 }
 
 // SensorKindInfo is one entry in the parts catalogue, which has to stay searchable at sixty parts.
@@ -411,6 +424,8 @@ type SensorInput struct {
 	Name     string            `json:"name"`
 	Options  map[string]string `json:"options"`
 	Bindings []SensorBinding   `json:"bindings,omitempty"`
+	// KeepSecrets names secret options an edit carries over from the stored sensor, as the page is never sent them.
+	KeepSecrets []string `json:"keepSecrets,omitempty"`
 }
 
 type SettingsInput struct {

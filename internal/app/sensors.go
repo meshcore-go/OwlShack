@@ -2,8 +2,10 @@ package app
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"log/slog"
+	"maps"
 	"math"
 	"slices"
 	"sync"
@@ -23,7 +25,7 @@ const airQualityPeriod = 3 * time.Second
 // startSensors runs the hub for the life of the process, outside the radio lifecycle.
 func startSensors(ctx context.Context, db *store.Store, hub *api.Hub, log *slog.Logger) (*sensor.Hub, error) {
 	i2c := sensor.I2CProvider{Period: airQualityPeriod, State: sensorState{db: db}}
-	sh := sensor.NewHub(log, i2c, sensor.PiSugarProvider{}, &sensor.VirtualProvider{})
+	sh := sensor.NewHub(log, i2c, sensor.PiSugarProvider{}, &sensor.VirtualProvider{}, sensor.HTTPProvider{})
 	if err := loadSensors(ctx, db, sh); err != nil {
 		return nil, err
 	}
@@ -110,11 +112,15 @@ func (b *backend) SensorKinds(provider string) ([]api.SensorKindInfo, error) {
 	for _, k := range kinds {
 		fields := make([]api.SensorField, 0, len(k.Fields))
 		for _, f := range k.Fields {
-			fields = append(fields, api.SensorField{
+			field := api.SensorField{
 				Key: f.Key, Label: f.Label, Help: f.Help,
 				Default: f.Default, Choices: f.Choices, Required: f.Required,
-				Multiline: f.Multiline, Identifies: f.Identifies,
-			})
+				Multiline: f.Multiline, Identifies: f.Identifies, Secret: f.Secret,
+			}
+			if f.When != nil {
+				field.When = &api.SensorFieldWhen{Key: f.When.Key, Values: f.When.Values}
+			}
+			fields = append(fields, field)
 		}
 		metrics := make([]string, 0, len(k.Metrics))
 		for _, m := range k.Metrics {
@@ -135,6 +141,9 @@ var sensorWrites sync.Mutex
 func (b *backend) CreateSensor(ctx context.Context, in api.SensorInput) (int64, error) {
 	sensorWrites.Lock()
 	defer sensorWrites.Unlock()
+	if len(in.KeepSecrets) > 0 {
+		return 0, api.Invalid(errors.New("a new sensor has no stored secrets to keep"))
+	}
 	spec, err := b.prepareSensor(0, in)
 	if err != nil {
 		return 0, err
@@ -154,6 +163,9 @@ func (b *backend) CreateSensor(ctx context.Context, in api.SensorInput) (int64, 
 func (b *backend) UpdateSensor(ctx context.Context, id int64, in api.SensorInput) error {
 	sensorWrites.Lock()
 	defer sensorWrites.Unlock()
+	if err := b.keepSecrets(id, &in); err != nil {
+		return err
+	}
 	spec, err := b.prepareSensor(id, in)
 	if err != nil {
 		return err
@@ -174,6 +186,52 @@ func (b *backend) UpdateSensor(ctx context.Context, id int64, in api.SensorInput
 		return err
 	}
 	return b.telemetry.Load(ctx, b.db)
+}
+
+// keepSecrets carries each named secret over from the stored sensor; naming one that is not a secret of its kind, or also sending it, is refused.
+func (b *backend) keepSecrets(id int64, in *api.SensorInput) error {
+	if len(in.KeepSecrets) == 0 {
+		return nil
+	}
+	var stored *sensor.Spec
+	for _, s := range b.sensors.Snapshot() {
+		if s.Spec.ID == id {
+			stored = &s.Spec
+		}
+	}
+	if stored == nil {
+		return api.Invalid(fmt.Errorf("no sensor %d to keep secrets from", id))
+	}
+	if stored.Provider != in.Provider || stored.Kind != in.Kind {
+		return api.Invalid(errors.New("a sensor changed to another kind has no stored secrets to keep"))
+	}
+	kinds, err := b.sensors.Kinds(in.Provider)
+	if err != nil {
+		return api.Invalid(err)
+	}
+	secret := map[string]bool{}
+	for _, k := range kinds {
+		if k.Kind == in.Kind {
+			for _, f := range k.Fields {
+				secret[f.Key] = f.Secret
+			}
+		}
+	}
+	opts := maps.Clone(in.Options)
+	if opts == nil {
+		opts = map[string]string{}
+	}
+	for _, key := range in.KeepSecrets {
+		if !secret[key] {
+			return api.Invalid(fmt.Errorf("%q is not a secret of this kind, so there is nothing to keep", key))
+		}
+		if opts[key] != "" {
+			return api.Invalid(fmt.Errorf("%q is both sent and kept; send one or the other", key))
+		}
+		opts[key] = stored.Options[key]
+	}
+	in.Options = opts
+	return nil
 }
 
 // checkDependents refuses an edit that would leave a published channel or a derived sensor reading something this one stops reporting.
@@ -273,34 +331,54 @@ func (b *backend) DeleteSensor(ctx context.Context, id int64) error {
 	return b.telemetry.Load(ctx, b.db)
 }
 
+// staleAfter is how old a reading may be before it is out of date: the sensor's own where it has one, three polls where the poll decides.
+func staleAfter(s sensor.Status) time.Duration {
+	if s.StaleAfter > 0 {
+		return s.StaleAfter
+	}
+	return 3 * sensorPollInterval
+}
+
 func sensorStatusDTOs(sh *sensor.Hub, in []sensor.Status) []api.SensorStatus {
 	kinds, _ := sh.Kinds("")
 	category := make(map[[2]string]string, len(kinds))
+	secret := map[[3]string]bool{}
 	for _, k := range kinds {
 		category[[2]string{k.Provider, k.Kind}] = k.Category
+		for _, f := range k.Fields {
+			secret[[3]string{k.Provider, k.Kind, f.Key}] = f.Secret
+		}
 	}
 	now := time.Now()
 	out := make([]api.SensorStatus, 0, len(in))
 	for _, s := range in {
 		row := api.SensorStatus{
-			ID:       s.Spec.ID,
-			Provider: s.Spec.Provider,
-			Kind:     s.Spec.Kind,
-			Name:     s.Spec.Name,
-			Options:  s.Spec.Options,
-			Bindings: apiBindings(s.Spec.Bindings),
-			Reports:  []string{},
-			Readings: make([]api.SensorReading, 0, len(s.Readings)),
-			Category: category[[2]string{s.Spec.Provider, s.Spec.Kind}],
-			Error:    s.Err,
+			ID:             s.Spec.ID,
+			Provider:       s.Spec.Provider,
+			Kind:           s.Spec.Kind,
+			Name:           s.Spec.Name,
+			Bindings:       apiBindings(s.Spec.Bindings),
+			Reports:        []string{},
+			Readings:       make([]api.SensorReading, 0, len(s.Readings)),
+			Category:       category[[2]string{s.Spec.Provider, s.Spec.Kind}],
+			SecretsSet:     []string{},
+			StaleAfterSecs: staleAfter(s).Seconds(),
+			Error:          s.Err,
 		}
+		// Options is shared with the hub's spec, so the secrets come off a copy.
+		row.Options = map[string]string{}
+		for k, v := range s.Spec.Options {
+			if !secret[[3]string{s.Spec.Provider, s.Spec.Kind, k}] {
+				row.Options[k] = v
+			} else if v != "" {
+				row.SecretsSet = append(row.SecretsSet, k)
+			}
+		}
+		slices.Sort(row.SecretsSet)
 		for m := range sh.Reports(s.Spec) {
 			row.Reports = append(row.Reports, string(m))
 		}
 		slices.Sort(row.Reports)
-		if row.Options == nil {
-			row.Options = map[string]string{}
-		}
 		for _, r := range s.Readings {
 			row.Readings = append(row.Readings, api.SensorReading{
 				Metric: string(r.Metric), Label: r.Label, Value: r.Value, Unit: r.Unit,

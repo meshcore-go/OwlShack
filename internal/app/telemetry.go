@@ -67,7 +67,7 @@ func (p *telemetryPublisher) MapFor(node store.TelemetryNode) func() ([]sensor.C
 	}
 }
 
-// freshOnly drops a reading more than three polls old, which a wedged bus leaves in place and a requester would take as current.
+// freshOnly drops a reading past its sensor's stale time, which a wedged bus leaves in place and a requester would take as current.
 func freshOnly(sts []sensor.Status, now time.Time) []sensor.Status {
-	return slices.DeleteFunc(sts, func(s sensor.Status) bool { return now.Sub(s.At) > 3*sensorPollInterval })
+	return slices.DeleteFunc(sts, func(s sensor.Status) bool { return now.Sub(s.At) > staleAfter(s) })
 }

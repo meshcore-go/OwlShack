@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"io"
 	"log/slog"
+	"maps"
 	"path/filepath"
 	"strings"
 	"sync"
@@ -405,5 +406,82 @@ func TestSensorStatusDTOs_CarryAgeCategoryAndRoles(t *testing.T) {
 	}
 	if strings.Join(roles, ",") != "headline,detail,calibration" {
 		t.Errorf("roles = %v, want headline, detail, calibration", roles)
+	}
+}
+
+// A web sensor's own stale time keeps a ten-minute fetch in the mesh reply that three polls would drop.
+func TestFreshOnly_KeepsASensorToItsOwnStaleTime(t *testing.T) {
+	now := time.Now()
+	sts := []sensor.Status{{Spec: sensor.Spec{ID: 1}, At: now.Add(-10 * time.Minute), StaleAfter: 30 * time.Minute}}
+	if got := freshOnly(sts, now); len(got) != 1 {
+		t.Errorf("a reading 10m old under a 30m stale time was dropped")
+	}
+}
+
+// Every read of the sensor list reaches every open page, so a token in it would be a token on every screen.
+func TestSensorSecrets_NeverReadBackAndKeptOnlyWhenAsked(t *testing.T) {
+	ctx := t.Context()
+	db, err := store.Open(ctx, filepath.Join(t.TempDir(), "secrets.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer db.Close()
+	hub := sensor.NewHub(slog.New(slog.NewTextHandler(io.Discard, nil)), sensor.HTTPProvider{})
+	defer hub.Close()
+	b := &backend{db: db, sensors: hub, telemetry: newTelemetryPublisher(hub)}
+	in := api.SensorInput{Provider: "http", Kind: sensor.KindHTTP, Name: "weather", Options: map[string]string{
+		"url": "http://127.0.0.1:9/w", "values": "t, C, a.b", "auth": "bearer", "token": "s3cret",
+	}}
+	id, err := b.CreateSensor(ctx, in)
+	if err != nil {
+		t.Fatalf("CreateSensor: %v", err)
+	}
+	stored := func() map[string]string {
+		for _, s := range hub.Snapshot() {
+			if s.Spec.ID == id {
+				return s.Spec.Options
+			}
+		}
+		return nil
+	}
+
+	st := b.Sensors()[0]
+	if _, ok := st.Options["token"]; ok {
+		t.Error("the token was sent back in the options")
+	}
+	if len(st.SecretsSet) != 1 || st.SecretsSet[0] != "token" || st.StaleAfterSecs != 1800 {
+		t.Errorf("secrets set %v, stale after %v; want token and 1800", st.SecretsSet, st.StaleAfterSecs)
+	}
+
+	// An edit that keeps the token changes the rest and leaves it in place.
+	edit := in
+	edit.Name, edit.Options = "weather 2", maps.Clone(in.Options)
+	delete(edit.Options, "token")
+	edit.KeepSecrets = []string{"token"}
+	if err := b.UpdateSensor(ctx, id, edit); err != nil {
+		t.Fatalf("UpdateSensor keeping the token: %v", err)
+	}
+	if stored()["token"] != "s3cret" {
+		t.Errorf("the kept token is %q", stored()["token"])
+	}
+
+	// Without keeping it, an edit that leaves it out saves no token, and bearer then needs one.
+	edit.KeepSecrets = nil
+	if err := b.UpdateSensor(ctx, id, edit); err == nil {
+		t.Error("an edit that dropped the required token was saved")
+	}
+	for name, bad := range map[string]api.SensorInput{
+		"a key that is no secret": {Provider: "http", Kind: sensor.KindHTTP, Name: "x", Options: edit.Options, KeepSecrets: []string{"url"}},
+		"sent and kept":           {Provider: "http", Kind: sensor.KindHTTP, Name: "x", Options: in.Options, KeepSecrets: []string{"token"}},
+	} {
+		if err := b.UpdateSensor(ctx, id, bad); err == nil {
+			t.Errorf("%s was accepted", name)
+		}
+	}
+	if _, err := b.CreateSensor(ctx, api.SensorInput{Provider: "http", Kind: sensor.KindHTTP, Name: "y", Options: edit.Options, KeepSecrets: []string{"token"}}); err == nil {
+		t.Error("a new sensor kept a secret it never had")
+	}
+	if stored()["token"] != "s3cret" {
+		t.Errorf("a refused edit changed the token to %q", stored()["token"])
 	}
 }
