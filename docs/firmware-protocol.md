@@ -21,7 +21,7 @@ Device/firmware facts, repeater CLI parity, wire formats, and the sensor and roo
   minutes/hours: the CLI `get`/`set` handlers convert, and the Repeater page's
   fields are labelled in those units so what you type is what `get
   advert.interval` reports. `Config.Validate` enforces the ranges and
-  `migrateV8` clamped existing rows into them (below minimum → off), so a
+  `008_map_region_path_hash.sql` clamped existing rows into them (below minimum → off), so a
   legacy out-of-range value can't fail validation at load and stop startup. `flood.max` ≤ 64. `dutycycle` is `1-100` and writes `airtime_factor` indirectly.
 - **Wrong password / unreachable repeater**: client sees a silent ~10 s timeout — the firmware drops the packet either way. The current UX doesn't distinguish the two cases. Two things the client does reject immediately: a CLI send from a non-admin session (all three roles drop `CLI_DATA` from non-admins silently) and a login reply whose byte 4 isn't `RESP_SERVER_LOGIN_OK` (`isLoginReply`, so a late status response can't be mistaken for the login). ACL rows with `permissions == 0` are block padding and are never surfaced.
 - **Logout is local-only**: deletes the session from server memory, no radio traffic.

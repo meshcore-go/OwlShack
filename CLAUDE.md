@@ -15,7 +15,7 @@ CoreScope), persists to SQLite, and serves a React SPA on `:8080`.
 
 Also: [README.md](./README.md) (public intro), `s.routes()` in
 [`internal/api/server.go`](./internal/api/server.go) (**authoritative** endpoint
-list), [`internal/store/store.go`](./internal/store/store.go) (migrations),
+list), [`internal/store/migrations/`](./internal/store/migrations/) (the schema, one file per version),
 `~/Data/wesley/MeshCore` (firmware source — the tiebreaker for any protocol
 dispute), <https://api.meshcore.nz/api/v1/config> (regenerate
 `web/frontend/src/data/radio-presets.json` from this, don't hand-edit).
@@ -54,15 +54,25 @@ and gives `SQLITE_BUSY`. Never `WriteSync` inside a writer closure — the write
 would wait on itself. On the RX path prefer `WriteAsync`: `WriteSync` blocks the
 node's single dispatch goroutine and stalls all RX when `writerCh` is full.
 
-**Migrations are append-only and shipped slots are frozen.** Add `migrateVN` to
-the `migrations` slice; never edit, renumber or squash a slot that has shipped —
-a released DB has stamped that version and will skip it.
-`TestMigrations_ShippedSlotsFrozen` fingerprints the released SQL; a failure
-there means append instead, **not** re-pin the constant. The one exception is a
-change to how the harness records SQL: then every digest moves at once, and the
-change must show each shipped slot's SQL is byte-identical before re-pinning. Each migration runs in
-one transaction with its version bump and takes a `dbExecer`, so it must not
-open its own `BeginTx`.
+**Migrations are append-only and shipped files are frozen.** Add
+`internal/store/migrations/NNN_what.sql`, where NNN is the `user_version` it
+sets; never edit, rename or renumber a file listed in `migrations.sum` — a
+released DB has stamped that version and will skip it.
+`TestMigrations_ShippedFilesAreFrozen` checks the listed checksums; a failure
+there means add a file instead, **never** edit the sum. Unlisted files are
+unreleased and may change, but a DB that ran a different draft of one is
+refused at open (and as a backup), naming the file; a DB migrated before
+checksums were kept is trusted as it stands. At release, record the new files with
+`go test ./internal/store -run TestMigrations -release-migrations <tag>` and
+commit the sum before tagging; the release workflow fails on an unlisted file.
+What SQL cannot do goes in a Go step called from `migration.apply`, run after
+its file in the same transaction (004's packet backfill is the only one), and
+it is frozen like the files. Each file runs in one transaction with its version bump, so it must
+not `BEGIN`. The store copies the DB to `meshcore.db.pre-v<from>-to-v<to>`
+before upgrading, keeps an unfinished upgrade's copy rather than copying a
+half-upgraded DB, and deletes older copies only once an upgrade finishes; a copy
+that cannot be made (a full disk) is a warning, not a refusal to start. Going
+back is moving the copy into place, and there are no down migrations.
 
 **Every timestamp on outgoing admin traffic comes from
 `Client.UniqueTimestamp()`** (the firmware's `getCurrentTimeUnique()`), never

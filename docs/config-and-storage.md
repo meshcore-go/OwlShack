@@ -304,6 +304,16 @@ without hand-copying `meshcore.db`. UI is `BackupWizard` (opened from
   readable SQLite file with a `settings` table and `user_version <=`
   `LatestSchemaVersion()` (migrations never run backwards); a rejected upload
   leaves nothing staged.
+- **An upgrade keeps a copy of the database first**: before migrating from
+  version N to M, the store writes `meshcore.db.pre-vN-to-vM` with `VACUUM
+  INTO` and syncs it, so going back to an older build is stopping OwlShack and
+  moving the copy into place. An upgrade that fails part way keeps its copy,
+  and the next start reuses it rather than copying the half-upgraded database;
+  older copies are deleted only once an upgrade finishes. If the copy cannot be
+  made (a full disk), the upgrade goes ahead without one and logs a warning, so
+  an updated node still starts. Builds from this one
+  on name the copy when they refuse a newer database (v1.4.x does not). Nothing
+  is copied for a fresh database.
 
 ## Node monitoring
 

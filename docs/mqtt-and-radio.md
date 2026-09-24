@@ -170,7 +170,7 @@ overrides:
 - **Everything internal speaks bytes.** The firmware's `path.hash.mode` is
   bytes-1 and its `set` handler checks `mode < 3`, so 0-2 = 1-3 bytes. Convert
   only in `cliGet`/`setMutation` — never store the mode. (The old
-  `RepeaterConfig.PathHashMode` was removed; `migrateV9` converted the column
+  `RepeaterConfig.PathHashMode` was removed; `008_map_region_path_hash.sql` converted the column
   to `path_hash_size` with `mode + 1`.) `RepeaterDetailPage` still speaks mode,
   correctly: it drives *remote* firmware over the CLI.
 - **Inheritance is resolved at startup, not read at use.**
