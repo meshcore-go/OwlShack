@@ -23,6 +23,7 @@ const (
 	optURL        = "url"
 	optFormat     = "format"
 	optValues     = "values"
+	optMatches    = "matches"
 	optInterval   = "interval"
 	optStaleAfter = "stale_after"
 	optHeaders    = "headers"
@@ -37,6 +38,8 @@ const (
 	minInterval   = time.Minute
 	maxInterval   = 24 * time.Hour
 	maxStaleAfter = 7 * 24 * time.Hour
+	// maxTestBody is how much of a reply a test hands back to show, which is plenty to pick values from.
+	maxTestBody = 256 << 10
 )
 
 // headerName is RFC 9110's token, so a header the transport would refuse is refused at save instead.
@@ -61,7 +64,7 @@ func (HTTPProvider) Kinds() []KindInfo {
 		Description: "Values read from a web address, such as a weather report or a device on the network",
 		Category:    "Online",
 		ReportsUnder: func(o map[string]string) []Metric {
-			vs, err := parseValues(o[optValues], o[optFormat])
+			vs, err := valuesOf(o)
 			if err != nil {
 				return nil
 			}
@@ -75,17 +78,35 @@ func (HTTPProvider) Kinds() []KindInfo {
 			{Key: optURL, Label: "Address", Required: true, Identifies: true, Help: "The address to fetch, starting http:// or https://"},
 			{Key: optFormat, Label: "Reply format", Choices: []string{"json", "text"}, Default: "json",
 				Help: "json reads each value at a path in the reply; text finds each with a pattern"},
-			{Key: optValues, Label: "Values", Required: true, Multiline: true,
-				Help: "One per line: name, unit, where. For json, where is a path such as current.temperature_2m; for text, a pattern whose first bracketed group is the number. The unit may be empty"},
-			{Key: optInterval, Label: "Fetch every", Default: "10m", Help: "From 1m to 24h, such as 10m; many services refuse to be asked more often"},
-			{Key: optStaleAfter, Label: "Out of date after", Default: "30m", Help: "How old a value may get before the page and the mesh treat it as out of date; at least the fetch interval"},
-			{Key: optHeaders, Label: "Headers", Multiline: true, Help: "Extra request headers, one Name: value per line. Put keys under Authentication, which is kept hidden"},
+			{Key: optHeaders, Label: "Headers", Type: FieldList, Help: "Extra request headers; put keys under Authentication, which is kept hidden",
+				Columns: []Column{
+					{Key: "name", Label: "Name", Placeholder: "Accept", Required: true},
+					{Key: "value", Label: "Value", Placeholder: "application/json"},
+				}},
 			{Key: optAuth, Label: "Authentication", Choices: []string{"none", "basic", "bearer", "header", "query"}, Default: "none",
 				Help: "basic sends a username and password, bearer a token, header or query a key under a name you give"},
 			{Key: optUsername, Label: "Username", Required: true, When: basic},
 			{Key: optPassword, Label: "Password", Secret: true, When: basic},
 			{Key: optKeyName, Label: "Key name", Required: true, When: keyed, Help: "The header, such as X-Api-Key, or the query parameter, such as appid"},
 			{Key: optToken, Label: "Token or key", Required: true, Secret: true, When: &When{Key: optAuth, Values: []string{"bearer", "header", "query"}}},
+			{Key: optValues, Label: "Values", Type: FieldList, Required: true, Tested: true, When: &When{Key: optFormat, Values: []string{"json"}},
+				Help: "Each number to read and where it is in the reply; test the address to pick them from what it sends",
+				Columns: []Column{
+					{Key: "name", Label: "Name", Placeholder: "temperature", Required: true},
+					{Key: "unit", Label: "Unit", Placeholder: "°C"},
+					{Key: "path", Label: "Path", Placeholder: "current.temperature_2m", Required: true},
+				}},
+			{Key: optMatches, Label: "Values", Type: FieldList, Required: true, Tested: true, When: &When{Key: optFormat, Values: []string{"text"}},
+				Help: "Each number to read, found by a pattern whose first bracketed group is the number",
+				Columns: []Column{
+					{Key: "name", Label: "Name", Placeholder: "temperature", Required: true},
+					{Key: "unit", Label: "Unit", Placeholder: "°C"},
+					{Key: "pattern", Label: "Pattern", Placeholder: `Temp: (-?[\d.]+)`, Required: true},
+				}},
+			{Key: optInterval, Label: "Fetch every", Type: FieldDuration, Default: "10m", Min: minInterval, Max: maxInterval,
+				Help: "Many services refuse to be asked more often than every few minutes"},
+			{Key: optStaleAfter, Label: "Out of date after", Type: FieldDuration, Default: "30m", Min: minInterval, Max: maxStaleAfter, AtLeast: optInterval,
+				Help: "How old a value may get before the page and the mesh treat it as out of date"},
 		},
 	}}
 }
@@ -95,12 +116,12 @@ func (HTTPProvider) Validate(spec Spec) error {
 	if spec.Kind != KindHTTP {
 		return fmt.Errorf("unknown web sensor kind %q", spec.Kind)
 	}
-	_, err := parseHTTP(spec)
+	_, err := parseHTTP(spec, true)
 	return err
 }
 
 func (HTTPProvider) StaleAfter(spec Spec) (time.Duration, bool) {
-	cfg, err := parseHTTP(spec)
+	cfg, err := parseHTTP(spec, true)
 	if err != nil {
 		return 0, false
 	}
@@ -108,7 +129,7 @@ func (HTTPProvider) StaleAfter(spec Spec) (time.Duration, bool) {
 }
 
 func (HTTPProvider) Open(spec Spec) (Sensor, error) {
-	cfg, err := parseHTTP(spec)
+	cfg, err := parseHTTP(spec, true)
 	if err != nil {
 		return nil, err
 	}
@@ -135,7 +156,8 @@ type httpSource struct {
 	client     *http.Client
 }
 
-func parseHTTP(spec Spec) (*httpSource, error) {
+// parseHTTP reads a spec; needValues false lets a test run before any value is chosen.
+func parseHTTP(spec Spec, needValues bool) (*httpSource, error) {
 	o := spec.Options
 	u, err := url.Parse(strings.TrimSpace(o[optURL]))
 	if err != nil || (u.Scheme != "http" && u.Scheme != "https") || u.Host == "" {
@@ -145,9 +167,8 @@ func parseHTTP(spec Spec) (*httpSource, error) {
 	if u.User != nil {
 		return nil, errors.New("take the username and password out of the address and put them under Authentication, which is kept hidden")
 	}
-	format := o[optFormat]
-	values, err := parseValues(o[optValues], format)
-	if err != nil {
+	values, err := valuesOf(o)
+	if err != nil && (needValues || !errors.Is(err, errNoValues)) {
 		return nil, err
 	}
 	interval, err := parseSpan(o[optInterval], "fetch interval", minInterval, maxInterval)
@@ -163,7 +184,7 @@ func parseHTTP(spec Spec) (*httpSource, error) {
 		return nil, err
 	}
 
-	s := &httpSource{url: u, host: u.Host, json: format != "text", values: values, interval: interval, staleAfter: staleAfter, headers: headers}
+	s := &httpSource{url: u, host: u.Host, json: o[optFormat] != "text", values: values, interval: interval, staleAfter: staleAfter, headers: headers}
 	var keyHeader string
 	switch o[optAuth] {
 	case "", "none":
@@ -211,49 +232,55 @@ func parseHTTP(spec Spec) (*httpSource, error) {
 	return s, nil
 }
 
-// parseValues reads "name, unit, where" lines; where runs to the end of the line, so a pattern may hold commas.
-func parseValues(raw, format string) ([]httpValue, error) {
+var errNoValues = errors.New("give at least one value to read")
+
+// valuesOf reads the value rows the reply format uses: a path for json, a pattern for text.
+func valuesOf(o map[string]string) ([]httpValue, error) {
+	text := o[optFormat] == "text"
+	key, where := optValues, "path"
+	if text {
+		key, where = optMatches, "pattern"
+	}
+	rows, err := ListRows(o[key])
+	if err != nil {
+		return nil, fmt.Errorf("values %w", err)
+	}
 	var out []httpValue
 	seen := map[Metric]bool{}
-	for n, line := range strings.Split(raw, "\n") {
-		line = strings.TrimSpace(line)
-		if line == "" {
-			continue
-		}
-		parts := strings.SplitN(line, ",", 3)
-		if len(parts) < 3 || strings.TrimSpace(parts[2]) == "" {
-			return nil, fmt.Errorf("values line %d needs a name, a unit and where to find it, separated by commas", n+1)
-		}
-		name := strings.TrimSpace(parts[0])
+	for n, row := range rows {
+		name := strings.TrimSpace(row["name"])
 		if !bindingName.MatchString(name) {
-			return nil, fmt.Errorf("values line %d: %q is not a usable name; use letters, digits and underscores, starting with a letter", n+1, name)
+			return nil, fmt.Errorf("value %d: %q is not a usable name; use letters, digits and underscores, starting with a letter", n+1, name)
 		}
 		m := Metric(name)
 		if seen[m] {
 			return nil, fmt.Errorf("two values are both called %s", name)
 		}
 		seen[m] = true
-		v := httpValue{metric: m, unit: strings.TrimSpace(parts[1])}
-		where := strings.TrimSpace(parts[2])
-		if format == "text" {
-			re, err := regexp.Compile(where)
+		v := httpValue{metric: m, unit: strings.TrimSpace(row["unit"])}
+		at := strings.TrimSpace(row[where])
+		if at == "" {
+			return nil, fmt.Errorf("value %s needs a %s", name, where)
+		}
+		if text {
+			re, err := regexp.Compile(at)
 			if err != nil {
-				return nil, fmt.Errorf("values line %d: the pattern does not compile: %w", n+1, err)
+				return nil, fmt.Errorf("value %s: the pattern does not compile: %w", name, err)
 			}
 			if re.NumSubexp() < 1 {
-				return nil, fmt.Errorf("values line %d: the pattern needs a bracketed group around the number", n+1)
+				return nil, fmt.Errorf("value %s: the pattern needs a bracketed group around the number", name)
 			}
 			v.pattern = re
 		} else {
-			v.path = strings.Split(where, ".")
+			v.path = strings.Split(at, ".")
 			if slices.Contains(v.path, "") {
-				return nil, fmt.Errorf("values line %d: %q has an empty step in it", n+1, where)
+				return nil, fmt.Errorf("value %s: %q has an empty step in it", name, at)
 			}
 		}
 		out = append(out, v)
 	}
 	if len(out) == 0 {
-		return nil, errors.New("give at least one value to read")
+		return nil, errNoValues
 	}
 	return out, nil
 }
@@ -270,27 +297,26 @@ func parseSpan(raw, what string, least, most time.Duration) (time.Duration, erro
 }
 
 func parseHeaders(raw string) (http.Header, error) {
+	rows, err := ListRows(raw)
+	if err != nil {
+		return nil, fmt.Errorf("headers %w", err)
+	}
 	h := http.Header{}
-	for n, line := range strings.Split(raw, "\n") {
-		line = strings.TrimSpace(line)
-		if line == "" {
-			continue
+	for n, row := range rows {
+		name := strings.TrimSpace(row["name"])
+		if !headerName.MatchString(name) {
+			return nil, fmt.Errorf("header %d: %q is not a header name", n+1, name)
 		}
-		name, value, ok := strings.Cut(line, ":")
-		name = strings.TrimSpace(name)
-		if !ok || !headerName.MatchString(name) {
-			return nil, fmt.Errorf("headers line %d is not Name: value", n+1)
-		}
-		h.Add(name, strings.TrimSpace(value))
+		h.Add(name, strings.TrimSpace(row["value"]))
 	}
 	return h, nil
 }
 
-// Read is one fetch; an error names the host, never the address, which may carry a key in its query.
-func (s *httpSource) Read(ctx context.Context) ([]Reading, error) {
+// fetch is one request; an error names the host, never the address, which may carry a key in its query.
+func (s *httpSource) fetch(ctx context.Context) (status, contentType string, body []byte, err error) {
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet, s.url.String(), nil)
 	if err != nil {
-		return nil, fmt.Errorf("building the request to %s: %w", s.host, err)
+		return "", "", nil, fmt.Errorf("building the request to %s: %w", s.host, err)
 	}
 	req.Header = s.headers.Clone()
 	resp, err := s.client.Do(req)
@@ -299,20 +325,24 @@ func (s *httpSource) Read(ctx context.Context) ([]Reading, error) {
 		if errors.As(err, &ue) {
 			err = ue.Err
 		}
-		return nil, fmt.Errorf("fetching from %s: %w", s.host, err)
+		return "", "", nil, fmt.Errorf("fetching from %s: %w", s.host, err)
 	}
 	defer resp.Body.Close()
-	if resp.StatusCode/100 != 2 {
-		return nil, fmt.Errorf("%s answered %s", s.host, resp.Status)
-	}
-	body, err := io.ReadAll(io.LimitReader(resp.Body, maxReplyBytes+1))
+	body, err = io.ReadAll(io.LimitReader(resp.Body, maxReplyBytes+1))
 	if err != nil {
-		return nil, fmt.Errorf("reading the reply from %s: %w", s.host, err)
+		return resp.Status, "", nil, fmt.Errorf("reading the reply from %s: %w", s.host, err)
 	}
 	if len(body) > maxReplyBytes {
-		return nil, fmt.Errorf("the reply from %s is over %d KiB, the most this reads", s.host, maxReplyBytes>>10)
+		return resp.Status, "", nil, fmt.Errorf("the reply from %s is over %d KiB, the most this reads", s.host, maxReplyBytes>>10)
 	}
+	if resp.StatusCode/100 != 2 {
+		return resp.Status, resp.Header.Get("Content-Type"), body, fmt.Errorf("%s answered %s", s.host, resp.Status)
+	}
+	return resp.Status, resp.Header.Get("Content-Type"), body, nil
+}
 
+// extract reads every value out of a reply, each with its own error, so a test can show which ones worked.
+func (s *httpSource) extract(body []byte) ([]TestValue, error) {
 	var doc any
 	if s.json {
 		dec := json.NewDecoder(bytes.NewReader(body))
@@ -321,7 +351,7 @@ func (s *httpSource) Read(ctx context.Context) ([]Reading, error) {
 			return nil, fmt.Errorf("the reply from %s is not JSON: %w", s.host, err)
 		}
 	}
-	out := make([]Reading, 0, len(s.values))
+	out := make([]TestValue, 0, len(s.values))
 	for _, v := range s.values {
 		var x float64
 		var err error
@@ -330,12 +360,55 @@ func (s *httpSource) Read(ctx context.Context) ([]Reading, error) {
 		} else {
 			x, err = matchNumber(body, v.pattern)
 		}
+		tv := TestValue{Metric: v.metric, Value: x, Unit: v.unit}
 		if err != nil {
-			return nil, fmt.Errorf("%s: %w", v.metric, err)
+			tv.Err = err.Error()
 		}
-		out = append(out, Reading{Metric: v.metric, Value: x, Unit: v.unit})
+		out = append(out, tv)
 	}
 	return out, nil
+}
+
+func (s *httpSource) Read(ctx context.Context) ([]Reading, error) {
+	_, _, body, err := s.fetch(ctx)
+	if err != nil {
+		return nil, err
+	}
+	values, err := s.extract(body)
+	if err != nil {
+		return nil, err
+	}
+	out := make([]Reading, 0, len(values))
+	for _, v := range values {
+		if v.Err != "" {
+			return nil, fmt.Errorf("%s: %s", v.Metric, v.Err)
+		}
+		out = append(out, Reading{Metric: v.Metric, Value: v.Value, Unit: v.Unit})
+	}
+	return out, nil
+}
+
+// Test is one fetch of an unsaved spec, reported in full: what answered, the reply, and each value or why it failed.
+func (HTTPProvider) Test(ctx context.Context, spec Spec) TestResult {
+	// No values yet is fine: picking them from the reply is what a test is for.
+	src, err := parseHTTP(spec, false)
+	if err != nil {
+		return TestResult{Err: err.Error()}
+	}
+	status, contentType, body, err := src.fetch(ctx)
+	res := TestResult{Status: status, ContentType: contentType}
+	if err == nil {
+		res.Values, err = src.extract(body)
+	}
+	if err != nil {
+		res.Err = err.Error()
+	}
+	// Cut only for showing: the values above were read from all of it.
+	if len(body) > maxTestBody {
+		body, res.Truncated = body[:maxTestBody], true
+	}
+	res.Body = strings.ToValidUTF8(string(body), "\uFFFD")
+	return res
 }
 
 func (s *httpSource) Close() error { return nil }
@@ -398,4 +471,5 @@ var (
 	_ Provider  = HTTPProvider{}
 	_ Validator = HTTPProvider{}
 	_ Staler    = HTTPProvider{}
+	_ Tester    = HTTPProvider{}
 )

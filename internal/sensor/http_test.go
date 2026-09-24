@@ -1,6 +1,7 @@
 package sensor
 
 import (
+	"encoding/json"
 	"io"
 	"log/slog"
 	"net/http"
@@ -10,10 +11,31 @@ import (
 	"time"
 )
 
+// rows writes a list field's value, one row per group of key, value pairs.
+func rows(rs ...[]string) string {
+	out := make([]map[string]string, 0, len(rs))
+	for _, r := range rs {
+		m := map[string]string{}
+		for i := 0; i+1 < len(r); i += 2 {
+			m[r[i]] = r[i+1]
+		}
+		out = append(out, m)
+	}
+	b, _ := json.Marshal(out)
+	return string(b)
+}
+
+func value(name, unit, path string) []string {
+	return []string{"name", name, "unit", unit, "path", path}
+}
+func match(name, unit, pattern string) []string {
+	return []string{"name", name, "unit", unit, "pattern", pattern}
+}
+
 func httpSpec(url string, extra map[string]string) Spec {
 	o := map[string]string{
 		optURL: url, optFormat: "json", optInterval: "1m", optStaleAfter: "5m", optAuth: "none",
-		optValues: "temperature, °C, current.temperature_2m\nwind, km/h, current.wind.0",
+		optValues: rows(value("temperature", "°C", "current.temperature_2m"), value("wind", "km/h", "current.wind.0")),
 	}
 	for k, v := range extra {
 		o[k] = v
@@ -23,7 +45,7 @@ func httpSpec(url string, extra map[string]string) Spec {
 
 func fetch(t *testing.T, spec Spec) ([]Reading, error) {
 	t.Helper()
-	src, err := parseHTTP(spec)
+	src, err := parseHTTP(spec, true)
 	if err != nil {
 		t.Fatalf("parseHTTP: %v", err)
 	}
@@ -53,7 +75,7 @@ func TestHTTP_ReadsATextValueByItsPattern(t *testing.T) {
 	defer srv.Close()
 
 	got, err := fetch(t, httpSpec(srv.URL, map[string]string{
-		optFormat: "text", optValues: `humidity, %, humidity (\d+)` + "\n" + `temperature, °C, Temp: (-?[\d.]+) C`,
+		optFormat: "text", optMatches: rows(match("humidity", "%", `humidity (\d+)`), match("temperature", "°C", `Temp: (-?[\d.]+) C`)),
 	}))
 	if err != nil {
 		t.Fatalf("Read: %v", err)
@@ -104,7 +126,7 @@ func TestHTTP_SendsEachAuthMethodAndTheHeaders(t *testing.T) {
 			func(r *http.Request) bool { return r.Header.Get("X-Api-Key") == "k3y" }},
 		{"query", map[string]string{optAuth: "query", optKeyName: "appid", optToken: "k3y"},
 			func(r *http.Request) bool { return r.URL.Query().Get("appid") == "k3y" }},
-		{"headers", map[string]string{optHeaders: "Accept: application/json\nX-Units: metric"},
+		{"headers", map[string]string{optHeaders: rows([]string{"name", "Accept", "value", "application/json"}, []string{"name", "X-Units", "value", "metric"})},
 			func(r *http.Request) bool {
 				return r.Header.Get("Accept") == "application/json" && r.Header.Get("X-Units") == "metric" && r.Header.Get("User-Agent") == "OwlShack"
 			}},
@@ -164,17 +186,17 @@ func TestHTTP_ValidateRefusesWhatWouldNeverFetch(t *testing.T) {
 		{"no scheme", map[string]string{optURL: "api.example.com/x"}},
 		{"ftp", map[string]string{optURL: "ftp://example.com/x"}},
 		{"credentials in the address", map[string]string{optURL: "https://owl:hoot@example.com/x"}},
-		{"no values", map[string]string{optValues: " \n "}},
-		{"a line short", map[string]string{optValues: "temperature, °C"}},
-		{"a bad name", map[string]string{optValues: "2hot, °C, a.b"}},
-		{"a name twice", map[string]string{optValues: "t, °C, a\nt, °C, b"}},
-		{"an empty step", map[string]string{optValues: "t, °C, a..b"}},
-		{"a pattern with no group", map[string]string{optFormat: "text", optValues: `t, °C, \d+`}},
-		{"a broken pattern", map[string]string{optFormat: "text", optValues: `t, °C, (\d+`}},
+		{"no values", map[string]string{optValues: "[]"}},
+		{"a value with no path", map[string]string{optValues: rows([]string{"name", "t"})}},
+		{"a bad name", map[string]string{optValues: rows(value("2hot", "°C", "a.b"))}},
+		{"a name twice", map[string]string{optValues: rows(value("t", "°C", "a"), value("t", "°C", "b"))}},
+		{"an empty step", map[string]string{optValues: rows(value("t", "°C", "a..b"))}},
+		{"a pattern with no group", map[string]string{optFormat: "text", optMatches: rows(match("t", "°C", `\d+`))}},
+		{"a broken pattern", map[string]string{optFormat: "text", optMatches: rows(match("t", "°C", `(\d+`))}},
 		{"too often", map[string]string{optInterval: "30s"}},
 		{"not a time", map[string]string{optInterval: "often"}},
 		{"stale before the next fetch", map[string]string{optInterval: "10m", optStaleAfter: "5m"}},
-		{"a bad header", map[string]string{optHeaders: "Not a header"}},
+		{"a bad header", map[string]string{optHeaders: rows([]string{"name", "Not a header"})}},
 		{"a bad key header", map[string]string{optAuth: "header", optKeyName: "X Api", optToken: "k"}},
 		{"a bad query name", map[string]string{optAuth: "query", optKeyName: "a=b", optToken: "k"}},
 	} {
@@ -328,5 +350,78 @@ func TestHub_ADerivedSensorWaitsForItsSourcesFirstSample(t *testing.T) {
 		if st.Err != "" || !st.At.IsZero() {
 			t.Errorf("%s reads at %s with error %q before its source's first sample, want waiting", st.Spec.Name, st.At, st.Err)
 		}
+	}
+}
+
+// The form's inputs keep to these, and the server holds a hand-written request to the same.
+func TestPrepare_HoldsTypedFieldsToTheirDeclarations(t *testing.T) {
+	h := NewHub(slog.New(slog.NewTextHandler(io.Discard, nil)), HTTPProvider{})
+	many := make([][]string, maxListRows+1)
+	for i := range many {
+		many[i] = value("v"+strings.Repeat("x", i), "", "a")
+	}
+	for _, tc := range []struct {
+		name  string
+		extra map[string]string
+		want  string
+	}{
+		{"a fetch under a minute", map[string]string{optInterval: "30s"}, "from 1m to 1d"},
+		{"not a time", map[string]string{optInterval: "often"}, "not a length of time"},
+		{"out of date before the next fetch", map[string]string{optInterval: "10m", optStaleAfter: "5m"}, "at least 10m, as long as fetch every"},
+		{"an empty required list", map[string]string{optValues: "[]"}, "at least one row"},
+		{"a column the list does not have", map[string]string{optValues: rows([]string{"name", "t", "path", "a", "extra", "x"})}, `no column "extra"`},
+		{"a row missing a required column", map[string]string{optHeaders: rows([]string{"value", "x"})}, "needs a name"},
+		{"too many rows", map[string]string{optValues: rows(many...)}, "is the most"},
+		{"not a list", map[string]string{optHeaders: "Accept: x"}, "not a list of rows"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			if _, err := h.Prepare(httpSpec("https://example.com/w", tc.extra)); err == nil || !strings.Contains(err.Error(), tc.want) {
+				t.Errorf("error %v, want one saying %q", err, tc.want)
+			}
+		})
+	}
+	if _, err := h.Prepare(httpSpec("https://example.com/w", nil)); err != nil {
+		t.Errorf("a sound spec was refused: %v", err)
+	}
+}
+
+// A test shows every value, the ones that worked beside the ones that did not, and what was sent to pick more from.
+func TestHTTP_TestReportsEachValueAndTheReply(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		io.WriteString(w, `{"current":{"temperature_2m":14.2},"pad":"`+strings.Repeat("x", maxTestBody)+`"}`)
+	}))
+	defer srv.Close()
+	h := NewHub(slog.New(slog.NewTextHandler(io.Discard, nil)), HTTPProvider{})
+	spec := httpSpec(srv.URL, nil)
+	spec.Name = ""
+	res, err := h.Test(t.Context(), spec)
+	if err != nil {
+		t.Fatalf("Test: %v", err)
+	}
+	if res.Err != "" || res.Status != "200 OK" || res.ContentType != "application/json" {
+		t.Errorf("result %q %q %q, want a clean 200 of JSON", res.Err, res.Status, res.ContentType)
+	}
+	if len(res.Values) != 2 || res.Values[0].Value != 14.2 || res.Values[0].Err != "" || res.Values[1].Err == "" {
+		t.Errorf("values %+v, want temperature read and wind failing", res.Values)
+	}
+	if !res.Truncated || len(res.Body) != maxTestBody {
+		t.Errorf("body %d bytes, truncated %v; want it cut to %d for showing", len(res.Body), res.Truncated, maxTestBody)
+	}
+
+	// A refusal still shows what the server said, which is usually why.
+	srv.Config.Handler = http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) { http.Error(w, "bad key", http.StatusUnauthorized) })
+	res, _ = h.Test(t.Context(), spec)
+	if res.Status != "401 Unauthorized" || !strings.Contains(res.Body, "bad key") || res.Err == "" {
+		t.Errorf("a 401 gave %q %q %q", res.Status, res.Body, res.Err)
+	}
+	// Refused in the result, so the form shows why beside the test rather than as a failed request.
+	if res, err := h.Test(t.Context(), httpSpec("ftp://x", nil)); err != nil || !strings.Contains(res.Err, "http://") {
+		t.Errorf("an ftp address gave %q, %v; want the reason in the result", res.Err, err)
+	}
+	// A test comes before the values it helps pick, so it runs without any.
+	none := httpSpec(srv.URL, map[string]string{optValues: "[]"})
+	if res, err := h.Test(t.Context(), none); err != nil || res.Status == "" {
+		t.Errorf("a test with no values yet gave %+v, %v; want the fetch", res, err)
 	}
 }

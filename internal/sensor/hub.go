@@ -129,8 +129,10 @@ func (h *Hub) Kinds(providerID string) ([]KindInfo, error) {
 // tag stamps each entry with the provider it came from, so nothing downstream has to track that.
 func tag(p Provider) []KindInfo {
 	kinds := p.Kinds()
+	_, testable := p.(Tester)
 	for i := range kinds {
 		kinds[i].Provider = p.ID()
+		kinds[i].Testable = testable
 	}
 	return kinds
 }
@@ -142,9 +144,24 @@ func (h *Hub) Prepare(spec Spec) (Spec, error) {
 	if err := spec.Validate(); err != nil {
 		return spec, err
 	}
+	spec, _, err := h.prepareOptions(spec, false)
+	if err != nil {
+		return spec, err
+	}
+	if err := h.checkUnique(spec); err != nil {
+		return spec, err
+	}
+	if err := h.checkBindings(spec); err != nil {
+		return spec, err
+	}
+	return spec, nil
+}
+
+// prepareOptions fills in defaults and holds the options to their kind's fields and the provider's own rules; a test may leave empty the lists it is there to help fill, and its provider checks the rest itself.
+func (h *Hub) prepareOptions(spec Spec, test bool) (Spec, Provider, error) {
 	p, ok := h.providers[spec.Provider]
 	if !ok {
-		return spec, fmt.Errorf("unknown provider %q", spec.Provider)
+		return spec, nil, fmt.Errorf("unknown provider %q", spec.Provider)
 	}
 	var kind *KindInfo
 	for _, k := range p.Kinds() {
@@ -154,17 +171,17 @@ func (h *Hub) Prepare(spec Spec) (Spec, error) {
 		}
 	}
 	if kind == nil {
-		return spec, fmt.Errorf("%s has no sensor kind %q", p.Label(), spec.Kind)
+		return spec, nil, fmt.Errorf("%s has no sensor kind %q", p.Label(), spec.Kind)
 	}
 
 	// Only the kind's own options, or an injected "metric" on an SHTC3 lets a binding name a reading that never comes.
 	for key := range spec.Options {
 		if !slices.ContainsFunc(kind.Fields, func(f Field) bool { return f.Key == key }) {
-			return spec, fmt.Errorf("%s takes no option %q", kind.Label, key)
+			return spec, nil, fmt.Errorf("%s takes no option %q", kind.Label, key)
 		}
 	}
 	if len(spec.Bindings) > 0 && !kind.Binds {
-		return spec, fmt.Errorf("%s does not read other sensors, so it takes no bindings", kind.Label)
+		return spec, nil, fmt.Errorf("%s does not read other sensors, so it takes no bindings", kind.Label)
 	}
 	opts := map[string]string{}
 	maps.Copy(opts, spec.Options)
@@ -178,33 +195,52 @@ func (h *Hub) Prepare(spec Spec) (Spec, error) {
 			opts[f.Key] = f.Default
 		}
 		v := opts[f.Key]
+		if test && f.Tested && (v == "" || v == "[]") {
+			continue
+		}
 		if f.Required && v == "" {
-			return spec, fmt.Errorf("%s is required", f.Label)
+			return spec, nil, fmt.Errorf("%s is required", f.Label)
 		}
 		if v != "" && len(f.Choices) > 0 && !slices.Contains(f.Choices, v) {
-			return spec, fmt.Errorf("%s must be one of %s", f.Label, strings.Join(f.Choices, ", "))
+			return spec, nil, fmt.Errorf("%s must be one of %s", f.Label, strings.Join(f.Choices, ", "))
 		}
-		if len(v) > maxOptionLen {
-			return spec, fmt.Errorf("%s is too long: %d bytes, and %d is the most", f.Label, len(v), maxOptionLen)
+		limit := maxOptionLen
+		if f.Type == FieldList {
+			limit = maxListLen
+		}
+		if len(v) > limit {
+			return spec, nil, fmt.Errorf("%s is too long: %d bytes, and %d is the most", f.Label, len(v), limit)
 		}
 		if hasControl(v, f.Multiline) {
-			return spec, fmt.Errorf("%s has a control character in it", f.Label)
+			return spec, nil, fmt.Errorf("%s has a control character in it", f.Label)
+		}
+		if v != "" {
+			if err := checkField(f, v, opts, kind.Fields); err != nil {
+				return spec, nil, err
+			}
 		}
 	}
 	spec.Options = opts
 
-	if v, ok := p.(Validator); ok {
+	if v, ok := p.(Validator); ok && !test {
 		if err := v.Validate(spec); err != nil {
-			return spec, err
+			return spec, nil, err
 		}
 	}
-	if err := h.checkUnique(spec); err != nil {
-		return spec, err
+	return spec, p, nil
+}
+
+// Test tries an unsaved spec once, held to the same option rules as a save but not to a unique name, which a form fills in last.
+func (h *Hub) Test(ctx context.Context, spec Spec) (TestResult, error) {
+	spec, p, err := h.prepareOptions(spec, true)
+	if err != nil {
+		return TestResult{}, err
 	}
-	if err := h.checkBindings(spec); err != nil {
-		return spec, err
+	t, ok := p.(Tester)
+	if !ok {
+		return TestResult{}, fmt.Errorf("%s sensors cannot be tried before they are added", p.Label())
 	}
-	return spec, nil
+	return t.Test(ctx, spec), nil
 }
 
 // checkUnique refuses a collision: a name, which is how other screens tell sensors apart, or a chip, which two sensors would interleave reads on.

@@ -48,6 +48,30 @@ type Staler interface {
 	StaleAfter(spec Spec) (time.Duration, bool)
 }
 
+// Tester is a provider that can try an unsaved spec once, so a form can show what a sensor would read before it is added.
+type Tester interface {
+	Test(ctx context.Context, spec Spec) TestResult
+}
+
+// TestResult is one try: what answered, the reply to pick values from, and each value or why it failed.
+type TestResult struct {
+	// Err is why the try as a whole failed; the values that were read are still there beside it.
+	Err         string
+	Status      string
+	ContentType string
+	Body        string
+	Truncated   bool
+	Values      []TestValue
+}
+
+// TestValue is one configured value as the try read it; Err set means Value is meaningless.
+type TestValue struct {
+	Metric Metric
+	Value  float64
+	Unit   string
+	Err    string
+}
+
 // Binder is a provider whose sensors read other sensors; the hub hands it a snapshot of itself.
 type Binder interface {
 	Bind(snapshot func() []Status)
@@ -74,6 +98,16 @@ type Field struct {
 	Secret bool
 	// When shows the field only while an earlier field has one of these values; hidden, it is dropped on save.
 	When *When
+	// Type is FieldDuration or FieldList, or empty for free text.
+	Type string
+	// Min and Max bound a duration; Max zero is unbounded.
+	Min, Max time.Duration
+	// AtLeast names an earlier duration field this one may not be shorter than.
+	AtLeast string
+	// Columns are a list field's inputs.
+	Columns []Column
+	// Tested means a test reads this list's rows, so the form puts the test just above it and shows each row's result.
+	Tested bool
 }
 
 // When is the condition a field is shown under.
@@ -115,6 +149,8 @@ type KindInfo struct {
 	// Binds says this kind reads other sensors, so the form offers a binding editor.
 	Binds  bool
 	Fields []Field
+	// Testable is filled in by the hub for a provider that can try a spec before it is saved.
+	Testable bool
 }
 
 // ProviderProblem travels beside the results: one unavailable bus must not hide what the others found.

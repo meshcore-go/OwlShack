@@ -430,7 +430,7 @@ func TestSensorSecrets_NeverReadBackAndKeptOnlyWhenAsked(t *testing.T) {
 	defer hub.Close()
 	b := &backend{db: db, sensors: hub, telemetry: newTelemetryPublisher(hub)}
 	in := api.SensorInput{Provider: "http", Kind: sensor.KindHTTP, Name: "weather", Options: map[string]string{
-		"url": "http://127.0.0.1:9/w", "values": "t, C, a.b", "auth": "bearer", "token": "s3cret",
+		"url": "http://127.0.0.1:9/w", "values": `[{"name":"t","unit":"C","path":"a.b"}]`, "auth": "bearer", "token": "s3cret",
 	}}
 	id, err := b.CreateSensor(ctx, in)
 	if err != nil {
