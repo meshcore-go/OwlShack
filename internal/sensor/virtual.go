@@ -182,7 +182,7 @@ func (s *exprSensor) Read(context.Context) ([]Reading, error) {
 			return nil, fmt.Errorf("%s is failing: %s", st.Spec.Name, st.Err)
 		}
 		if st.At.IsZero() {
-			return nil, fmt.Errorf("%s has not been read yet", st.Spec.Name)
+			return nil, fmt.Errorf("%s has not been read yet: %w", st.Spec.Name, errNotYet)
 		}
 		i := slices.IndexFunc(st.Readings, func(r Reading) bool { return r.Metric == b.Metric })
 		if i < 0 {

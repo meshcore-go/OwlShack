@@ -3,6 +3,7 @@ package sensor
 import (
 	"cmp"
 	"context"
+	"errors"
 	"fmt"
 	"io"
 	"log/slog"
@@ -468,6 +469,10 @@ func (h *Hub) read(ctx context.Context, e *entry) {
 	if i := slices.IndexFunc(readings, func(r Reading) bool { return math.IsNaN(r.Value) || math.IsInf(r.Value, 0) }); err == nil && i >= 0 {
 		err = fmt.Errorf("%s read %v, which is not a number", readings[i].Metric, readings[i].Value)
 	}
+	// Waiting on a source's first sample is not a failure, and would flash red on every start.
+	if errors.Is(err, errNotYet) && e.at.IsZero() {
+		return
+	}
 	if err != nil {
 		h.fail(e, err.Error())
 		return
@@ -487,6 +492,9 @@ func (h *Hub) read(ctx context.Context, e *entry) {
 		h.log.Info("sensor reading again", "sensor", e.spec.Name, "provider", e.spec.Provider)
 	}
 }
+
+// errNotYet is a read that has nothing to give until something else has been read once.
+var errNotYet = errors.New("waiting for a first reading")
 
 // sampler is a sensor that reads on its own clock and hands back its latest sample; a zero time is none taken yet.
 type sampler interface {

@@ -307,3 +307,26 @@ func TestHub_ASampledSensorWaitsForItsFirstSample(t *testing.T) {
 		t.Errorf("before its first sample it reads at %s with error %q, want never read", st.At, st.Err)
 	}
 }
+
+// A derived sensor whose source has not sampled yet waits with it, rather than fail for the first pass after every start.
+func TestHub_ADerivedSensorWaitsForItsSourcesFirstSample(t *testing.T) {
+	release := make(chan struct{})
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) { <-release }))
+	defer srv.Close()
+	defer close(release)
+	v := &VirtualProvider{}
+	h := NewHub(slog.New(slog.NewTextHandler(io.Discard, nil)), HTTPProvider{}, v)
+	defer h.Close()
+	h.Set([]Spec{
+		httpSpec(srv.URL, nil),
+		{ID: 2, Provider: "virtual", Kind: KindExpression, Name: "double",
+			Options:  map[string]string{"expression": "t * 2", "metric": "x", "unit": "C"},
+			Bindings: []Binding{{Name: "t", SensorID: 1, Metric: "temperature"}}},
+	})
+	h.pass(t.Context(), false)
+	for _, st := range h.Snapshot() {
+		if st.Err != "" || !st.At.IsZero() {
+			t.Errorf("%s reads at %s with error %q before its source's first sample, want waiting", st.Spec.Name, st.At, st.Err)
+		}
+	}
+}
