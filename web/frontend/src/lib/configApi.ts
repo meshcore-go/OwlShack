@@ -20,6 +20,8 @@ export interface Settings {
   pathHashSize: number | null;
   // TX airtime cap as a percentage, the unit the firmware uses. null = 50%.
   dutyCycle: number | null;
+  // Days of packets the log keeps. null = 7.
+  packetRetentionDays: number | null;
   setupComplete: boolean;
 }
 
@@ -233,6 +235,7 @@ export interface SettingsInput {
   modemToken?: string; // omit = keep the stored token
   pathHashSize?: number | null;
   dutyCycle?: number | null;
+  packetRetentionDays?: number | null; // omit = keep
   // Only set by the first-run wizard; omit elsewhere so a radio edit never re-opens setup.
   setupComplete?: boolean;
 }
@@ -339,7 +342,7 @@ export interface TriggerInput {
 // --- request helper ---
 
 // Validation failures come back as 422 { error }; throw the server's message.
-async function request(
+export async function request(
   url: string,
   method: string,
   body?: unknown,

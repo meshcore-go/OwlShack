@@ -18,6 +18,7 @@ const writerQueueDepth = 1024
 type Store struct {
 	db             *sql.DB
 	Peers          *PeerRepo
+	HopPins        *HopPinRepo
 	Contacts       *ContactRepo
 	Packets        *PacketRepo
 	Messages       *MessageRepo
@@ -62,8 +63,9 @@ func Open(ctx context.Context, path string) (*Store, error) {
 	s := &Store{
 		db:             db,
 		Peers:          &PeerRepo{db: db},
+		HopPins:        &HopPinRepo{db: db},
 		Contacts:       &ContactRepo{db: db},
-		Packets:        &PacketRepo{db: db, maxRows: DefaultMaxPackets},
+		Packets:        &PacketRepo{db: db},
 		Messages:       &MessageRepo{db: db, maxRows: DefaultMaxMessages},
 		Conversations:  &ConversationRepo{db: db},
 		Echoes:         &EchoRepo{db: db},
@@ -220,6 +222,9 @@ var migrations = []func(context.Context, dbExecer) error{
 	migrateV12,  // 14 — clamp triggers.path_hash_size to the 3-byte maximum the rest of the app uses
 	migrateV13,  // 15 — settings.modem_token (the openHop modem's access token)
 	migrateV14,  // 16 — optional group bot failover
+	migrateV15,  // 17 — settings.packet_retention_days (packet log kept by age, not row count)
+	migrateV16,  // 18 — hop_pins (operator's choice of owner for an ambiguous path hash)
+	migrateV17,  // 19 — heal a database stamped while slots 15-18 were still being renumbered
 }
 
 // dbExecer is the subset of *sql.DB / *sql.Tx a migration needs.
@@ -730,4 +735,54 @@ func migrateV14(ctx context.Context, db dbExecer) error {
 		}
 	}
 	return nil
+}
+
+// migrateV15 adds settings.packet_retention_days; guarded because a pre-renumbering dev DB replays it.
+func migrateV15(ctx context.Context, db dbExecer) error {
+	has, err := columnExists(ctx, db, "settings", "packet_retention_days")
+	if err != nil || has {
+		return err
+	}
+	_, err = db.ExecContext(ctx, `ALTER TABLE settings ADD COLUMN packet_retention_days INTEGER`)
+	return err
+}
+
+// migrateV16 adds hop_pins: the operator's owner for a path hash; pubkey NULL = none of the known peers.
+func migrateV16(ctx context.Context, db dbExecer) error {
+	_, err := db.ExecContext(ctx, `CREATE TABLE IF NOT EXISTS hop_pins (
+		hash   TEXT PRIMARY KEY,
+		pubkey BLOB
+	)`)
+	return err
+}
+
+// migrateV17 re-adds what a DB stamped while slots 15-18 were renumbered mid-branch skipped; every step is guarded.
+func migrateV17(ctx context.Context, db dbExecer) error {
+	for _, c := range []struct{ table, column, ddl string }{
+		{"settings", "modem_token", `ALTER TABLE settings ADD COLUMN modem_token TEXT`},
+		{"settings", "packet_retention_days", `ALTER TABLE settings ADD COLUMN packet_retention_days INTEGER`},
+		{"triggers", "failover_pattern", `ALTER TABLE triggers ADD COLUMN failover_pattern TEXT NOT NULL DEFAULT ''`},
+		{"triggers", "failover_timeout", `ALTER TABLE triggers ADD COLUMN failover_timeout INTEGER NOT NULL DEFAULT 0`},
+	} {
+		has, err := columnExists(ctx, db, c.table, c.column)
+		if err != nil {
+			return err
+		}
+		if has {
+			continue
+		}
+		if _, err := db.ExecContext(ctx, c.ddl); err != nil {
+			return fmt.Errorf("healing %s.%s: %w", c.table, c.column, err)
+		}
+	}
+	return migrateV16(ctx, db)
+}
+
+func columnExists(ctx context.Context, db dbExecer, table, column string) (bool, error) {
+	rows, err := db.QueryContext(ctx, `SELECT 1 FROM pragma_table_info(?) WHERE name = ?`, table, column)
+	if err != nil {
+		return false, fmt.Errorf("checking %s.%s: %w", table, column, err)
+	}
+	defer rows.Close()
+	return rows.Next(), rows.Err()
 }
