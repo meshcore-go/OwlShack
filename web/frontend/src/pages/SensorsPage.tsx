@@ -170,7 +170,7 @@ export function SensorsPage() {
                       n > 0 && k === "calibrating" && "border-primary/45",
                       n > 0 && k === "stale" && "border-warning/50 bg-warning/7 text-warning",
                       n > 0 && k === "failing" && "border-destructive/50 bg-destructive/7 text-destructive",
-                      filter === k && "outline outline-1 -outline-offset-1 outline-foreground",
+                      filter === k && "outline -outline-offset-1 outline-foreground",
                     )}
                   >
                     <Led state={k} />
