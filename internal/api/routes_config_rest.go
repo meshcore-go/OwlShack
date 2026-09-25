@@ -453,6 +453,42 @@ func (s *Server) handleSaveTrigger(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, map[string]int64{"id": id})
 }
 
+func (s *Server) handleTestTriggerItems(w http.ResponseWriter, r *http.Request) {
+	b, ok := s.configBackend(w)
+	if !ok {
+		return
+	}
+	var in TriggerTestInput
+	if err := readJSON(r, &in); err != nil {
+		writeError(w, http.StatusBadRequest, "invalid JSON: "+err.Error())
+		return
+	}
+	items, err := b.TestTriggerItems(r.Context(), in)
+	if err != nil {
+		s.writeSensorError(w, "trying the bot failed", err)
+		return
+	}
+	writeJSON(w, http.StatusOK, items)
+}
+
+func (s *Server) handleTestTriggerRender(w http.ResponseWriter, r *http.Request) {
+	b, ok := s.configBackend(w)
+	if !ok {
+		return
+	}
+	var in TriggerTestInput
+	if err := readJSON(r, &in); err != nil {
+		writeError(w, http.StatusBadRequest, "invalid JSON: "+err.Error())
+		return
+	}
+	res, err := b.TestTriggerRender(r.Context(), in)
+	if err != nil {
+		s.writeSensorError(w, "trying the bot failed", err)
+		return
+	}
+	writeJSON(w, http.StatusOK, res)
+}
+
 func (s *Server) handleDeleteTrigger(w http.ResponseWriter, r *http.Request) {
 	b, ok := s.configBackend(w)
 	if !ok {

@@ -27,6 +27,7 @@ import (
 	"github.com/meshcore-go/OwlShack/internal/node/repeater"
 	"github.com/meshcore-go/OwlShack/internal/signaltest"
 	"github.com/meshcore-go/OwlShack/internal/store"
+	"github.com/meshcore-go/OwlShack/internal/trigger"
 	"github.com/meshcore-go/OwlShack/web"
 	meshcore "github.com/meshcore-go/meshcore-go"
 	"github.com/meshcore-go/meshcore-go/node"
@@ -155,6 +156,7 @@ func Run(ctx context.Context, importPath string, verbosity int) error {
 
 	// Loaded once here and refreshed on save, so a telemetry reply never waits on the database.
 	telemetry := newTelemetryPublisher(sensorHub)
+	feedPreview := trigger.NewFeedPreview()
 	if err := telemetry.Load(ctx, db); err != nil {
 		return err
 	}
@@ -232,6 +234,7 @@ func Run(ctx context.Context, importPath string, verbosity int) error {
 		srv.SetBackend(&backend{
 			companions: companions, repeater: rep, db: db, stats: statsOf(ms), mux: mux,
 			reload: reload, resetModem: resetModem, discover: disc, sensors: sensorHub, telemetry: telemetry,
+			feedPreview: feedPreview,
 		})
 	}
 
