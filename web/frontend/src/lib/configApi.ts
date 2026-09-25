@@ -331,6 +331,39 @@ export interface RepeaterAdminInput {
   guestPassword?: string;
 }
 
+// An unsaved rss or cap bot to try against its live feed; itemId picks the item a render uses.
+export interface TriggerTestInput {
+  companionId: number;
+  type: string;
+  url: string;
+  match: string[];
+  template: string;
+  itemId?: string;
+}
+
+export interface TriggerTestItem {
+  id: string;
+  title: string;
+  link: string;
+  // null when the feed gives the item no time.
+  published: string | null;
+}
+
+export interface TriggerTestRender {
+  message: string;
+  // the template's own failure, normal while it is being typed.
+  renderError: string;
+  // false when the match patterns would skip the item, so nothing would be sent.
+  matched: boolean;
+  captures: Record<string, string>;
+  bytes: number;
+  // what a channel receives: 160 bytes including "name: ", the rest cut.
+  channelText: string;
+  channelLimit: number;
+  // the longest DM that sends; a longer one fails rather than being cut.
+  dmLimit: number;
+}
+
 export interface TriggerInput {
   companionId: number;
   type: string;
@@ -417,6 +450,10 @@ export const configApi = {
       ? requestId(`/api/config/triggers/${id}`, "PUT", input)
       : requestId("/api/config/triggers", "POST", input),
   deleteTrigger: (id: number) => request(`/api/config/triggers/${id}`, "DELETE"),
+  testTriggerItems: (input: TriggerTestInput) =>
+    requestJSON<TriggerTestItem[]>("/api/config/triggers/test/items", "POST", input),
+  testTriggerRender: (input: TriggerTestInput) =>
+    requestJSON<TriggerTestRender>("/api/config/triggers/test/render", "POST", input),
 
   createRepeater: (input: RepeaterCreateInput) =>
     request("/api/config/repeater", "POST", input),

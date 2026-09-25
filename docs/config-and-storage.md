@@ -398,6 +398,8 @@ GET  /api/config/channels                                    (all channels; for 
 POST /api/config/companions/{id}/channels    PUT|DELETE /api/config/channels/{id}
 GET  /api/config/triggers[?companionId=N]
 POST /api/config/triggers              PUT|DELETE /api/config/triggers/{id}
+POST /api/config/triggers/test/items   { companionId, type, url, match, template }   (an unsaved rss/cap bot's newest feed items; sends nothing)
+POST /api/config/triggers/test/render  { ...same, itemId }   (the message for one item, whether the patterns pass it, and what a channel keeps)
 
 GET  /api/mqtt/status                                        (live broker connection state; runtime, not config)
 GET  /api/radio/status                                       (link counters; packetsRecv/packetsSent/crcErrors/driverErrors/recvRecoveries are SPI-only, inboundDroppedOldest/rxMetaTimeouts/rxMetaMisattributed/hwErrors/txOutcomeLost KISS-only, each absent rather than 0 on the other transport)
