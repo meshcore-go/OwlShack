@@ -63,15 +63,8 @@ func (t *TriggerConfig) Validate() error {
 	case "dm":
 		// No channel or contact is required: an empty contact list listens to every sender the DM policy already let through.
 	case "rss", "cap":
-		if t.URL == "" {
-			return fmt.Errorf("%s trigger requires a url", t.Type)
-		}
-		u, err := url.Parse(t.URL)
-		if err != nil {
-			return fmt.Errorf("invalid url %q: %w", t.URL, err)
-		}
-		if u.Scheme != "http" && u.Scheme != "https" {
-			return fmt.Errorf("url %q must be http or https", t.URL)
+		if err := t.validateFeedURL(); err != nil {
+			return err
 		}
 		// A feed trigger answers nobody, so with neither a channel nor a contact it can never
 		// say anything.
@@ -113,19 +106,8 @@ func (t *TriggerConfig) Validate() error {
 		return fmt.Errorf("invalid template: %w", err)
 	}
 
-	if t.Match != nil {
-		fields := matchFields[t.Type]
-		for _, entry := range *t.Match {
-			if fields != nil {
-				if err := validateFieldPattern(entry, fields); err != nil {
-					return err
-				}
-				continue
-			}
-			if _, err := regexp.Compile(entry); err != nil {
-				return fmt.Errorf("invalid match pattern %q: %w", entry, err)
-			}
-		}
+	if err := t.validateMatch(); err != nil {
+		return err
 	}
 
 	if t.Channels != nil {
@@ -156,6 +138,50 @@ func (t *TriggerConfig) Validate() error {
 		}
 	}
 
+	return nil
+}
+
+// ValidateFeedTest checks what trying a feed bot needs, by the same rules a save applies: the type, the url and the match patterns.
+func (t *TriggerConfig) ValidateFeedTest() error {
+	if t.Type != "rss" && t.Type != "cap" {
+		return fmt.Errorf("only rss and cap bots can be tried against a live feed, not %q", t.Type)
+	}
+	if err := t.validateFeedURL(); err != nil {
+		return err
+	}
+	return t.validateMatch()
+}
+
+func (t *TriggerConfig) validateFeedURL() error {
+	if t.URL == "" {
+		return fmt.Errorf("%s trigger requires a url", t.Type)
+	}
+	u, err := url.Parse(t.URL)
+	if err != nil {
+		return fmt.Errorf("invalid url %q: %w", t.URL, err)
+	}
+	if u.Scheme != "http" && u.Scheme != "https" {
+		return fmt.Errorf("url %q must be http or https", t.URL)
+	}
+	return nil
+}
+
+func (t *TriggerConfig) validateMatch() error {
+	if t.Match == nil {
+		return nil
+	}
+	fields := matchFields[t.Type]
+	for _, entry := range *t.Match {
+		if fields != nil {
+			if err := validateFieldPattern(entry, fields); err != nil {
+				return err
+			}
+			continue
+		}
+		if _, err := regexp.Compile(entry); err != nil {
+			return fmt.Errorf("invalid match pattern %q: %w", entry, err)
+		}
+	}
 	return nil
 }
 

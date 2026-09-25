@@ -152,6 +152,8 @@ func (s *Server) routes() {
 	s.mux.HandleFunc("PUT /api/config/channels/{id}", s.handleSaveChannel)
 	s.mux.HandleFunc("DELETE /api/config/channels/{id}", s.handleDeleteChannel)
 	s.mux.HandleFunc("POST /api/config/triggers", s.handleSaveTrigger)
+	s.mux.HandleFunc("POST /api/config/triggers/test/items", s.handleTestTriggerItems)
+	s.mux.HandleFunc("POST /api/config/triggers/test/render", s.handleTestTriggerRender)
 	s.mux.HandleFunc("PUT /api/config/triggers/{id}", s.handleSaveTrigger)
 	s.mux.HandleFunc("DELETE /api/config/triggers/{id}", s.handleDeleteTrigger)
 	// Repeater node config is edited per-section (no whole-config bulk PUT).

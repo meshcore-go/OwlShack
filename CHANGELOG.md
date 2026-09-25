@@ -22,6 +22,10 @@ Schema `user_version` 17: adds the sensor tables and who may read each companion
   run-in. It calibrates to your air over days and remembers it across restarts.
 - **Sensors over the mesh.** Choose which readings the repeater and each companion send when
   another node asks.
+- **Test an RSS or CAP bot before it fires.** Test in the bot editor fetches the live feed and lists
+  its newest items. Pick one to see the exact message the bot would send, updated as you edit the
+  template, with whether your match patterns would let it through and where a channel would cut it
+  short. Nothing is sent.
 - **A copy of the database before each upgrade.** When a new version changes the database, the
   old one is kept as `meshcore.db.pre-v<old>-to-v<new>`, so going back is stopping OwlShack and
   moving it back.

@@ -15,6 +15,7 @@ import (
 	"github.com/meshcore-go/OwlShack/internal/node/repeater"
 	"github.com/meshcore-go/OwlShack/internal/sensor"
 	"github.com/meshcore-go/OwlShack/internal/store"
+	"github.com/meshcore-go/OwlShack/internal/trigger"
 	meshcore "github.com/meshcore-go/meshcore-go"
 	"github.com/meshcore-go/meshcore-go/node"
 )
@@ -38,6 +39,8 @@ type backend struct {
 	sensors *sensor.Hub
 	// telemetry is every node's channel map; it outlives a radio generation too.
 	telemetry *telemetryPublisher
+	// feedPreview keeps what a bot Test fetched across radio generations, so a reconnect mid-edit does not refetch.
+	feedPreview *trigger.FeedPreview
 }
 
 func (b *backend) find(name string) (*companion.Companion, bool) {

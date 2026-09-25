@@ -23,6 +23,7 @@ import {
   TextField,
 } from "@/components/ConfigFields";
 import { StringListField } from "@/components/StringListField";
+import { BotTestPanel } from "@/components/BotTestPanel";
 import { PeerListField, type PickablePeer } from "@/components/PeerPicker";
 import { Button } from "@/components/ui/button";
 import {
@@ -577,7 +578,7 @@ function BotEditor({
           </DialogTitle>
         </DialogHeader>
 
-        <div className="space-y-4">
+        <div className="min-w-0 space-y-4">
           <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
             <SelectField
               label="Companion"
@@ -774,6 +775,22 @@ function BotEditor({
               className="resize-none rounded-none border-border font-mono text-sm bg-background"
             />
           </Field>
+
+          {isFeedType(type) && (
+            <BotTestPanel
+              companionId={companionId}
+              senderName={companions.find((c) => c.id === companionId)?.name ?? ""}
+              type={type}
+              url={url}
+              match={match}
+              template={template}
+              disabledReason={
+                /^https?:\/\/\S+$/.test(url.trim())
+                  ? null
+                  : "Enter the feed's http or https address above to test it."
+              }
+            />
+          )}
 
           <div className="grid grid-cols-2 sm:grid-cols-3 gap-4">
             <TextField

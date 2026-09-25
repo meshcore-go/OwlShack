@@ -103,6 +103,10 @@ type Backend interface {
 	DeleteChannel(ctx context.Context, id int64) error
 	SaveTrigger(ctx context.Context, in TriggerInput) (int64, error)
 	DeleteTrigger(ctx context.Context, id int64) error
+	// TestTriggerItems fetches an unsaved rss or cap bot's feed and lists its newest items.
+	TestTriggerItems(ctx context.Context, in TriggerTestInput) ([]TriggerTestItem, error)
+	// TestTriggerRender renders an unsaved rss or cap bot's template against one item, as it would be sent.
+	TestTriggerRender(ctx context.Context, in TriggerTestInput) (TriggerTestRender, error)
 
 	// Repeater config is per-section; CreateRepeater generates a key when PrivateKey is nil and seeds the "*" region.
 	CreateRepeater(ctx context.Context, in RepeaterCreateInput) error
@@ -602,6 +606,40 @@ type RepeaterAdminInput struct {
 type RepeaterRegionInput struct {
 	Name      string `json:"name"`
 	DenyFlood bool   `json:"denyFlood"`
+}
+
+// TriggerTestInput is an unsaved feed bot to try; ItemID picks the item a render uses.
+type TriggerTestInput struct {
+	CompanionID int64    `json:"companionId"`
+	Type        string   `json:"type"`
+	URL         string   `json:"url"`
+	Match       []string `json:"match"`
+	Template    string   `json:"template"`
+	ItemID      string   `json:"itemId"`
+}
+
+type TriggerTestItem struct {
+	ID    string `json:"id"`
+	Title string `json:"title"`
+	Link  string `json:"link"`
+	// Published is null when the feed gives the item no time.
+	Published *string `json:"published"`
+}
+
+// TriggerTestRender is what the bot would send for one item, measured against what each way out keeps.
+type TriggerTestRender struct {
+	Message string `json:"message"`
+	// RenderError is the template's own failure, which is normal while it is being typed.
+	RenderError string `json:"renderError"`
+	// Matched is false when the match patterns would skip this item, so nothing would be sent.
+	Matched  bool              `json:"matched"`
+	Captures map[string]string `json:"captures"`
+	Bytes    int               `json:"bytes"`
+	// ChannelText is what a channel receives: the firmware keeps 160 bytes including the "name: " prefix and cuts the rest.
+	ChannelText  string `json:"channelText"`
+	ChannelLimit int    `json:"channelLimit"`
+	// DMLimit is the longest DM that sends; a longer one fails rather than being cut.
+	DMLimit int `json:"dmLimit"`
 }
 
 type TriggerInput struct {
