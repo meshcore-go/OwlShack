@@ -86,21 +86,23 @@ type channelDTO struct {
 }
 
 type triggerDTO struct {
-	ID                 int64    `json:"id"`
-	CompanionID        int64    `json:"companionId"`
-	Type               string   `json:"type"`
-	Template           string   `json:"template"`
-	CharLimitBehaviour *string  `json:"charLimitBehaviour"`
-	Match              []string `json:"match"`
-	Contacts           []string `json:"contacts"`
-	ChannelIDs         []int64  `json:"channelIds"`
-	FailoverPattern    string   `json:"failoverPattern"`
-	FailoverTimeout    int64    `json:"failoverTimeout"`
-	RetryTimeout       *int64   `json:"retryTimeout"`
-	MaxRetries         *int     `json:"maxRetries"`
-	PathHashSize       *int     `json:"pathHashSize"`
-	Schedule           *string  `json:"schedule"`
-	URL                string   `json:"url"`
+	ID                 int64            `json:"id"`
+	CompanionID        int64            `json:"companionId"`
+	Type               string           `json:"type"`
+	Template           string           `json:"template"`
+	CharLimitBehaviour *string          `json:"charLimitBehaviour"`
+	Match              []string         `json:"match"`
+	Contacts           []string         `json:"contacts"`
+	ChannelIDs         []int64          `json:"channelIds"`
+	FailoverPattern    string           `json:"failoverPattern"`
+	FailoverTimeout    int64            `json:"failoverTimeout"`
+	RetryTimeout       *int64           `json:"retryTimeout"`
+	MaxRetries         *int             `json:"maxRetries"`
+	PathHashSize       *int             `json:"pathHashSize"`
+	Schedule           *string          `json:"schedule"`
+	URL                string           `json:"url"`
+	Location           *TriggerLocation `json:"location"`
+	Regions            *[]string        `json:"regions"`
 }
 
 func brokerToDTO(b store.Broker) brokerDTO {
@@ -134,7 +136,15 @@ func triggerToDTO(t store.Trigger) triggerDTO {
 		ChannelIDs: t.ChannelIDs, RetryTimeout: t.RetryTimeout, MaxRetries: t.MaxRetries,
 		PathHashSize: t.PathHashSize, Schedule: t.Schedule, URL: t.URL,
 		FailoverPattern: t.FailoverPattern, FailoverTimeout: t.FailoverTimeout,
+		Location: locationToDTO(t.Location), Regions: t.Regions,
 	}
+}
+
+func locationToDTO(l *store.TriggerLocation) *TriggerLocation {
+	if l == nil {
+		return nil
+	}
+	return &TriggerLocation{Lat: &l.Lat, Lon: &l.Lon, RadiusKm: &l.RadiusKm}
 }
 
 // --- handlers ---

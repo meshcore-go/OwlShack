@@ -186,6 +186,8 @@ func assembleFromRows(rows *configRows) *config.Config {
 					URL:                t.URL,
 					FailoverPattern:    t.FailoverPattern,
 					FailoverTimeout:    t.FailoverTimeout,
+					Location:           locationFromStore(t.Location),
+					Regions:            t.Regions,
 				}
 				if len(t.ChannelIDs) > 0 {
 					cl := make(config.ChannelList, 0, len(t.ChannelIDs))
@@ -482,6 +484,8 @@ func replaceCompanionChildren(ctx context.Context, st *store.Store, companionID 
 			URL:                tg.URL,
 			FailoverPattern:    tg.FailoverPattern,
 			FailoverTimeout:    tg.FailoverTimeout,
+			Location:           locationToStore(tg.Location),
+			Regions:            tg.Regions,
 			ChannelIDs:         chIDs,
 		}
 		if err := st.Triggers.Create(ctx, &tr); err != nil {

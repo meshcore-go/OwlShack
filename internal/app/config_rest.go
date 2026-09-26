@@ -339,8 +339,14 @@ func (b *backend) SaveTrigger(ctx context.Context, in api.TriggerInput) (int64, 
 		RetryTimeout: in.RetryTimeout, MaxRetries: in.MaxRetries, PathHashSize: in.PathHashSize,
 		Schedule: in.Schedule, URL: in.URL, ChannelIDs: in.ChannelIDs,
 		FailoverPattern: in.FailoverPattern, FailoverTimeout: in.FailoverTimeout,
+		Regions: in.Regions,
 	}
-	err := b.configMutate(ctx,
+	loc, err := locationFromAPI(in.Location)
+	if err != nil {
+		return 0, api.Invalid(err)
+	}
+	row.Location = locationToStore(loc)
+	err = b.configMutate(ctx,
 		func(rows *configRows) {
 			if in.ID == 0 {
 				rows.triggers = append(rows.triggers, row)

@@ -145,3 +145,21 @@ func TestPreviewTitle_FallsBackToTheSummary(t *testing.T) {
 		t.Errorf("title %q, want the summary on one line", got)
 	}
 }
+
+// Meteoalarm posts an alert once per area; the Test lists it once, as the bot sends it once.
+func TestFeedPreview_ListsAnAlertOnce(t *testing.T) {
+	t.Parallel()
+	f := newCAPFeed(t, map[string]string{"fog": alertDoc(t, "fog"), "gale": alertDoc(t, "gale")})
+	f.publish("fog", "gale", "fog", "fog")
+	items, err := NewFeedPreview().Items(context.Background(), config.TriggerConfig{Type: "cap", URL: f.URL + "/feed"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	var got []string
+	for _, it := range items {
+		got = append(got, it.Title)
+	}
+	if strings.Join(got, ",") != "entry 3,entry 1" {
+		t.Errorf("items %v, want the newest entry of each alert", got)
+	}
+}

@@ -3,6 +3,7 @@ import { Loader2, TriangleAlert } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import {
   configApi,
+  type TriggerLocation,
   type TriggerTestItem,
   type TriggerTestRender,
 } from "@/lib/configApi";
@@ -19,6 +20,8 @@ export function BotTestPanel({
   url,
   match,
   template,
+  location,
+  regions,
   disabledReason,
 }: {
   companionId: number;
@@ -28,6 +31,8 @@ export function BotTestPanel({
   url: string;
   match: string[];
   template: string;
+  location: TriggerLocation | null;
+  regions: string[] | null;
   // what to fill in before a test could work; null when it can run.
   disabledReason: string | null;
 }) {
@@ -56,6 +61,8 @@ export function BotTestPanel({
         url: url.trim(),
         match: matchKey ? matchKey.split("\n") : [],
         template,
+        location,
+        regions,
       });
       setItems(got);
       setFetchedFor(feedKey);
@@ -71,6 +78,14 @@ export function BotTestPanel({
   // Re-render the picked item as the template, patterns or companion change; only the latest answer is shown.
   useEffect(() => {
     if (!current || selected === null) return;
+    // Half-typed, the location is missing, and rendering without it would read as anywhere.
+    if (disabledReason !== null) {
+      seq.current++;
+      setRender(null);
+      setRenderFailed(null);
+      setRendering(false);
+      return;
+    }
     const mine = ++seq.current;
     setRendering(true);
     const timer = setTimeout(async () => {
@@ -81,6 +96,8 @@ export function BotTestPanel({
           url: url.trim(),
           match: matchKey ? matchKey.split("\n") : [],
           template,
+          location,
+          regions,
           itemId: selected,
         });
         if (mine !== seq.current) return;
@@ -95,9 +112,10 @@ export function BotTestPanel({
       }
     }, RENDER_DEBOUNCE_MS);
     return () => clearTimeout(timer);
-  }, [current, selected, companionId, type, url, matchKey, template]);
+  }, [current, selected, companionId, type, url, matchKey, template, location, regions, disabledReason]);
 
   const cut = render ? render.message.slice(render.channelText.length) : "";
+  const verdict = renderVerdict(render);
 
   return (
     <section className="space-y-2.5 border border-border bg-muted/40 p-3">
@@ -185,12 +203,12 @@ export function BotTestPanel({
               <span
                 className={cn(
                   "border px-1.5 py-0.5 uppercase tracking-[0.1em]",
-                  render.matched
+                  verdict.sends
                     ? "border-primary/45 text-primary"
                     : "border-warning/50 text-warning",
                 )}
               >
-                {render.matched ? "Would send" : "Patterns skip this item"}
+                {verdict.label}
               </span>
             ) : null}
             {render && !render.renderError ? (
@@ -253,6 +271,15 @@ export function BotTestPanel({
       ) : null}
     </section>
   );
+}
+
+// The location is checked before the patterns, so it is the reason given when both would skip.
+function renderVerdict(render: TriggerTestRender | null): { sends: boolean; label: string } {
+  if (render?.placement === "noShape")
+    return { sends: false, label: "No map shape in this alert" };
+  if (render?.placement === "outside") return { sends: false, label: "Outside the chosen area" };
+  if (!render?.matched) return { sends: false, label: "Patterns skip this item" };
+  return { sends: true, label: "Would send" };
 }
 
 function ErrorLine({ text }: { text: string }) {

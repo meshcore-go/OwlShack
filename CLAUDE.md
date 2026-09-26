@@ -74,6 +74,10 @@ half-upgraded DB, and deletes older copies only once an upgrade finishes; a copy
 that cannot be made (a full disk) is a warning, not a refusal to start. Going
 back is moving the copy into place, and there are no down migrations.
 
+**At release, check the region data** (`internal/region/regions.bin.gz`) is on
+Natural Earth's latest release; the steps are in the regions entry of
+[docs/config-and-storage.md](./docs/config-and-storage.md).
+
 **Every timestamp on outgoing admin traffic comes from
 `Client.UniqueTimestamp()`** (the firmware's `getCurrentTimeUnique()`), never
 `time.Now().Unix()`. The companion's DMs and room posts share that counter; the
@@ -85,7 +89,9 @@ the second.
 **`internal/api` never imports the domain.** The seam is the `api.Backend`
 interface ([`internal/api/backend.go`](./internal/api/backend.go)), implemented
 by `internal/app` and swapped atomically via `SetBackend`. Add a method to
-`Backend`; do **not** reintroduce per-feature `Set*`/mutex pairs.
+`Backend`; do **not** reintroduce per-feature `Set*`/mutex pairs. The one
+exception is `internal/region`, stateless embedded data like `store`, which the
+region endpoints read directly.
 
 **Driver pragmas use modernc syntax** —
 `?_pragma=busy_timeout(5000)&_pragma=journal_mode(WAL)&_pragma=foreign_keys(on)`,
