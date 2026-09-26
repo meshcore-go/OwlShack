@@ -763,7 +763,7 @@ func TestPacketRepo_ListFilter(t *testing.T) {
 // Bump wantVersion whenever a migration file is added.
 func TestStore_MigrateUserVersion(t *testing.T) {
 	t.Parallel()
-	const wantVersion = 18 // one per file in migrations/
+	const wantVersion = 19 // one per file in migrations/
 	st := newTestStore(t)
 	var v int
 	if err := st.db.QueryRowContext(t.Context(), "PRAGMA user_version").Scan(&v); err != nil {
@@ -849,7 +849,7 @@ func TestStore_UpgradeFromReleasedSchema(t *testing.T) {
 		cols[name] = true
 	}
 	rows.Close()
-	for _, c := range []string{"duty_cycle_pct", "map_tile_key", "path_hash_size"} {
+	for _, c := range []string{"duty_cycle_pct", "map_provider", "map_dark_style", "map_tile_key", "path_hash_size"} {
 		if !cols[c] {
 			t.Errorf("settings.%s missing after the upgrade", c)
 		}

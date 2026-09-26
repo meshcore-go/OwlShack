@@ -154,8 +154,8 @@ inverted "airtime factor", converted **only** in `Config.AirtimeFactorOr`.
 
 > **Trap:** `PUT /api/config/settings` writes every non-secret field **as sent**,
 > so a partial body resets what it omits to defaults — a `{"dutyCycle":1}` PUT
-> also moves `cr` to 8. Only secret-ish fields (`mapTileKey`) keep their stored
-> value on nil. Always send the whole settings object; the UI does.
+> also moves `cr` to 8. Only secret-ish fields (`mapTileKey`) and `mapProvider` keep their
+> stored value on nil. Always send the whole settings object; the UI does.
 
 ## Path hash size
 
