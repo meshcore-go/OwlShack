@@ -68,7 +68,9 @@ CAP bot's alerts must be, and which map tiles to use.
   and zooms back out to your peers.
 - **A radio board that stops answering is caught.** Before, a board that hung while its USB link
   stayed up read as `ok` in `/api/health`. It now shows as `degraded` after two minutes without an
-  answer, even when reconnecting did not fix it. The automatic reconnect for a hung board also
+  answer, even when reconnecting did not fix it, and a board that was already hung when OwlShack
+  started is caught the same way. An openHop board on a serial link, which nothing checked before,
+  is now checked and reconnected the same way too. The automatic reconnect for a hung board also
   never started on a node with no MQTT and no repeater, and now it does.
 - **A stuck transmitter is caught, and no longer fills the packet log.** When the board's
   transmit-done reply went missing, every later send was held and retried five times a second.
@@ -81,10 +83,13 @@ CAP bot's alerts must be, and which map tiles to use.
   4.09 V, and every reading sent over the mesh leaned low the same way.
 - **A full disk shows up.** `/api/health` reports `diskFreeBytes` and shows `degraded` below
   32 MiB. Before, every write failed with nothing in health to say so.
-- **Warnings were hard to read in light mode.** They now meet the 4.5:1 contrast guideline.
+- **Warnings and green status text were hard to read in light mode.** They now meet the 4.5:1
+  contrast guideline.
 - **Companion ACKs flooded with one-byte path hashes.** They now use the companion's own setting.
 - **Saving one contact setting could clear another.** Each save now changes only what it names, and
   a bad value is refused with the reason.
+- **The sidebar's system status was always "nominal".** It now reads `/api/health`: nominal,
+  degraded with the reasons when you tap it, or offline when the page cannot reach OwlShack.
 - **The database's log file never shrank.** After a busy spell, such as a restore, it stayed at its
   largest size. It now drops back to 4 MB, and `/api/health` reports its size as `walBytes`.
 

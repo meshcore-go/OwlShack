@@ -289,10 +289,11 @@ func TestHealth_ABrokerDownDoesNotDegradeTheNode(t *testing.T) {
 
 type replyStats struct {
 	countingStats
-	last time.Time
+	last, connected time.Time
 }
 
-func (r *replyStats) LastReply() time.Time { return r.last }
+func (r *replyStats) LastReply() time.Time   { return r.last }
+func (r *replyStats) ConnectedAt() time.Time { return r.connected }
 
 // A board whose serial link is up but whose firmware has hung is the fault "connected" cannot see; and reconnecting never waits for an answer, so the silence must outlive the old modem.
 func TestHealth_ABoardThatStopsAnsweringDegradesTheNode(t *testing.T) {
@@ -301,18 +302,23 @@ func TestHealth_ABoardThatStopsAnsweringDegradesTheNode(t *testing.T) {
 	stuck := now.Add(-modem.AnswerDeadline() - time.Minute)
 	b := newHealthBackend(t)
 	for name, tc := range map[string]struct {
-		last, kept time.Time
-		want       bool
+		last, kept, connected time.Time
+		keptSilence           time.Time // an earlier link that never heard an answer connected then
+		want                  bool
 	}{
 		"answering":                {last: now.Add(-10 * time.Second)},
 		"silent":                   {last: stuck, want: true},
 		"stuck across a reconnect": {kept: stuck, want: true},
 		"answering again":          {last: now.Add(-5 * time.Second), kept: stuck},
-		"never answered":           {},
+		"not yet answered":         {connected: now.Add(-10 * time.Second)},
+		"never answered":           {connected: stuck, want: true},
+		"answered a link ago":      {kept: now.Add(-10 * time.Second), connected: stuck},
+		// The TCP link drops for want of traffic from a hung board, so each new link is young.
+		"never answered across reconnects": {keptSilence: stuck, connected: now.Add(-10 * time.Second), want: true},
 	} {
-		b.stats = &replyStats{last: tc.last}
+		b.stats = &replyStats{last: tc.last, connected: tc.connected}
 		act := &radioActivity{}
-		act.keepReply(&replyStats{last: tc.kept})
+		act.keepReply(&replyStats{last: tc.kept, connected: tc.keptSilence})
 		// A reconnectable transport reports its link; the stub has none, so existing is connected.
 		info := b.health(now, act, nil)
 		got := false

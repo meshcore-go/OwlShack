@@ -100,8 +100,11 @@ radio/connection change still restarts everything (modem reconnect);
   loses uploads to the map, not the node, and should not page whoever watches
   the radio. Everything else is a fact to threshold externally, never a verdict. Three
   radio ages are kept apart on purpose: `lastReplySecs` is the liveness probe's
-  own signal (the board answering a query, which a quiet mesh does not move,
-  carried across a reconnect since reconnecting never waits for an answer),
+  own signal (the board answering a query, an error reply included, which a quiet
+  mesh does not move, carried across a reconnect since reconnecting never waits
+  for an answer; a board that has not answered yet counts from when the first
+  unanswered link connected, so one hung before its first answer is caught too;
+  KISS answers status queries, openHop its STATUS, and SPI has no board to ask),
   `lastRxSecs` is mesh traffic, and `lastTxSecs` is our own sends (a frame
   written to the modem, whatever the board then made of it; `txFailedInARow` and
   `txFailingSecs` say whether sends are actually going out). Each is
