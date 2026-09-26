@@ -40,6 +40,12 @@ radio/connection change still restarts everything (modem reconnect);
   Sensor and map writes go through `internal/app/sensors.go` and
   `telemetry_map.go`, which hold `sensorWrites` from their checks to the hub
   reload so racing requests cannot each pass the checks the other breaks.
+  The `radio` provider reads the board's battery and MCU temperature from what
+  the liveness probe already cached (`liveRadio` in `internal/app/sensors.go`),
+  so it adds no link traffic; its sample time is the board's last answer, kept
+  across a reconnect like health's, and a 0 mV battery (the firmware's "not
+  supported") reads 0 V, as the firmware sends it. SPI has no board, so the
+  provider is unavailable there.
   `companions.telem_base/loc/env` hold who may read each telemetry class
   (`deny`, `selected`, `contacts`), written only by
   `PUT /api/config/companions/{id}/telemetry`, so every other companion edit
