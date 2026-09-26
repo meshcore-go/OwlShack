@@ -235,9 +235,9 @@ func TestTelemetryBody(t *testing.T) {
 	if len(readings) != 1 {
 		t.Fatalf("got %d readings without an MCU temp, want 1 (voltage only)", len(readings))
 	}
-	// LPP voltage resolution is 0.01 V, so 4168 mV encodes as 4.16.
-	if readings[0].Channel != telemChannelSelf || readings[0].Value != 4.16 {
-		t.Errorf("voltage = ch%d %v, want ch%d 4.16", readings[0].Channel, readings[0].Value, telemChannelSelf)
+	// LPP voltage resolution is 0.01 V and the encoder rounds, so 4168 mV encodes as 4.17.
+	if readings[0].Channel != telemChannelSelf || readings[0].Value != 4.17 {
+		t.Errorf("voltage = ch%d %v, want ch%d 4.17", readings[0].Channel, readings[0].Value, telemChannelSelf)
 	}
 
 	r.mcuTempC.Store(227)
@@ -922,8 +922,8 @@ func TestTelemetryReportsZeroVoltsWhenTheHostHasNoBattery(t *testing.T) {
 	r.haveBattery.Store(true)
 	body, _ = r.buildReqResponse(&store.RepeaterACLEntry{Permissions: permAdmin}, reqTypeGetTelemetryData, nil, sensor.MaxReplyBody(nil))
 	readings, _ = meshcore.LPPDecode(body)
-	// LPP voltage has 0.01 V resolution, so 4168 mV comes back as 4.16.
-	if len(readings) != 2 || readings[0].Value != 4.16 {
+	// LPP voltage has 0.01 V resolution and the encoder rounds, so 4168 mV comes back as 4.17.
+	if len(readings) != 2 || readings[0].Value != 4.17 {
 		t.Errorf("got %+v, want the battery plus the temperature", readings)
 	}
 }

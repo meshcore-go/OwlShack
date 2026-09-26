@@ -215,13 +215,13 @@ func Run(ctx context.Context, importPath string, verbosity int) error {
 		newComps, err := startCompanions(ctx, c, newMs, newMux, db, srv.Hub(), echoTracker, telemetry)
 		if err != nil {
 			newMs.Close()
-			return fmt.Errorf("companion startup: %w", err)
+			return fmt.Errorf("%w: %w", errCompanionStart, err)
 		}
 		newRep, err := startRepeater(ctx, c, newMux, db, srv.Hub(), newMs.Stats, reload, telemetry)
 		if err != nil {
 			stopCompanions(newComps)
 			newMs.Close()
-			return fmt.Errorf("repeater startup: %w", err)
+			return fmt.Errorf("%w: %w", errRepeaterStart, err)
 		}
 		ms, mux, companions, rep = newMs, newMux, newComps, newRep
 		compReg.set(companions)
@@ -243,6 +243,7 @@ func Run(ctx context.Context, importPath string, verbosity int) error {
 		stopCompanions(companions)
 		stopRepeater(rep)
 		if ms != nil {
+			radioSeen.keepReply(ms.Stats)
 			ms.Close()
 		}
 		ms, mux, companions, rep, disc = nil, nil, nil, nil, nil
@@ -254,6 +255,7 @@ func Run(ctx context.Context, importPath string, verbosity int) error {
 	var retryTimer <-chan time.Time
 	retryDelay := initialRetryDelay
 	radioUp := func(err error) {
+		radioSeen.started(err)
 		if err == nil {
 			retryTimer, retryDelay = nil, initialRetryDelay
 			return

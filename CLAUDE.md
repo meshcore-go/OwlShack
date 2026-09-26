@@ -26,7 +26,7 @@ dispute), <https://api.meshcore.nz/api/v1/config> (regenerate
 |---|---|
 | Backend | Go 1.26+, **no CGO**, `modernc.org/sqlite`, `embed.FS` for the SPA |
 | Frontend | **React 19** (not Preact) + Vite 6 + TS 5.7, Tailwind v4, shadcn/ui (new-york), `react-router-dom@7`, `sonner`, Leaflet |
-| Mesh proto | `github.com/meshcore-go/meshcore-go` v1.5.0 (plus `hardware/transport` and `hardware/sx12xx` at the same tag), pinned in `go.mod`. **No `go.work`** — add one only for lockstep library work and delete it before pushing; `GOWORK=off go build ./...` is the check |
+| Mesh proto | `github.com/meshcore-go/meshcore-go` v1.6.0 (plus `hardware/transport`, `hardware/sx12xx` and `hardware/openhop` at the same tag), pinned in `go.mod`. **No `go.work`** — add one only for lockstep library work and delete it before pushing; `GOWORK=off go build ./...` is the check |
 | Real-time | WS `/api/ws`, topics `peers` `packets` `messages` `traces` `repeaterNeighbors` `discovered` `sensors` |
 | Local sensors | `periph.io/x/conn` + `periph.io/x/host` for I2C; `github.com/expr-lang/expr` for derived sensors |
 | Config | SQLite relational tables; config files are one-time imports |

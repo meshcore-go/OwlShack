@@ -201,14 +201,23 @@ type DiscoveryState struct {
 
 // HealthInfo backs GET /api/health: facts for a monitor to threshold, never verdicts, and 200 whenever the process is alive.
 type HealthInfo struct {
-	Status     string   `json:"status"` // "ok" when Problems is empty, else "degraded"
+	// Status is "ok" when Problems is empty, else "degraded"; only what the node cannot work without counts.
+	Status     string   `json:"status"`
 	Problems   []string `json:"problems"`
 	Version    string   `json:"version"`
 	UptimeSecs int64    `json:"uptimeSecs"`
 
 	Radio    RadioHealth    `json:"radio"`
 	Database DatabaseHealth `json:"database"`
-	Brokers  []BrokerHealth `json:"brokers"`
+	// Mqtt is the uploads' own verdict: a broker being down loses what the mesh heard from the map, not the node.
+	Mqtt    MqttHealth     `json:"mqtt"`
+	Brokers []BrokerHealth `json:"brokers"`
+}
+
+type MqttHealth struct {
+	// Status is "ok" when every enabled broker is connected, "degraded" when one is not, and "off" when none is meant to be.
+	Status   string   `json:"status"`
+	Problems []string `json:"problems"`
 }
 
 // RadioHealth keeps "modem attached", "board answering" and "mesh talking" apart: a quiet mesh moves only the last.
@@ -227,6 +236,9 @@ type RadioHealth struct {
 	TxFailed       uint64 `json:"txFailed"`
 	TxDroppedBusy  uint64 `json:"txDroppedBusy"`
 	TxDroppedQueue uint64 `json:"txDroppedQueue"`
+	// Sends that have not gone out since the last one that did, busy retries included; the age is null while the last send worked.
+	TxFailedInARow uint64 `json:"txFailedInARow"`
+	TxFailingSecs  *int64 `json:"txFailingSecs"`
 
 	InboundDroppedNew uint64 `json:"inboundDroppedNew"`
 	HandlerSlow       uint64 `json:"handlerSlow"`
@@ -252,9 +264,11 @@ type DatabaseHealth struct {
 	WritesDroppedLastSecs *int64 `json:"writesDroppedLastSecs"`
 	// WALBytes is the write-ahead log on disk: a checkpoint trims it to 4 MiB, so one that keeps growing means checkpoints are not completing.
 	WALBytes int64 `json:"walBytes"`
+	// Free space where the database lives, for the user OwlShack runs as; null where the platform cannot say. A full disk fails every write without a drop.
+	DiskFreeBytes *uint64 `json:"diskFreeBytes"`
 }
 
-// No node listing on purpose: a name or peer count cannot report a fault (a node that fails to start exits the process), and both resolve to coordinates on public maps.
+// No node listing on purpose: a name or peer count cannot report a fault (a node that fails to start is a problem entry), and both resolve to coordinates on public maps.
 
 // BrokerHealth carries ages, not the transport error (it names the broker's address) and not flags (the observer never clears lastErr, so a bool would latch).
 type BrokerHealth struct {
@@ -303,6 +317,9 @@ type RadioStatsInfo struct {
 	TxRequeued     uint64 `json:"txRequeued"`
 	TxDroppedBusy  uint64 `json:"txDroppedBusy"`
 	TxDroppedQueue uint64 `json:"txDroppedQueue"`
+	// Sends that have not gone out since the last one that did, busy retries included; the age is null while the last send worked.
+	TxFailedInARow uint64 `json:"txFailedInARow"`
+	TxFailingSecs  *int64 `json:"txFailingSecs"`
 	TxQueueLen     int    `json:"txQueueLen"`
 
 	// Board readings, absent when this hardware has no such sensor or has stopped answering.
