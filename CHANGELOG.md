@@ -22,6 +22,12 @@ Schema `user_version` 17: adds the sensor tables and who may read each companion
   run-in. It calibrates to your air over days and remembers it across restarts.
 - **Sensors over the mesh.** Choose which readings the repeater and each companion send when
   another node asks.
+- **CAP alerts for one place.** A CAP bot can keep to alerts near a point, picked on a map or
+  copied from the companion's position, or to alerts over regions you click on the map, such as
+  the Auckland region. Regions cover every country. Test shows whether each alert is inside or
+  outside. A feed whose alerts carry no map shape cannot be filtered this way, but a match pattern
+  on the new `geocode` field can use the publisher's own area codes instead, such as
+  `geocode:(?m)^UGC=TX` for US weather alerts in Texas.
 - **Test an RSS or CAP bot before it fires.** Test in the bot editor fetches the live feed and lists
   its newest items. Pick one to see the exact message the bot would send, updated as you edit the
   template, with whether your match patterns would let it through and where a channel would cut it
@@ -46,6 +52,10 @@ Schema `user_version` 17: adds the sensor tables and who may read each companion
 
 ### Fixed
 
+- **Meteoalarm CAP feeds work.** Every alert from a Meteoalarm feed failed to load, because the
+  bot fetched the feed entry's web page rather than its alert document.
+- **A CAP alert is sent once.** A feed that posts one alert under many entries, as Meteoalarm does
+  once per area, sent it once per entry, up to five times a poll, and could push other alerts out.
 - **A shared location on the map can be cleared.** Opening coordinates from a message on the map
   now shows a pin chip above the map, like the one for a packet path. Clicking it removes the pin
   and zooms back out to your peers.

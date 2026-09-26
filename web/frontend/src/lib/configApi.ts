@@ -1,4 +1,5 @@
 // Client for internal/api/routes_config_rest.go: secrets read back as `*Set` booleans, and on write omit = keep, "" = clear.
+import { apiErrorMessage } from "@/lib/apiError";
 
 // --- read shapes (GET DTOs) ---
 
@@ -151,6 +152,16 @@ export interface Trigger {
   pathHashSize: number | null;
   schedule: string | null;
   url: string;
+  location: TriggerLocation | null;
+  // region ids from /api/regions; null takes alerts from anywhere.
+  regions: string[] | null;
+}
+
+// The point a cap bot's alerts must cover, or come within radiusKm of; null takes alerts from anywhere.
+export interface TriggerLocation {
+  lat: number;
+  lon: number;
+  radiusKm: number;
 }
 
 // The single repeater NODE (the relay we run), not a remote one being administered.
@@ -338,6 +349,8 @@ export interface TriggerTestInput {
   url: string;
   match: string[];
   template: string;
+  location: TriggerLocation | null;
+  regions: string[] | null;
   itemId?: string;
 }
 
@@ -355,6 +368,8 @@ export interface TriggerTestRender {
   renderError: string;
   // false when the match patterns would skip the item, so nothing would be sent.
   matched: boolean;
+  // where the alert falls against the location; only anywhere and inside send.
+  placement: "anywhere" | "inside" | "outside" | "noShape";
   captures: Record<string, string>;
   bytes: number;
   // what a channel receives: 160 bytes including "name: ", the rest cut.
@@ -379,6 +394,16 @@ export interface TriggerInput {
   pathHashSize?: number | null;
   schedule?: string | null;
   url?: string | null;
+  location: TriggerLocation | null;
+  regions: string[] | null;
+}
+
+// A first-level region (state, province, NZ region) with its outline: [lon, lat] rings, read even-odd.
+export interface Region {
+  id: string;
+  name: string;
+  country: string;
+  rings: [number, number][][];
 }
 
 // --- request helper ---
@@ -454,6 +479,15 @@ export const configApi = {
     requestJSON<TriggerTestItem[]>("/api/config/triggers/test/items", "POST", input),
   testTriggerRender: (input: TriggerTestInput) =>
     requestJSON<TriggerTestRender>("/api/config/triggers/test/render", "POST", input),
+  // null is the sea; any other failure throws.
+  regionAt: async (lat: number, lon: number): Promise<Region | null> => {
+    const res = await fetch(`/api/regions/at?lat=${lat}&lon=${lon}`);
+    if (res.status === 404) return null;
+    if (!res.ok) throw new Error(await apiErrorMessage(res));
+    return (await res.json()) as Region;
+  },
+  region: (id: string) =>
+    requestJSON<Region>(`/api/regions/${encodeURIComponent(id)}`, "GET"),
 
   createRepeater: (input: RepeaterCreateInput) =>
     request("/api/config/repeater", "POST", input),

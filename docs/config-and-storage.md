@@ -151,10 +151,23 @@ radio/connection change still restarts everything (modem reconnect);
   senders, read here as recipients. At least one of the two is required: with
   neither, the trigger can never say anything. The first poll after a start only
   records what is already published, so a restart never replays a backlog onto
-  the mesh, and one poll sends at most five items — a feed that republishes
-  itself would otherwise queue dozens of transmissions onto a duty-cycled
-  radio. A `cap` trigger fetches the alert document each entry links to; a 4xx
-  or unparseable document is recorded as seen rather than refetched every poll.
+  the mesh, and one poll sends at most five items, the newest, counted as they
+  are sent — a feed that republishes itself would otherwise queue dozens of
+  transmissions onto a duty-cycled radio. A `cap` trigger fetches the alert
+  document each entry links to; a 4xx or unparseable document is recorded as
+  seen rather than refetched every poll. It sends an alert once however many
+  entries post it (Meteoalarm posts one per area: 57 entries for 2 alerts in
+  Germany's feed), skipping an entry whose message it has already handled, until
+  a day past the alert's expiry. A message is named as CAP 1.2's `<references>`
+  names one, by sender, identifier and sent, so an Update or Cancel (a new
+  identifier) is sent even when it is served at the same link. Documents are
+  cached for one poll only, so 47 entries cost one fetch but an update at the
+  same link on a later poll is fetched fresh. A message is marked handled only
+  once sent, so a copy that fails the filters cannot hide one that passes. One
+  poll fetches at most 20 alert documents, each with its own 15 s timeout, and
+  leaves the rest for the next poll. An entry whose document was already in the
+  feed when the bot started, for a message sent before then, is backlog and is
+  not sent. The Test lists each alert once.
   Templates get flattened conveniences (`.Title`/`.Link` for rss,
   `.Severity`/`.Headline`/`.Areas` for cap) plus the parsed structs themselves:
   `.Item` (`*gofeed.Item`) on both, and `.Alert`/`.Info` (`*cap.Alert`) on cap.
@@ -164,7 +177,49 @@ radio/connection change still restarts everything (modem reconnect);
   regex alone cannot express — alternation already says OR inside one field.
   `matchFields` in `internal/config/feedfields.go` is the vocabulary and
   `TriggerConfig.Validate` rejects an unscoped or misspelt field rather than
-  compiling it as a bare regex that silently never matches.
+  compiling it as a bare regex that silently never matches. A field holding
+  several values (`area`, `category`, `geocode`) joins them one per line, so an
+  anchor needs `(?m)`. `geocode` is every area's `<valueName>=<value>`, for
+  publishers that name areas by code instead of drawing them: on the NWS feed 89%
+  of alerts (marine, coastal, wind) carry only zone codes, so
+  `geocode:(?m)^UGC=TX` is Texas, and Meteoalarm's German, Spanish and Italian
+  feeds carry only `EMMA_ID`/`WARNCELLID` codes. A cap entry's link typed
+  `application/cap+xml` is fetched in preference to its first link, which on
+  Meteoalarm is a web page.
+- **Where a `cap` trigger's alerts must be** is a point or a set of regions,
+  never both, checked before the patterns against the polygons and circles in
+  the rendered info block. A point is `triggers.location_lat`/`_lon`/`_radius_km`
+  (`location: {lat, lon, radiusKm}`): an alert passes when it covers the point or
+  comes within `radiusKm` (0-500). Regions are `triggers.location_regions`
+  (`regions: [id, ...]`, newline-encoded): an alert passes when its overlap with
+  a region is at least 10% of whichever is smaller, the alert or the region,
+  which keeps a warning drawn along a district line out of the neighbour it
+  spills a sliver into. `null` for both takes alerts from anywhere, and `[]` is
+  refused. An alert with no shape never passes either: a publisher that sends
+  none never will. The bot Test reports it as `placement` (`anywhere`, `inside`,
+  `outside`, `noShape`).
+- **Regions are Natural Earth's admin-1 boundaries** (public domain, every
+  country), each ring simplified to 1/200 of its width but never past about
+  1 km, so a city-state or an atoll keeps its shape, and embedded as
+  `internal/region/regions.bin.gz` (2.2 MB, delta-encoded microdegrees, each
+  region's exact area precomputed); `go generate ./internal/region`
+  rebuilds it from the pinned release. A region's id is Natural Earth's
+  `adm1_code` (`NZL-3398` is Auckland), since ISO 3166-2 codes repeat within it.
+  The generator refuses to drop an id the current file has, since a bot naming
+  it would stop loading. The data is decoded on first use (about 30 ms), and a
+  region's edges are indexed by latitude band the first time it is tested, so
+  checking an alert against Nunavut, the most detailed region, takes under 1 ms.
+  **At release**, compare the pinned tag (`source` in `internal/region/gen/main.go`)
+  with Natural Earth's latest release (`gh api
+  repos/nvkelso/natural-earth-vector/releases/latest --jq .tag_name`; v5.1.2 of
+  May 2022 was the latest when this was written). To move to a newer one, change
+  the tag, run `go generate ./internal/region`, and commit the new file with it.
+  If the generator stops because ids are gone, those regions were renumbered or
+  removed: a saved bot naming one would stop loading, so check whether any bot
+  uses them before accepting with `go run ./gen -allow-removed regions.bin.gz`.
+  The output is deterministic (sorted ids, fixed rounding, no gzip timestamp), so
+  rerunning the generator on an unchanged tag must leave `git status` clean; if it
+  does not, the committed file is stale.
 - **DM acceptance is `companions.dm_policy`** (`contacts` | `allowlist` |
   `anyone`, default `contacts`) with `companions.dm_allow` holding the
   allowlist's pubkeys newline-encoded, the same encoding `triggers.contacts`
@@ -411,8 +466,10 @@ GET  /api/config/channels                                    (all channels; for 
 POST /api/config/companions/{id}/channels    PUT|DELETE /api/config/channels/{id}
 GET  /api/config/triggers[?companionId=N]
 POST /api/config/triggers              PUT|DELETE /api/config/triggers/{id}
-POST /api/config/triggers/test/items   { companionId, type, url, match, template }   (an unsaved rss/cap bot's newest feed items; sends nothing)
-POST /api/config/triggers/test/render  { ...same, itemId }   (the message for one item, whether the patterns pass it, and what a channel keeps)
+POST /api/config/triggers/test/items   { companionId, type, url, match, template, location, regions }   (an unsaved rss/cap bot's newest feed items; sends nothing)
+POST /api/config/triggers/test/render  { ...same, itemId }   (the message for one item, whether the patterns pass it, where it falls, and what a channel keeps)
+GET  /api/regions/at?lat=&lon=         (the region under a point, with its outline; 404 at sea)
+GET  /api/regions/{id}                 (one region and its outline)
 
 GET  /api/mqtt/status                                        (live broker connection state; runtime, not config)
 GET  /api/radio/status                                       (link counters; packetsRecv/packetsSent/crcErrors/driverErrors/recvRecoveries are SPI-only, inboundDroppedOldest/rxMetaTimeouts/rxMetaMisattributed/hwErrors/txOutcomeLost KISS-only, each absent rather than 0 on the other transport)

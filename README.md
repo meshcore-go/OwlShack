@@ -530,3 +530,5 @@ proxy that authenticates.
 ## Licence
 
 See [LICENSE](LICENSE).
+
+Region boundaries for CAP bots are from [Natural Earth](https://www.naturalearthdata.com/), which is public domain.

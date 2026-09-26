@@ -632,7 +632,17 @@ type TriggerTestInput struct {
 	URL         string   `json:"url"`
 	Match       []string `json:"match"`
 	Template    string   `json:"template"`
-	ItemID      string   `json:"itemId"`
+	// Location is the cap trigger's point, Regions its region ids; null takes alerts from anywhere.
+	Location *TriggerLocation `json:"location"`
+	Regions  *[]string        `json:"regions"`
+	ItemID   string           `json:"itemId"`
+}
+
+// TriggerLocation is a cap trigger's point and margin; pointers only so a missing field is refused, not read as 0.
+type TriggerLocation struct {
+	Lat      *float64 `json:"lat"`
+	Lon      *float64 `json:"lon"`
+	RadiusKm *float64 `json:"radiusKm"`
 }
 
 type TriggerTestItem struct {
@@ -649,9 +659,11 @@ type TriggerTestRender struct {
 	// RenderError is the template's own failure, which is normal while it is being typed.
 	RenderError string `json:"renderError"`
 	// Matched is false when the match patterns would skip this item, so nothing would be sent.
-	Matched  bool              `json:"matched"`
-	Captures map[string]string `json:"captures"`
-	Bytes    int               `json:"bytes"`
+	Matched bool `json:"matched"`
+	// Placement is anywhere (no location or regions), inside, outside or noShape; only anywhere and inside send.
+	Placement string            `json:"placement"`
+	Captures  map[string]string `json:"captures"`
+	Bytes     int               `json:"bytes"`
 	// ChannelText is what a channel receives: the firmware keeps 160 bytes including the "name: " prefix and cuts the rest.
 	ChannelText  string `json:"channelText"`
 	ChannelLimit int    `json:"channelLimit"`
@@ -660,21 +672,23 @@ type TriggerTestRender struct {
 }
 
 type TriggerInput struct {
-	ID                 int64    `json:"id"`
-	CompanionID        int64    `json:"companionId"`
-	Type               string   `json:"type"`
-	Template           string   `json:"template"`
-	CharLimitBehaviour *string  `json:"charLimitBehaviour"`
-	Match              []string `json:"match"`
-	Contacts           []string `json:"contacts"`
-	ChannelIDs         []int64  `json:"channelIds"`
-	FailoverPattern    string   `json:"failoverPattern"`
-	FailoverTimeout    int64    `json:"failoverTimeout"`
-	RetryTimeout       *int64   `json:"retryTimeout"`
-	MaxRetries         *int     `json:"maxRetries"`
-	PathHashSize       *int     `json:"pathHashSize"`
-	Schedule           *string  `json:"schedule"`
-	URL                string   `json:"url"`
+	ID                 int64            `json:"id"`
+	CompanionID        int64            `json:"companionId"`
+	Type               string           `json:"type"`
+	Template           string           `json:"template"`
+	CharLimitBehaviour *string          `json:"charLimitBehaviour"`
+	Match              []string         `json:"match"`
+	Contacts           []string         `json:"contacts"`
+	ChannelIDs         []int64          `json:"channelIds"`
+	FailoverPattern    string           `json:"failoverPattern"`
+	FailoverTimeout    int64            `json:"failoverTimeout"`
+	RetryTimeout       *int64           `json:"retryTimeout"`
+	MaxRetries         *int             `json:"maxRetries"`
+	PathHashSize       *int             `json:"pathHashSize"`
+	Schedule           *string          `json:"schedule"`
+	URL                string           `json:"url"`
+	Location           *TriggerLocation `json:"location"`
+	Regions            *[]string        `json:"regions"`
 }
 
 // BackupFile is a generated backup ready to stream to the browser.

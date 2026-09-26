@@ -36,6 +36,7 @@ type PreviewResult struct {
 	Message     string
 	RenderError string
 	Matched     bool
+	Placement   Placement
 	Captures    map[string]string
 }
 
@@ -94,8 +95,17 @@ func (f *FeedPreview) Items(ctx context.Context, cfg config.TriggerConfig) ([]Pr
 		return nil, err
 	}
 	out := []PreviewItem{}
+	listed := map[string]bool{} // entries linking to one document are one alert, listed once
 	for i := len(feed.Items) - 1; i >= 0 && len(out) < previewMaxItems; i-- {
 		item := feed.Items[i]
+		if p.documentKey != nil {
+			if k := p.documentKey(item); k != "" {
+				if listed[k] {
+					continue
+				}
+				listed[k] = true
+			}
+		}
 		if id := itemID(item); id != "" {
 			out = append(out, PreviewItem{ID: id, Title: previewTitle(item), Link: item.Link, Published: itemTime(item)})
 		}
@@ -129,7 +139,7 @@ func (f *FeedPreview) Render(ctx context.Context, cfg config.TriggerConfig, botN
 		return PreviewResult{}, err
 	}
 	captures := p.matcher.match(decoded.fields)
-	res := PreviewResult{Matched: captures != nil, Captures: captures}
+	res := PreviewResult{Matched: captures != nil, Placement: p.place(decoded.data), Captures: captures}
 	if captures == nil {
 		captures = map[string]string{}
 	}

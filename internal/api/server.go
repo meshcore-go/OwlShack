@@ -152,6 +152,8 @@ func (s *Server) routes() {
 	s.mux.HandleFunc("PUT /api/config/channels/{id}", s.handleSaveChannel)
 	s.mux.HandleFunc("DELETE /api/config/channels/{id}", s.handleDeleteChannel)
 	s.mux.HandleFunc("POST /api/config/triggers", s.handleSaveTrigger)
+	s.mux.HandleFunc("GET /api/regions/at", s.handleRegionAt)
+	s.mux.HandleFunc("GET /api/regions/{id}", s.handleGetRegion)
 	s.mux.HandleFunc("POST /api/config/triggers/test/items", s.handleTestTriggerItems)
 	s.mux.HandleFunc("POST /api/config/triggers/test/render", s.handleTestTriggerRender)
 	s.mux.HandleFunc("PUT /api/config/triggers/{id}", s.handleSaveTrigger)
