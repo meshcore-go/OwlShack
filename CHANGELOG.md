@@ -5,7 +5,8 @@ top until tagged.
 
 ## Unreleased
 
-Schema `user_version` 17: adds the sensor tables and who may read each companion's telemetry.
+Schema `user_version` 19: adds the sensor tables, who may read each companion's telemetry, where a
+CAP bot's alerts must be, and which map tiles to use.
 
 ### Added
 
@@ -37,9 +38,15 @@ Schema `user_version` 17: adds the sensor tables and who may read each companion
   moving it back.
 - **Who may read a companion's telemetry.** Battery, position and sensors each allow no one, chosen
   contacts or every contact. All three start at no one.
+- **Satellite and topo views on the Map page.** Switch between the map, Esri satellite imagery and
+  OpenTopoMap at the top right of the map. Your browser remembers the choice.
 
 ### Changed
 
+- **Maps use OpenStreetMap by default.** Settings has a new Map tiles choice: OpenStreetMap, which
+  needs no key, or CARTO. If you had saved a CARTO key you stay on CARTO. OpenStreetMap has no
+  dark style, so in dark mode its colours are inverted, or with Dark mode map style set to
+  Simplified, remapped to a plainer dark map with navy water.
 - **Repeater telemetry follows the firmware.** Battery and temperature always go out, and a guest
   gets only those.
 - **Fewer writes to the SD card.** The database syncs to disk in batches instead of after every

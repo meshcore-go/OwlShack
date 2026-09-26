@@ -357,6 +357,13 @@
   background: var(--muted);
   font-family: var(--font-sans);
 }
+/* A light-only basemap in dark mode: inverted with its hues kept, or simplified by #osm-dark in index.html. */
+.dark .tiles-darken {
+  filter: invert(1) hue-rotate(180deg) brightness(0.9) contrast(0.9);
+}
+.dark[data-map-dark="simplified"] .tiles-darken {
+  filter: url(#osm-dark);
+}
 .leaflet-popup-content-wrapper,
 .leaflet-popup-tip {
   background: var(--popover);

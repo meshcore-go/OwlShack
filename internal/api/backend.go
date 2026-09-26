@@ -506,14 +506,16 @@ type SettingsInput struct {
 	Connection     *string `json:"connection"`
 	BaudRate       *int    `json:"baudRate"`
 	// SPIBoard names the hat for an spi:// connection; omitted keeps the stored value.
-	SPIBoard   *string  `json:"spiBoard"`
-	Freq       *float64 `json:"freq"`
-	BW         *float64 `json:"bw"`
-	SF         *int     `json:"sf"`
-	CR         *int     `json:"cr"`
-	TX         *int     `json:"tx"`
-	ListenAddr *string  `json:"listenAddr"`
-	MapTileKey *string  `json:"mapTileKey"` // omit = keep, "" = clear
+	SPIBoard     *string  `json:"spiBoard"`
+	Freq         *float64 `json:"freq"`
+	BW           *float64 `json:"bw"`
+	SF           *int     `json:"sf"`
+	CR           *int     `json:"cr"`
+	TX           *int     `json:"tx"`
+	ListenAddr   *string  `json:"listenAddr"`
+	MapProvider  *string  `json:"mapProvider"`  // omit = keep
+	MapDarkStyle *string  `json:"mapDarkStyle"` // omit = keep
+	MapTileKey   *string  `json:"mapTileKey"`   // omit = keep, "" = clear
 	// ModemToken is the openHop modem's access token: omit = keep the stored one, "" = clear it.
 	ModemToken   *string `json:"modemToken"`
 	PathHashSize *int    `json:"pathHashSize"`

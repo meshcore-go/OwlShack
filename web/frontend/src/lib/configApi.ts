@@ -1,5 +1,6 @@
 // Client for internal/api/routes_config_rest.go: secrets read back as `*Set` booleans, and on write omit = keep, "" = clear.
 import { apiErrorMessage } from "@/lib/apiError";
+import type { MapDarkStyle, MapProvider } from "@/lib/leaflet";
 
 // --- read shapes (GET DTOs) ---
 
@@ -15,6 +16,8 @@ export interface Settings {
   cr: number | null;
   tx: number | null;
   listenAddr: string | null;
+  mapProvider: MapProvider;
+  mapDarkStyle: MapDarkStyle;
   mapTileKey: string | null;
   // The openHop modem token is a secret: reads report only whether one is stored.
   modemTokenSet: boolean;
@@ -252,6 +255,8 @@ export interface SettingsInput {
   cr?: number | null;
   tx?: number | null;
   listenAddr?: string | null;
+  mapProvider?: MapProvider; // omit = keep
+  mapDarkStyle?: MapDarkStyle; // omit = keep
   mapTileKey?: string | null; // omit = keep, "" = clear
   modemToken?: string; // omit = keep the stored token
   pathHashSize?: number | null;

@@ -1,7 +1,7 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { useSearchParams } from "react-router-dom";
 import L from "leaflet";
-import { ChevronDown, MapPin, RefreshCw, Route, X } from "lucide-react";
+import { ChevronDown, Layers, MapPin, RefreshCw, Route, X } from "lucide-react";
 import { toast } from "sonner";
 import { useWebSocket } from "@/hooks/useWebSocket";
 import { useApiList } from "@/hooks/useApiList";
@@ -18,12 +18,15 @@ import {
   DropdownMenu,
   DropdownMenuCheckboxItem,
   DropdownMenuContent,
+  DropdownMenuLabel,
+  DropdownMenuRadioGroup,
+  DropdownMenuRadioItem,
   DropdownMenuSeparator,
   DropdownMenuTrigger,
 } from "@/components/ui/dropdown-menu";
 import { PeerDetailSheet } from "@/components/PeerDetailSheet";
 import { deletePeers, deletedPeersMessage } from "@/lib/peerApi";
-import { peerLatLon, themeTileLayer, useThemeTiles } from "@/lib/leaflet";
+import { peerLatLon, useThemeTiles, type BaseLayer } from "@/lib/leaflet";
 import { pathEnds, resolveHops } from "@/lib/linkPath";
 import { useOwnPosition } from "@/hooks/useOwnPosition";
 import { drawLink, LINK_STAGGER } from "@/lib/mapLinks";
@@ -57,6 +60,23 @@ interface NeighborLink {
 }
 
 const TYPE_FILTERS = ["CHAT", "REPEATER", "ROOM", "SENSOR", "NONE"] as const;
+
+const BASE_LAYERS: { value: BaseLayer; label: string }[] = [
+  { value: "main", label: "Street" },
+  { value: "satellite", label: "Satellite" },
+  { value: "topo", label: "Topo" },
+];
+const BASE_KEY = "owlshack.map.base";
+
+function storedBase(): BaseLayer {
+  try {
+    const v = window.localStorage.getItem(BASE_KEY);
+    if (BASE_LAYERS.some((b) => b.value === v)) return v as BaseLayer;
+  } catch {
+    // storage blocked; the main map it is
+  }
+  return "main";
+}
 
 function isPeer(value: unknown): value is Peer {
   if (!value || typeof value !== "object") return false;
@@ -168,7 +188,6 @@ export function MapPage() {
       zoomControl: true,
       attributionControl: true,
     });
-    tileLayerRef.current = themeTileLayer().addTo(map);
     linksLayerRef.current = L.layerGroup().addTo(map);
     pathLayerRef.current = L.layerGroup().addTo(map);
     map.on("zoomend", () => setZoomTick((t) => t + 1));
@@ -186,7 +205,16 @@ export function MapPage() {
     };
   }, []);
 
-  useThemeTiles(mapRef, tileLayerRef);
+  const [base, setBase] = useState<BaseLayer>(storedBase);
+  useThemeTiles(mapRef, tileLayerRef, base);
+  const chooseBase = (b: BaseLayer) => {
+    setBase(b);
+    try {
+      window.localStorage.setItem(BASE_KEY, b);
+    } catch {
+      // the choice just lasts until the page closes
+    }
+  };
 
   // A ?lat=&lon= deep link marks the view fitted so the peer auto-fit can't yank it away.
   useEffect(() => {
@@ -538,10 +566,40 @@ export function MapPage() {
           </div>
         </div>
 
-        <div
-          ref={containerRef}
-          className="h-[calc(100dvh-260px-var(--bottom-nav))] min-h-105 w-full"
-        />
+        <div className="relative">
+          <div
+            ref={containerRef}
+            className="h-[calc(100dvh-260px-var(--bottom-nav))] min-h-105 w-full"
+          />
+          <DropdownMenu>
+            <DropdownMenuTrigger asChild>
+              <button
+                type="button"
+                aria-label="Map layer"
+                title="Map layer"
+                className="absolute top-2.5 right-2.5 z-1000 grid size-10 md:size-8 place-items-center border border-border bg-card text-muted-foreground shadow-md hover:text-foreground data-[state=open]:text-primary"
+              >
+                <Layers className="size-4" />
+              </button>
+            </DropdownMenuTrigger>
+            <DropdownMenuContent align="end" className="rounded-sm">
+              <DropdownMenuLabel className="font-mono text-[10px] uppercase tracking-[0.12em] text-muted-foreground">
+                Map layer
+              </DropdownMenuLabel>
+              <DropdownMenuRadioGroup value={base} onValueChange={(v) => chooseBase(v as BaseLayer)}>
+                {BASE_LAYERS.map((b) => (
+                  <DropdownMenuRadioItem
+                    key={b.value}
+                    value={b.value}
+                    className="font-mono text-[11px] uppercase tracking-[0.08em]"
+                  >
+                    {b.label}
+                  </DropdownMenuRadioItem>
+                ))}
+              </DropdownMenuRadioGroup>
+            </DropdownMenuContent>
+          </DropdownMenu>
+        </div>
       </section>
 
       <PeerDetailSheet {...sheetProps} companions={companions} />

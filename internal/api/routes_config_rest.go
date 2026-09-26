@@ -23,6 +23,8 @@ type settingsDTO struct {
 	CR             *int     `json:"cr"`
 	TX             *int     `json:"tx"`
 	ListenAddr     *string  `json:"listenAddr"`
+	MapProvider    string   `json:"mapProvider"`
+	MapDarkStyle   string   `json:"mapDarkStyle"`
 	MapTileKey     *string  `json:"mapTileKey"`    // sent to the browser by design: it rides on tile URLs
 	ModemTokenSet  bool     `json:"modemTokenSet"` // redacted
 	PathHashSize   *int     `json:"pathHashSize"`
@@ -159,7 +161,7 @@ func (s *Server) handleGetSettings(w http.ResponseWriter, r *http.Request) {
 		LogLevel: st.LogLevel, ConnectionType: st.ConnectionType, Connection: st.Connection,
 		BaudRate: st.BaudRate, SPIBoard: st.SPIBoard,
 		Freq: st.Freq, BW: st.BW, SF: st.SF, CR: st.CR, TX: st.TX,
-		ListenAddr: st.ListenAddr, MapTileKey: st.MapTileKey, PathHashSize: st.PathHashSize,
+		ListenAddr: st.ListenAddr, MapProvider: st.MapProvider, MapDarkStyle: st.MapDarkStyle, MapTileKey: st.MapTileKey, PathHashSize: st.PathHashSize,
 		ModemTokenSet: st.ModemToken != nil && *st.ModemToken != "",
 		DutyCycle:     st.DutyCyclePct, SetupComplete: st.SetupComplete,
 	})

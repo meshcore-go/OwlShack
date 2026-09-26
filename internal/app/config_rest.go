@@ -95,6 +95,8 @@ func (b *backend) SaveSettings(ctx context.Context, in api.SettingsInput) error 
 				CR:             or(in.CR, u8ToIntPtr(def.CR)),
 				TX:             or(in.TX, u8ToIntPtr(def.TX)),
 				ListenAddr:     in.ListenAddr,
+				MapProvider:    *or(in.MapProvider, &rows.settings.MapProvider),
+				MapDarkStyle:   *or(in.MapDarkStyle, &rows.settings.MapDarkStyle),
 				MapTileKey:     or(in.MapTileKey, prevKey),
 				ModemToken:     or(in.ModemToken, prevToken),
 				PathHashSize:   in.PathHashSize,
