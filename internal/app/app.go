@@ -231,6 +231,7 @@ func Run(ctx context.Context, importPath string, verbosity int) error {
 
 	// installBackend hands the server a backend over whatever radio generation is running now.
 	installBackend := func() {
+		liveRadio.Store(ms)
 		srv.SetBackend(&backend{
 			companions: companions, repeater: rep, db: db, stats: statsOf(ms), mux: mux,
 			reload: reload, resetModem: resetModem, discover: disc, sensors: sensorHub, telemetry: telemetry,
@@ -243,6 +244,7 @@ func Run(ctx context.Context, importPath string, verbosity int) error {
 		stopCompanions(companions)
 		stopRepeater(rep)
 		if ms != nil {
+			liveRadio.Store(nil)
 			radioSeen.keepReply(ms.Stats)
 			ms.Close()
 		}

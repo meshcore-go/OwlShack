@@ -21,6 +21,9 @@ CAP bot's alerts must be, and which map tiles to use.
   report's temperature and wind. Headers and logins are supported, and Test tries it before you save.
 - **Air quality from the BME680.** An air-quality index and CO2 and VOC estimates after a 5-minute
   run-in. It calibrates to your air over days and remembers it across restarts.
+- **The radio board as a sensor.** Add the battery voltage and MCU temperature of the KISS or
+  openHop board your radio runs on, like any other sensor. It reads what OwlShack already asks the
+  board for, so it adds nothing to the link.
 - **Sensors over the mesh.** Choose which readings the repeater and each companion send when
   another node asks.
 - **CAP alerts for one place.** A CAP bot can keep to alerts near a point, picked on a map or
