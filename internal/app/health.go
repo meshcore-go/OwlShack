@@ -12,6 +12,8 @@ import (
 // radioActivity is process-scoped, not a backend field: a reload swaps the backend but the radio's history carries on. 0 = none since start.
 type radioActivity struct {
 	lastRx, lastTx, lastReply atomic.Int64
+	// silentSince is when the first link that has not heard an answer connected; a link that drops for want of traffic must not restart the silence.
+	silentSince atomic.Int64
 	// startErr is why the radio stack is down, nil while it runs.
 	startErr atomic.Pointer[error]
 }
@@ -42,10 +44,19 @@ func (a *radioActivity) tx() { a.lastTx.Store(time.Now().UnixNano()) }
 
 // keepReply outlives the modem's teardown: reconnecting never waits for an answer, so a board still stuck after one would otherwise read as never asked.
 func (a *radioActivity) keepReply(stats modem.StatsProvider) {
-	if lr, ok := stats.(interface{ LastReply() time.Time }); ok {
-		if t := lr.LastReply(); !t.IsZero() && t.UnixNano() > a.lastReply.Load() {
+	lr, ok := stats.(interface{ LastReply() time.Time })
+	if !ok {
+		return
+	}
+	if t := lr.LastReply(); !t.IsZero() {
+		if t.UnixNano() > a.lastReply.Load() {
 			a.lastReply.Store(t.UnixNano())
 		}
+		a.silentSince.Store(0)
+		return
+	}
+	if c, ok := stats.(interface{ ConnectedAt() time.Time }); ok && !c.ConnectedAt().IsZero() {
+		a.silentSince.CompareAndSwap(0, c.ConnectedAt().UnixNano())
 	}
 }
 
@@ -188,6 +199,13 @@ func (b *backend) radioHealth(now time.Time, act *radioActivity) api.RadioHealth
 		t := lr.LastReply()
 		if kept := act.lastReply.Load(); kept != 0 && (t.IsZero() || kept > t.UnixNano()) {
 			t = time.Unix(0, kept)
+		}
+		// A board hung before its first answer is as stuck as one that went quiet, so its silence runs from connecting.
+		if s := act.silentSince.Load(); t.IsZero() && s != 0 {
+			t = time.Unix(0, s)
+		}
+		if c, ok := b.stats.(interface{ ConnectedAt() time.Time }); ok && t.IsZero() {
+			t = c.ConnectedAt()
 		}
 		h.LastReplySecs = secsSinceTime(t, now)
 	}

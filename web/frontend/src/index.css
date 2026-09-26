@@ -107,7 +107,7 @@
   --input: oklch(0.92 0.005 240);
   --ring: oklch(0.42 0.16 165);
 
-  --success: oklch(0.6 0.16 155);
+  --success: oklch(0.52 0.16 155);
   --success-foreground: oklch(0.99 0 0);
   /* The lightest amber at this hue, inside sRGB, that passes 4.5:1 on the card, the page and its own tint. */
   --warning: oklch(0.55 0.118 70);

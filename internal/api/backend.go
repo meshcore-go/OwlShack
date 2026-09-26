@@ -225,7 +225,7 @@ type RadioHealth struct {
 	Connected bool   `json:"connected"`
 	Transport string `json:"transport"`
 
-	// Null where this transport cannot be probed, so "not answering" and "cannot say" stay distinct.
+	// Since the board last answered, or since it connected if it has not yet; null where this transport cannot be probed.
 	LastReplySecs *int64 `json:"lastReplySecs"`
 	// Null when none since startup.
 	LastRxSecs *int64 `json:"lastRxSecs"`
