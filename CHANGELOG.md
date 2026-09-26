@@ -39,9 +39,28 @@ Schema `user_version` 17: adds the sensor tables and who may read each companion
 - **Fewer writes to the SD card.** The database syncs to disk in batches instead of after every
   packet. A power cut can lose the last few seconds of packets and readings, but a setting you
   saved is on disk before the page says it is saved.
+- **A broker being down no longer marks the whole node degraded.** `/api/health`'s `status` now
+  covers only what the node needs to work: the radio and a running node. MQTT has its own
+  `mqtt.status`: `ok`, `degraded` when an enabled broker is not connected, or `off`. A monitor
+  that alerted on MQTT through `status` should watch `mqtt.status` instead.
 
 ### Fixed
 
+- **A radio board that stops answering is caught.** Before, a board that hung while its USB link
+  stayed up read as `ok` in `/api/health`. It now shows as `degraded` after two minutes without an
+  answer, even when reconnecting did not fix it. The automatic reconnect for a hung board also
+  never started on a node with no MQTT and no repeater, and now it does.
+- **A stuck transmitter is caught, and no longer fills the packet log.** When the board's
+  transmit-done reply went missing, every later send was held and retried five times a second.
+  Each retry was logged as a new sent packet (one was logged 196 times in 46 seconds) and counted
+  as a send in `/api/health`. Each packet is now logged once. `/api/health` reports
+  `txFailedInARow` and `txFailingSecs`, and shows `degraded` after two minutes of failed sends.
+- **A companion that fails to start is no longer reported as a radio fault.** `/api/health` now
+  says the companion or repeater failed to start, instead of `radio: modem not connected`.
+- **Readings sent over the mesh are rounded, not cut short.** A battery at 4.1 V went out as
+  4.09 V, and every reading sent over the mesh leaned low the same way.
+- **A full disk shows up.** `/api/health` reports `diskFreeBytes` and shows `degraded` below
+  32 MiB. Before, every write failed with nothing in health to say so.
 - **Warnings were hard to read in light mode.** They now meet the 4.5:1 contrast guideline.
 - **Companion ACKs flooded with one-byte path hashes.** They now use the companion's own setting.
 - **Saving one contact setting could clear another.** Each save now changes only what it names, and

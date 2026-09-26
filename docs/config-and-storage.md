@@ -88,12 +88,23 @@ radio/connection change still restarts everything (modem reconnect);
   friends rather than for a person. It **always answers 200 while the process is
   alive**, including when the radio is not: a monitor that cannot reach OwlShack
   already fails the request, so the status code is not spent on a second
-  opinion. `problems` is a possibly-empty array of binary faults (a thing meant
-  to be connected that is not) and `status` is `ok` exactly when it is empty;
-  everything else is a fact to threshold externally, never a verdict. Three
+  opinion. `problems` is a possibly-empty array of binary faults in what the
+  node cannot work without, and `status` is `ok` exactly when it is empty. The
+  whole list: the modem not connected, or a companion or the repeater failing to
+  start (which closes a modem that was fine, so it is named as such); the board
+  not answering for `modem.AnswerDeadline()`; transmit failing (at least three
+  sends in a row, for two minutes, the shape a lost `TX_DONE` leaves); no node
+  running; and the database's disk under 32 MiB free. MQTT has its own verdict in `mqtt`: `status` is `ok`
+  when every enabled broker is connected, `degraded` with a `problems` entry per
+  one that is not, and `off` when none is enabled, because a broker being down
+  loses uploads to the map, not the node, and should not page whoever watches
+  the radio. Everything else is a fact to threshold externally, never a verdict. Three
   radio ages are kept apart on purpose: `lastReplySecs` is the liveness probe's
-  own signal (the board answering a query, which a quiet mesh does not move),
-  `lastRxSecs` is mesh traffic, and `lastTxSecs` is our own sends. Each is
+  own signal (the board answering a query, which a quiet mesh does not move,
+  carried across a reconnect since reconnecting never waits for an answer),
+  `lastRxSecs` is mesh traffic, and `lastTxSecs` is our own sends (a frame
+  written to the modem, whatever the board then made of it; `txFailedInARow` and
+  `txFailingSecs` say whether sends are actually going out). Each is
   `null` rather than `0` when there is nothing to measure from, so "cannot say"
   is distinguishable from "just now". `database.writesDroppedLastSecs` is the
   database signal to threshold. The `WriteAsync` overflow is otherwise silent —
@@ -106,7 +117,9 @@ radio/connection change still restarts everything (modem reconnect);
   *sustainedly* behind and will not catch a brief spike. `walBytes` is the
   write-ahead log's size on disk: a checkpoint trims it back to 4 MiB, so a
   value that keeps climbing means checkpoints are not completing, which nothing
-  else would show. **It is written on the
+  else would show. `diskFreeBytes` is there because a full disk fails every
+  write inside the writer, which drops nothing and so shows nowhere else; it is
+  `null` where the platform cannot say. **It is written on the
   assumption it may be public**: the running nodes are not listed at all — a
   name or pubkey is on-air already, but published on the internet it ties a
   hostname to a mesh identity that public maps resolve to coordinates — there is
