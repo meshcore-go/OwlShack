@@ -307,6 +307,15 @@ export function MapPage() {
     setSearchParams(next, { replace: true });
   }, [searchParams, setSearchParams]);
 
+  const clearPin = useCallback(() => {
+    const next = new URLSearchParams(searchParams);
+    next.delete("lat");
+    next.delete("lon");
+    setSearchParams(next, { replace: true });
+    const bounds = L.latLngBounds([...markersRef.current.values()].map((m) => m.getLatLng()));
+    if (bounds.isValid()) mapRef.current?.fitBounds(bounds, { padding: [40, 40], maxZoom: 12 });
+  }, [searchParams, setSearchParams]);
+
   // Showing a path drops every peer that is not on it — the point of plotting one is to read it,
   // and 300 unrelated dots is what made that hard.
   const plotted = useMemo(() => {
@@ -490,6 +499,17 @@ export function MapPage() {
             >
               <Route className="size-3" />
               path: {pathView.label}
+              <X className="size-3" />
+            </button>
+          )}
+          {focus && (
+            <button
+              type="button"
+              onClick={clearPin}
+              className="inline-flex items-center gap-1.5 border border-primary/60 bg-card px-2 py-1 font-mono text-[10px] uppercase tracking-[0.12em] text-primary transition-all hover:border-primary"
+            >
+              <MapPin className="size-3" />
+              pin: {focus.lat}, {focus.lon}
               <X className="size-3" />
             </button>
           )}
