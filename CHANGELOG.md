@@ -46,6 +46,9 @@ Schema `user_version` 17: adds the sensor tables and who may read each companion
 
 ### Fixed
 
+- **A shared location on the map can be cleared.** Opening coordinates from a message on the map
+  now shows a pin chip above the map, like the one for a packet path. Clicking it removes the pin
+  and zooms back out to your peers.
 - **A radio board that stops answering is caught.** Before, a board that hung while its USB link
   stayed up read as `ok` in `/api/health`. It now shows as `degraded` after two minutes without an
   answer, even when reconnecting did not fix it. The automatic reconnect for a hung board also
